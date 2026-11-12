@@ -47,7 +47,6 @@ final class AppModel {
     var history: [HistoryEntry] = []
     var favorites: [FavoriteEntry] = []
     var bridgeHealth: BridgeHealth?
-    var fongmiServerStatus = "未连接"
     var availableDepots: [ConfigurationDepot] = []
     var liveGroups: [LiveGroup] = []
     var epgPrograms: [String: [LiveProgram]] = [:]
@@ -58,7 +57,6 @@ final class AppModel {
     var debugPlaybackEpisode: Episode?
     var sourceTestStatus: String?
     var sourceTestIsRunning = false
-    var fongmiRemoteBaseURL: URL? { fongmiServerBaseURL }
     private var configDigest = ""
     private var configurationBaseURL: URL?
     private var pendingInitialSiteKey: String?
@@ -70,8 +68,6 @@ final class AppModel {
     var downloads: DownloadManager?
     private var persistence: AppPersistence?
     private var bridgeClient: BridgeClient?
-    private var fongmiServerClient: FongmiServerClient?
-    private var fongmiServerBaseURL: URL?
     private let router = SourceRouter()
 
     func bootstrap() async {
@@ -88,8 +84,7 @@ final class AppModel {
         let environment = ProcessInfo.processInfo.environment
         let hasTestConfiguration = !(environment["FIREPICK_TEST_CONFIG_URL"] ?? "").isEmpty
         let hasTestBridge = !(environment["FIREPICK_TEST_BRIDGE_URI"] ?? "").isEmpty
-        let hasTestFongmi = !(environment["FIREPICK_TEST_FONGMISERVER_URL"] ?? "").isEmpty
-        if !hasTestConfiguration, !hasTestBridge, !hasTestFongmi {
+        if !hasTestConfiguration, !hasTestBridge {
             await restorePersistentState()
         } else {
             if configuration.sites.isEmpty {
@@ -97,9 +92,6 @@ final class AppModel {
             }
             if let testURL = environment["FIREPICK_TEST_CONFIG_URL"], !testURL.isEmpty {
                 await applyConfiguration(urlString: testURL, selectInitialSite: false)
-            }
-            if let testServer = environment["FIREPICK_TEST_FONGMISERVER_URL"], !testServer.isEmpty {
-                await connectFongmiServer(urlString: testServer)
             }
             if let bridgeURI = environment["FIREPICK_TEST_BRIDGE_URI"], !bridgeURI.isEmpty {
                 await pairBridge(uriString: bridgeURI)
@@ -145,7 +137,13 @@ final class AppModel {
         defer { isLoading = false }
         var responseDescription = ""
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            var request = URLRequest(url: url)
+            request.setValue("okhttp/4.1.0", forHTTPHeaderField: "User-Agent")
+            request.setValue(
+                "application/json, text/plain, */*",
+                forHTTPHeaderField: "Accept"
+            )
+            let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 throw FirepickError.network("配置下载失败")
             }
@@ -430,8 +428,7 @@ final class AppModel {
 
     func routeLabel(for site: SiteConfiguration) -> String {
         let route = router.route(site)
-        let externalRuntime = route.runtime == .quickJS
-            && (fongmiServerBaseURL != nil || bridgeHealth != nil)
+        let externalRuntime = route.runtime == .quickJS && bridgeHealth != nil
         switch route.execution {
         case .onDevice:
             if externalRuntime {
@@ -439,16 +436,15 @@ final class AppModel {
             }
             return route.runtime == .http ? "本机 HTTP" : "未连接 QuickJS"
         case .bridge:
-            let prefix = fongmiServerBaseURL != nil ? "FongMi" : "Bridge"
             return switch route.runtime {
-            case .java: "\(prefix) · Java"
-            case .python: "\(prefix) · Python"
-            case .nodeJS: "\(prefix) · Node"
-            case .quickJS: "\(prefix) · JS"
-            case .thunder: "\(prefix) · Thunder"
-            case .bdj: "\(prefix) · BD-J"
-            case .nativeCore: "\(prefix) · Native"
-            case .http: "\(prefix) · HTTP"
+            case .java: "Bridge · Java"
+            case .python: "Bridge · Python"
+            case .nodeJS: "Bridge · Node"
+            case .quickJS: "Bridge · JS"
+            case .thunder: "Bridge · Thunder"
+            case .bdj: "Bridge · BD-J"
+            case .nativeCore: "Bridge · Native"
+            case .http: "Bridge · HTTP"
             }
         case .unsupported:
             return "不支持"
@@ -764,30 +760,6 @@ final class AppModel {
         }
     }
 
-    func connectFongmiServer(urlString: String) async {
-        guard let url = URL(string: urlString), url.scheme != nil else {
-            errorMessage = "FongMi Android 服务地址无效"
-            return
-        }
-        let client = FongmiServerClient(baseURL: url)
-        do {
-            _ = try await client.health()
-            fongmiServerClient = client
-            fongmiServerBaseURL = url
-            persistence?.saveFongmiServerURL(url)
-            fongmiServerStatus = "已连接"
-            await coordinator?.invalidate()
-            coordinator = makeCoordinator(client: bridgeClient)
-            if let selectedSite {
-                await selectSite(selectedSite)
-            }
-        } catch {
-            NSLog("Firepick FongMi connection failed: %@", error.localizedDescription)
-            fongmiServerStatus = "连接失败"
-            errorMessage = error.localizedDescription
-        }
-    }
-
     func pairBridge(uriString: String) async {
         guard let url = URL(string: uriString),
               let payload = BridgePairingPayload(url) else {
@@ -906,8 +878,6 @@ final class AppModel {
 
         if let credentials = try? persistence.loadBridgeCredentials() {
             await configureBridge(credentials: credentials)
-        } else if let url = persistence.fongmiServerURL {
-            await connectFongmiServer(urlString: url.absoluteString)
         }
         await selectPendingInitialSite()
     }
@@ -992,18 +962,9 @@ final class AppModel {
             }
         }
 
-        guard var source = live.url,
+        guard let source = live.url,
               !source.isEmpty else {
             return nil
-        }
-        if CatVodProxyURL.isProxy(source),
-           let fongmiBaseURL = fongmiServerBaseURL,
-           let proxyURL = CatVodProxyURL.fongmiURL(
-               source,
-               baseURL: fongmiBaseURL,
-               siteKey: live.name
-           ) {
-            source = proxyURL.absoluteString
         }
         guard let resolved = URL(string: source, relativeTo: baseURL)?.absoluteURL else {
             return nil
@@ -1038,16 +999,6 @@ final class AppModel {
             group.channels = group.channels.map { channel in
                 var channel = channel
                 headers.forEach { channel.headers[$0.key] = $0.value }
-                if CatVodProxyURL.isProxy(channel.urls.first ?? ""),
-                   let baseURL = fongmiServerBaseURL {
-                    channel.urls = channel.urls.compactMap { value in
-                        CatVodProxyURL.fongmiURL(
-                            value,
-                            baseURL: baseURL,
-                            siteKey: live.name
-                        )?.absoluteString ?? value
-                    }
-                }
                 if channel.epg == nil {
                     channel.epg = live.epg
                 }
@@ -1098,16 +1049,9 @@ final class AppModel {
             ? ((try? ConfigurationDigest.sha256(configuration)) ?? "")
             : configDigest
         let baseURL = configurationBaseURL
-        let fongmiBaseURL = fongmiServerBaseURL
         let firepickBridge = bridgeClient
         let bridgeFactory: @Sendable (SiteConfiguration) throws -> any SourceProvider = { site in
             let resolvedSite = Self.resolve(site, baseURL: baseURL)
-            if let fongmiBaseURL {
-                return FongmiServerProvider(
-                    site: resolvedSite,
-                    client: FongmiServerClient(baseURL: fongmiBaseURL)
-                )
-            }
             guard let client = firepickBridge else {
                 throw FirepickError.bridgeUnavailable
             }
@@ -1118,7 +1062,7 @@ final class AppModel {
             )
         }
         return ProviderCoordinator(
-            preferBridgeForQuickJS: fongmiBaseURL != nil || firepickBridge != nil,
+            preferBridgeForQuickJS: firepickBridge != nil,
             bridgeFactory: bridgeFactory
         )
     }

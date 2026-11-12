@@ -74,7 +74,7 @@ struct SourceManagementView: View {
                 LabeledContent("点播源", value: "\(model.configuration.sites.count) 个")
                 LabeledContent("已隐藏", value: "\(model.hiddenSiteCount) 个")
                 LabeledContent(
-                    "直播",
+                    "电视",
                     value: "\(model.liveGroups.count) 组 · \(model.liveChannelCount) 频道"
                 )
                 ForEach(model.sourceRouteCounts) { item in
@@ -103,9 +103,9 @@ struct SourceManagementView: View {
                         .foregroundStyle(.secondary)
                 }
                 if !model.sourceRouteCounts.isEmpty,
-                   model.fongmiServerStatus != "已连接",
+                   model.bridgeHealth == nil,
                    model.sourceRouteCounts.contains(where: { $0.runtime != .http }) {
-                    Text("Java、Python、Node.js 和兼容 QuickJS 源需要连接 FongMi Android 服务或 Firepick Bridge。")
+                    Text("Java、Python、Node.js 和兼容 QuickJS 源需要连接 Firepick Bridge。")
                         .font(.footnote)
                         .foregroundStyle(.orange)
                 }
@@ -123,6 +123,7 @@ struct SourceManagementView: View {
         }
         .navigationTitle("点播源")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .searchable(text: $query, prompt: "搜索名称、标识或地址")
         .sheet(isPresented: $showingURLImporter) {
             ConfigurationURLView()
@@ -350,7 +351,7 @@ private struct SourceEditorView: View {
                 } header: {
                     Text("执行方式")
                 } footer: {
-                    Text("QuickJS、Python、Node.js 和 csp_/JAR 通常需要 Android Bridge 或 FongMi 服务。")
+                    Text("QuickJS、Python、Node.js 和 csp_/JAR 通常需要 Android Bridge。")
                 }
             }
             .navigationTitle(originalSite == nil ? "新增点播源" : "修改点播源")

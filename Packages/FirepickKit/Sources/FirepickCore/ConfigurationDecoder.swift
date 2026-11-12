@@ -6,6 +6,11 @@ public enum ConfigurationDecoder {
         guard !data.isEmpty else {
             throw FirepickError.invalidConfiguration("配置文件为空")
         }
+        if let imageFormat = imageFormat(of: data) {
+            throw FirepickError.invalidConfiguration(
+                "加载到的是 \(imageFormat) 图片，不是配置文件。该地址可能启用了防盗链，请使用原始 JSON 或直链"
+            )
+        }
 
         var text = String(decoding: data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -242,6 +247,19 @@ public enum ConfigurationDecoder {
             index += 1
         }
         return cleaned
+    }
+
+    private static func imageFormat(of data: Data) -> String? {
+        if data.starts(with: [0x42, 0x4D]) { return "BMP" }
+        if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "PNG" }
+        if data.starts(with: [0xFF, 0xD8, 0xFF]) { return "JPEG" }
+        if data.starts(with: Array("GIF8".utf8)) { return "GIF" }
+        if data.count >= 12,
+           data.starts(with: Array("RIFF".utf8)),
+           data[8..<12].elementsEqual(Array("WEBP".utf8)) {
+            return "WebP"
+        }
+        return nil
     }
 }
 

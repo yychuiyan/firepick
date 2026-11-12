@@ -7,8 +7,7 @@ Updated 2026-11-12.
 - CatVod configuration import, multi-depot selection, AES-CBC decoding and
   lenient JSON normalization
 - Direct HTTP/XML/JSON providers on iOS
-- QuickJS, Java/JAR, Python and Node.js providers through Firepick Bridge or
-  the existing FongMi/TV LAN server
+- QuickJS, Java/JAR, Python and Node.js providers through Firepick Bridge
 - TLS pairing, QR pairing payloads, pinned Bridge transport, persisted
   credentials, stable Bridge port `9443`, config upload and isolated sessions
 - CatVod `proxy://` URL rewriting, streamed Bridge proxy responses, loopback
@@ -19,7 +18,6 @@ Updated 2026-11-12.
   file import and offline playback
 - XML/JSON/plain-text danmaku parsing and synchronized player overlay
 - DLNA MediaRenderer discovery and AVTransport casting
-- FongMi `/remote` status and playback control client
 - Dynamic live `lives.api/ext/jar` sources, global spider inheritance, M3U/TXT
   refresh, per-channel HTTP headers and channel-level EPG
 - XMLTV timezone parsing, missing-stop inference, multi-source cache and
@@ -28,7 +26,7 @@ Updated 2026-11-12.
 
 ## Verification on 2026-11-12
 
-- Swift Package: 37 tests in 13 suites passed
+- Swift Package: 42 tests in 13 suites passed
 - iPhone 17 Pro / iOS 26 simulator: clean Debug build, install and launch
 - iPad Pro 11-inch (M4) / iOS 26 simulator: install and HLS playback verified
 - MPVKit-GPL: MKV video and embedded subtitle rendering verified in the iPhone

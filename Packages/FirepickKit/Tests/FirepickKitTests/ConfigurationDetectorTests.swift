@@ -185,5 +185,17 @@ struct ConfigurationDetectorTests {
         #expect(configuration.sites.count == 1)
         #expect(configuration.lives?.first?.name == "直播源")
     }
+
+    @Test
+    func rejectsImagePayloadWithActionableError() {
+        let data = Data([0x42, 0x4D, 0x00, 0x00, 0x00, 0x00])
+        do {
+            _ = try ConfigurationDetector.detect(data)
+            Issue.record("Expected invalid configuration")
+        } catch {
+            #expect(error.localizedDescription.contains("BMP"))
+            #expect(error.localizedDescription.contains("防盗链"))
+        }
+    }
 }
 

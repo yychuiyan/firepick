@@ -2,7 +2,7 @@
 
 ## Automated
 
-- `swift test --package-path Packages/FirepickKit`: 37 tests, 13 suites, pass.
+- `swift test --package-path Packages/FirepickKit`: 42 tests, 13 suites, pass.
 - Clean iOS simulator Debug build: `BUILD SUCCEEDED`.
 - Android Bridge `:app:assembleDebug`: `BUILD SUCCESSFUL`.
 - Unsigned SideStore IPA: Release device build pass, ZIP integrity pass,

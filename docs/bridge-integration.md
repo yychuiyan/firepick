@@ -33,23 +33,20 @@ Swift 与 Android 的公共契约位于 `protocol/openapi.yaml` 和 JSON Schema�
 - 每个 Token 只保存 SHA-256 摘要
 - 支持一次性撤销全部设备
 
-## 与 FongMi/TV 的关系
+## 上游运行时
 
 Bridge 复用固定版本的 FongMi CatVodSpider、QuickJS 和运行时模块，但不要求
 安装完整 FongMi/TV 客户端。
 
-已有 FongMi/TV Android 设备也可以直接开启 LAN 服务，由 iOS 连接
-`http://<device-ip>:9978` 使用 FongMi 自带的 `/spider-api`。
-
 ## 兼容性路由
 
-| Provider | iOS 本机 | Firepick Bridge | FongMi LAN |
-| --- | --- | --- | --- |
-| HTTP/XML/JSON | 是 | 是 | 是 |
-| QuickJS `.js` | 是 | 是 | 是 |
-| Java `csp_` / JAR | 否 | 是 | 是 |
-| Python `.py` | 否 | 需安装运行时 | 是 |
-| Node.js `node:` | 否 | 需安装运行时 | 是 |
-| Thunder / BD-J / Native | 否 | 需安装运行时 | 是 |
+| Provider | iOS 本机 | Firepick Bridge |
+| --- | --- | --- |
+| HTTP/XML/JSON | 是 | 是 |
+| QuickJS `.js` | 当前需 Bridge | 是 |
+| Java `csp_` / JAR | 否 | 是 |
+| Python `.py` | 否 | 需安装运行时 |
+| Node.js `node:` | 否 | 需安装运行时 |
+| Thunder / BD-J / Native | 否 | 需安装运行时 |
 
 所有 UI 只通过 `SourceRouter` 消费路由结果，不直接判断 API 字符串。

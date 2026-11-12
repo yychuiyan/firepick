@@ -147,10 +147,10 @@ Current test deployment:
 
 ```text
 Source: https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
-IPA:    https://dl.yychuiyan.com/firepick/Firepick-0.1.6.ipa
+IPA:    https://dl.yychuiyan.com/firepick/Firepick-0.1.7.ipa
 ```
 
-The current published app version is `0.1.6` (build `7`) with a required
+The current published app version is `0.1.7` (build `8`) with a required
 versioned `iconURL`. The source JSON remains on the COS default domain while
 the IPA is served by the custom domain `dl.yychuiyan.com`.
 
@@ -158,10 +158,10 @@ To republish this deployment without rebuilding:
 
 ```bash
 FIREPICK_REUSE_IPA=1 \
-FIREPICK_BUILD=7 \
+FIREPICK_BUILD=8 \
 FIREPICK_IPA_BASE_URL="https://dl.yychuiyan.com/firepick" \
 ./scripts/publish-cos-release.sh \
-  0.1.6 \
+  0.1.7 \
   firepick-1302621537 \
   ap-shanghai
 ```

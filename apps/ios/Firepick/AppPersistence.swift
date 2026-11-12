@@ -6,7 +6,6 @@ final class AppPersistence {
     private enum Key {
         static let configurationBaseURL = "configurationBaseURL"
         static let selectedSiteKey = "selectedSiteKey"
-        static let fongmiServerURL = "fongmiServerURL"
         static let simulatorBridgeCredentials = "simulatorBridgeCredentials"
     }
 
@@ -42,10 +41,6 @@ final class AppPersistence {
         defaults.string(forKey: Key.selectedSiteKey)
     }
 
-    var fongmiServerURL: URL? {
-        defaults.string(forKey: Key.fongmiServerURL).flatMap(URL.init(string:))
-    }
-
     func saveConfiguration(_ data: Data, baseURL: URL?) throws {
         try data.write(to: configurationURL, options: .atomic)
         if let baseURL {
@@ -66,14 +61,6 @@ final class AppPersistence {
             defaults.set(key, forKey: Key.selectedSiteKey)
         } else {
             defaults.removeObject(forKey: Key.selectedSiteKey)
-        }
-    }
-
-    func saveFongmiServerURL(_ url: URL?) {
-        if let url {
-            defaults.set(url.absoluteString, forKey: Key.fongmiServerURL)
-        } else {
-            defaults.removeObject(forKey: Key.fongmiServerURL)
         }
     }
 

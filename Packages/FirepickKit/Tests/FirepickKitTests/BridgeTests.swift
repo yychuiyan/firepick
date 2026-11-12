@@ -25,19 +25,6 @@ struct BridgeTests {
     }
 
     @Test
-    func mapsFongmiProxyURLAndPreservesParameters() throws {
-        let url = try #require(CatVodProxyURL.fongmiURL(
-            "proxy://?do=js&url=https%3A%2F%2Flive.example%2Fone.m3u8",
-            baseURL: URL(string: "http://192.168.1.8:9978")!,
-            siteKey: "live"
-        ))
-        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
-        #expect(components.path == "/proxy")
-        #expect(components.queryItems?.contains(.init(name: "do", value: "js")) == true)
-        #expect(components.queryItems?.contains(.init(name: "siteKey", value: "live")) == true)
-    }
-
-    @Test
     func mapsBridgeProxyURIToSessionEndpoint() throws {
         let url = try #require(CatVodProxyURL.bridgeURL(
             "proxy://?do=jar&format=mp4",
