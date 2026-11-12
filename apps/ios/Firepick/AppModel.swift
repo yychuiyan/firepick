@@ -102,6 +102,7 @@ final class AppModel {
   var liveSearchResults: [LiveChannel] = []
   var searchText = ""
   var searchHasRun = false
+  var searchHistory: [String] = []
   var searchFailureCount = 0
   var isLoading = false
   var errorMessage: String?
@@ -242,6 +243,7 @@ final class AppModel {
       danmakuSpeed = min(2, max(0.5, value))
     }
     sourceConnections = (try? persistence?.loadSourceConnections()) ?? []
+    searchHistory = persistence?.searchHistory ?? []
     if let currentURL = persistence?.currentConnectionURL {
       currentConnection = sourceConnections.first { $0.url == currentURL }
     }
@@ -311,6 +313,23 @@ final class AppModel {
     setDanmakuOpacity(0.9)
     setDanmakuFontScale(1)
     setDanmakuSpeed(1)
+  }
+
+  func recordSearchHistory(_ keyword: String) {
+    let value = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else { return }
+    searchHistory.removeAll {
+      $0.caseInsensitiveCompare(value) == .orderedSame
+    }
+    searchHistory.insert(value, at: 0)
+    searchHistory = Array(searchHistory.prefix(20))
+    persistence?.saveSearchHistory(searchHistory)
+  }
+
+  func removeSearchHistory(_ values: Set<String>) {
+    guard !values.isEmpty else { return }
+    searchHistory.removeAll { values.contains($0) }
+    persistence?.saveSearchHistory(searchHistory)
   }
 
   func clearCache() {
@@ -498,7 +517,14 @@ final class AppModel {
   }
 
   private func isConfigurationPayload(_ data: Data) -> Bool {
-    !data.isEmpty && !isImagePayload(data) && !isHTMLPayload(data)
+    guard !data.isEmpty else { return false }
+    if isImagePayload(data) {
+      guard let normalized = try? ConfigurationDecoder.normalize(data) else {
+        return false
+      }
+      return !isImagePayload(normalized) && !isHTMLPayload(normalized)
+    }
+    return !isHTMLPayload(data)
   }
 
   private func downloadConfigurationCandidate(
@@ -721,6 +747,7 @@ final class AppModel {
   func search() async {
     let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !keyword.isEmpty else { return }
+    recordSearchHistory(keyword)
     isLoading = true
     searchHasRun = false
     defer { isLoading = false }

@@ -5,9 +5,7 @@ struct SettingsView: View {
   @Environment(\.scenePhase) private var scenePhase
   @FocusState private var focusedField: FocusedField?
   @State private var showingSourceMenu = false
-  @State private var showingAddConnection = false
   @State private var emptySourceURL = ""
-  @State private var libraryMode: LibraryView.Mode?
   @State private var showingClearCacheConfirmation = false
 
   private enum FocusedField: Hashable {
@@ -26,18 +24,12 @@ struct SettingsView: View {
           } label: {
             HStack {
               VStack(alignment: .leading, spacing: 4) {
-                Text("连接方式")
+                Text("配置地址")
                   .font(.caption)
                   .foregroundStyle(.secondary)
-                Text(model.currentConnection?.name ?? "尚未选择")
+                Text(model.currentConnection?.url ?? "尚未选择")
                   .foregroundStyle(.primary)
                   .lineLimit(1)
-                if let connection = model.currentConnection {
-                  Text(connection.url)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                }
               }
               Spacer()
               Image(systemName: "chevron.down")
@@ -101,57 +93,46 @@ struct SettingsView: View {
             )
           }
 
-          Button {
-            withAnimation(.easeInOut(duration: 0.18)) {
-              showingAddConnection.toggle()
-            }
-          } label: {
-            Label("添加新连接", systemImage: "plus.circle")
-          }
-
-          if showingAddConnection || model.sourceConnections.isEmpty {
-            TextField("输入点播配置地址", text: $emptySourceURL)
-              .textInputAutocapitalization(.never)
-              .autocorrectionDisabled()
-              .keyboardType(.URL)
-              .submitLabel(.go)
-              .focused($focusedField, equals: .emptySourceURL)
-              .onSubmit(addSourceFromURL)
-            Button(action: addSourceFromURL) {
-              HStack {
-                if model.isLoading {
-                  ProgressView()
-                }
-                Text(model.isLoading ? "正在添加源…" : "添加源地址")
+          TextField("输入配置地址", text: $emptySourceURL)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .keyboardType(.URL)
+            .submitLabel(.go)
+            .focused($focusedField, equals: .emptySourceURL)
+            .onSubmit(addSourceFromURL)
+          Button(action: addSourceFromURL) {
+            HStack(spacing: 8) {
+              if model.isLoading {
+                ProgressView()
               }
+              Text(model.isLoading ? "正在添加源…" : "添加源地址")
+                .frame(maxWidth: .infinity)
             }
-            .disabled(
-              emptySourceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || model.isLoading
-            )
-            if !model.availableDepots.isEmpty {
-              Text("配置仓库线路")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-              ForEach(model.availableDepots, id: \.url) { depot in
-                Button(depot.name.isEmpty ? depot.url : depot.name) {
-                  Task { await model.loadDepot(depot) }
-                }
+          }
+          .disabled(
+            emptySourceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              || model.isLoading
+          )
+          if !model.availableDepots.isEmpty {
+            Text("配置仓库线路")
+              .font(.footnote.weight(.semibold))
+              .foregroundStyle(.secondary)
+            ForEach(model.availableDepots, id: \.url) { depot in
+              Button(depot.name.isEmpty ? depot.url : depot.name) {
+                Task { await model.loadDepot(depot) }
               }
             }
           }
         }
 
         Section {
-          Button {
-            focusedField = nil
-            libraryMode = .favorites
+          NavigationLink {
+            LibraryView(mode: .favorites)
           } label: {
             Label("收藏", systemImage: "heart")
           }
-          Button {
-            focusedField = nil
-            libraryMode = .history
+          NavigationLink {
+            LibraryView(mode: .history)
           } label: {
             Label("最近观看", systemImage: "clock.arrow.circlepath")
           }
@@ -221,49 +202,14 @@ struct SettingsView: View {
         }
 
         Section {
-          Toggle(
-            "默认显示弹幕",
-            isOn: Binding(
-              get: { model.danmakuEnabledByDefault },
-              set: { model.setDanmakuEnabledByDefault($0) }
+          NavigationLink {
+            DanmakuSettingsView()
+          } label: {
+            LabeledContent(
+              "默认显示弹幕",
+              value: model.danmakuEnabledByDefault ? "已开启" : "已关闭"
             )
-          )
-          danmakuSlider(
-            title: "弹幕透明度",
-            value: Binding(
-              get: { model.danmakuOpacity },
-              set: { model.setDanmakuOpacity($0) }
-            ),
-            range: 0.2...1,
-            step: 0.05,
-            displayValue: "\(Int((model.danmakuOpacity * 100).rounded()))%"
-          )
-          danmakuSlider(
-            title: "弹幕大小",
-            value: Binding(
-              get: { model.danmakuFontScale },
-              set: { model.setDanmakuFontScale($0) }
-            ),
-            range: 0.75...1.75,
-            step: 0.05,
-            displayValue: "\(Int((model.danmakuFontScale * 100).rounded()))%"
-          )
-          danmakuSlider(
-            title: "弹幕速度",
-            value: Binding(
-              get: { model.danmakuSpeed },
-              set: { model.setDanmakuSpeed($0) }
-            ),
-            range: 0.5...2,
-            step: 0.1,
-            displayValue:
-              "\(model.danmakuSpeed.formatted(.number.precision(.fractionLength(1))))×"
-          )
-          Button("恢复弹幕默认值") {
-            model.resetDanmakuSettings()
           }
-        } footer: {
-          Text("这些设置会用于所有视频，播放页内仍可临时关闭弹幕。")
         }
 
         Section {
@@ -275,14 +221,6 @@ struct SettingsView: View {
         }
 
         ProvisioningExpirySection()
-
-        Section {
-          Text(versionText)
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity)
-            .listRowBackground(Color.clear)
-        }
       }
       .contentMargins(.top, 8, for: .scrollContent)
       .scrollDismissesKeyboard(.interactively)
@@ -295,13 +233,9 @@ struct SettingsView: View {
           }
         }
       }
-      .sheet(item: $libraryMode) { mode in
-        LibraryView(mode: mode)
-      }
-      .confirmationDialog(
+      .alert(
         "清理缓存？",
-        isPresented: $showingClearCacheConfirmation,
-        titleVisibility: .visible
+        isPresented: $showingClearCacheConfirmation
       ) {
         Button("清理", role: .destructive) {
           model.clearCache()
@@ -334,41 +268,7 @@ struct SettingsView: View {
     Task {
       if await model.applyConfiguration(urlString: value) {
         emptySourceURL = ""
-        showingAddConnection = false
       }
     }
-  }
-
-  private var versionText: String {
-    let version =
-      Bundle.main.object(
-        forInfoDictionaryKey: "CFBundleShortVersionString"
-      ) as? String ?? "未知"
-    let build =
-      Bundle.main.object(
-        forInfoDictionaryKey: "CFBundleVersion"
-      ) as? String ?? "未知"
-    return "拾萤 \(version)（\(build)）"
-  }
-
-  private func danmakuSlider(
-    title: String,
-    value: Binding<Double>,
-    range: ClosedRange<Double>,
-    step: Double,
-    displayValue: String
-  ) -> some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack {
-        Text(title)
-        Spacer()
-        Text(displayValue)
-          .foregroundStyle(.secondary)
-          .monospacedDigit()
-      }
-      Slider(value: value, in: range, step: step)
-        .tint(.orange)
-    }
-    .padding(.vertical, 3)
   }
 }

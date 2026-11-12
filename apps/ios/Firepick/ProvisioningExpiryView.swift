@@ -29,9 +29,11 @@ struct ProvisioningExpirySection: View {
             .foregroundStyle(.secondary)
         }
       }
-      Text("SideStore 自动续签后，重新回到设置页会刷新该时间。")
+      Text(versionText)
         .font(.footnote)
         .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity)
+        .multilineTextAlignment(.center)
     }
     .task {
       reload()
@@ -71,6 +73,18 @@ struct ProvisioningExpirySection: View {
       return "\(Int(seconds / 3_600)) 小时"
     }
     return "\(max(1, Int(seconds / 60))) 分钟"
+  }
+
+  private var versionText: String {
+    let version =
+      Bundle.main.object(
+        forInfoDictionaryKey: "CFBundleShortVersionString"
+      ) as? String ?? "未知"
+    let build =
+      Bundle.main.object(
+        forInfoDictionaryKey: "CFBundleVersion"
+      ) as? String ?? "未知"
+    return "拾萤 \(version)（\(build)）"
   }
 
   private static let dateFormatter: DateFormatter = {

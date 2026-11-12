@@ -2,14 +2,14 @@
 
 ## Automated
 
-- `swift test --package-path Packages/FirepickKit`: 45 tests, 14 suites, pass.
+- `swift test --package-path Packages/FirepickKit`: 47 tests, 14 suites, pass.
 - Clean iOS simulator Debug build: `BUILD SUCCEEDED`.
 - Android Bridge `:app:assembleDebug`: `BUILD SUCCESSFUL`.
 - Unsigned SideStore IPA: Release device build pass, ZIP integrity pass,
   standard `Payload/` layout and SHA-256 manifest generated.
-- Published `0.1.15` (build `16`): full download from
-  `dl.yychuiyan.com` matched the local 21,161,410-byte IPA and SHA-256
-  `89e1e93d351429f4724da0732c3f98386c2331be7e30482a8d9ac666f4dc63f1`.
+- Published `0.1.16` (build `17`): full download from
+  `dl.yychuiyan.com` matched the local 21,181,941-byte IPA and SHA-256
+  `dc175255bcd2e4cacbd57d30ef1b8e6d310680ba862f74c6f2959af251a0f71b`.
 - Local proxy contract test verifies authenticated upstream fetch and an
   end-to-end loopback Range response.
 - Download contract test verifies chunked transfer, persisted metadata and
@@ -39,11 +39,12 @@ channels. IPTV M3U yielded 12 groups / 430 channels. Mao yielded 162 VOD sites
 across HTTP, Java, Python and QuickJS. XYQ yielded 48 sites and a playable
 AppleCMS HLS result.
 
-The iOS simulator also imported `http://www.饭太硬.net/tv` through the
-no-cache, browser-user-agent fallback. Although the first OkHttp-style request
-was served a 100x100 image, the fallback loaded the navigation page and imported
-its 63 VOD sites into the same connection. GitHub proxy links are expanded to
-their raw and jsDelivr mirrors when the proxy blocks or delays requests.
+The iOS simulator imported `http://www.饭太硬.net/tv` from its actual
+image-wrapped response. The body is a 2,401-byte JPEG followed by a
+`pmkTfzZx**` Base64 JSON trailer. Decoding and removing comments yields 48 VOD
+sites and 5 live entries. The source probe and the iOS app both parse this
+payload directly. GitHub proxy links are also expanded to their raw and
+jsDelivr mirrors when the proxy blocks or delays requests.
 
 ## Device matrix
 

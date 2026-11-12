@@ -56,8 +56,8 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 
 支持两种添加方式。
 
-添加成功的仓库 URL 会作为“连接方式”保存在设置页，可以像 FongMi Android
-一样在最近使用的连接之间切换或删除。连接负责整套配置，连接加载后再由
+添加成功的仓库 URL 会作为“配置地址”保存在设置页，可以像 FongMi Android
+一样在最近使用的配置地址之间切换或删除。配置地址负责整套配置，加载后再由
 管理页选择具体点播站点。
 
 ### 从配置地址添加
@@ -88,6 +88,7 @@ https://raw.githubusercontent.com/gaotianliuyun/gao/master/js.json
 - JSON 对象包含 `urls`
 - JSON 对象包含 `lives`
 - JSON 数组是直播分组
+- 完整 JPEG 末尾带有 `标记**Base64(JSON)` 的 TVBox 图片封装配置
 - 文本以 `#EXTM3U` 开头
 - TXT 包含 `#genre#`
 
@@ -97,7 +98,7 @@ https://raw.githubusercontent.com/gaotianliuyun/gao/master/js.json
 - 单部影片详情接口
 - `api.php/provide/vod` 单接口
 - 要求 Cookie、登录或交互验证的页面
-- 返回 BMP/PNG/JPEG 等图片的防盗链地址
+- 只返回普通图片、但图片末尾没有 TVBox 配置的防盗链地址
 
 如果提示“加载到的是网页”或“加载到的是图片”，请改用 Raw 地址。
 
@@ -107,7 +108,7 @@ https://raw.githubusercontent.com/gaotianliuyun/gao/master/js.json
 
 ## 5. 管理和切换点播源
 
-设置首页顶部显示当前连接。点击当前连接会展开最近使用过的配置地址：
+设置首页顶部显示当前配置地址。点击地址会展开最近使用过的配置：
 
 - 列表最高 280pt
 - 源较多时内部滚动
@@ -197,13 +198,17 @@ Node.js、JAR 等复杂源将不可用。
 - 下载支持暂停、重试和断点续传。
 - DLNA 投屏需要同一局域网内可发现的 MediaRenderer。
 
-设置页的“播放与显示”支持：
+设置页和独立页面支持：
 
 - 播放引擎：自动、AVPlayer、MPV
 - 海报尺寸：紧凑、标准、大图
-- 默认是否显示弹幕、弹幕透明度、大小和速度
+- 点击“默认显示弹幕”进入独立弹幕设置页，可调整开关、透明度、大小和速度
 - 恢复弹幕默认值
 - 查看当前缓存占用并清理网络和临时缓存，不删除收藏、历史、源配置或下载文件
+- 收藏和最近观看分别进入独立页面
+
+点播页搜索按钮右侧提供最近观看入口。打开搜索弹窗时会显示持久化的历史查询，
+点击“管理”后可多选并批量删除；点击历史查询可以直接重新搜索。
 
 设置页不显示顶部大标题；底部显示当前安装包的版本号和构建号。
 

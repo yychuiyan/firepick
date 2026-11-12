@@ -14,6 +14,7 @@ final class AppPersistence {
     static let danmakuSpeed = "danmakuSpeed"
     static let sourceConnections = "sourceConnections"
     static let currentConnectionURL = "currentConnectionURL"
+    static let searchHistory = "searchHistory"
     static let simulatorBridgeCredentials = "simulatorBridgeCredentials"
   }
 
@@ -89,6 +90,10 @@ final class AppPersistence {
     defaults.string(forKey: Key.currentConnectionURL)
   }
 
+  var searchHistory: [String] {
+    defaults.stringArray(forKey: Key.searchHistory) ?? []
+  }
+
   func loadSourceConnections() throws -> [SourceConnection] {
     guard let data = defaults.data(forKey: Key.sourceConnections) else {
       return []
@@ -107,6 +112,10 @@ final class AppPersistence {
     } else {
       defaults.removeObject(forKey: Key.currentConnectionURL)
     }
+  }
+
+  func saveSearchHistory(_ values: [String]) {
+    defaults.set(values, forKey: Key.searchHistory)
   }
 
   func saveConfiguration(_ data: Data, baseURL: URL?) throws {
