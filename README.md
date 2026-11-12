@@ -20,9 +20,9 @@ Java/JAR、Python、Node.js 等复杂 Provider。
 当前公开发布版本：
 
 ```text
-Version: 0.1.7
-Build:   8
-SHA-256: cef286362707c9715219a442e459db01bc361aa337517ca86f03a1684a9d8777
+Version: 0.1.14
+Build:   15
+SHA-256: f03ddc9dbc813a17e12454fc32674f99a86ca11df50a2d4cdb26e27876fb5c88
 ```
 
 SideStore 更新源：
@@ -34,7 +34,7 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 当前 IPA 下载地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/Firepick-0.1.7.ipa
+https://dl.yychuiyan.com/firepick/Firepick-0.1.14.ipa
 ```
 
 ## 功能概览
@@ -47,8 +47,8 @@ https://dl.yychuiyan.com/firepick/Firepick-0.1.7.ipa
 | 播放 | AVPlayer；MPVKit-GPL 支持 MKV、ISO、M2TS、字幕和续播 |
 | 代理 | `proxy://` 解析、Android Bridge Range/HEAD 转发、iOS 回环代理 |
 | 下载 | 分块下载、暂停、重试、断点续传、持久化和离线播放 |
-| 弹幕 | XML、JSON、纯文本解析及同步叠加 |
-| 设置 | 当前源下拉切换、扩展与连接、签名到期时间 |
+| 弹幕 | XML、JSON、纯文本解析，同步叠加，透明度、大小和速度设置 |
+| 设置 | 当前连接下拉、播放引擎、海报尺寸、弹幕设置、缓存占用、版本号、扩展连接、签名到期时间 |
 | 媒体库 | 收藏、最近观看 |
 | 局域网 | Android Bridge TLS 二维码配对、DLNA |
 | 分发 | SideStore source、未签名 IPA、COS 和自定义域名发布 |
@@ -184,7 +184,7 @@ make bootstrap
 make test
 ```
 
-当前基线为 42 项测试、13 个 suite 全部通过。
+当前基线为 43 项测试、14 个 suite 全部通过。
 
 生成 Xcode 工程：
 
@@ -212,16 +212,16 @@ xcodebuild \
 构建未签名设备 IPA：
 
 ```bash
-FIREPICK_VERSION=0.1.7 \
-FIREPICK_BUILD=8 \
+FIREPICK_VERSION=0.1.10 \
+FIREPICK_BUILD=11 \
 ./scripts/package-unsigned-ipa.sh
 ```
 
 输出：
 
 ```text
-artifacts/Firepick-unsigned-0.1.7.ipa
-artifacts/Firepick-unsigned-0.1.7.ipa.sha256
+artifacts/Firepick-unsigned-0.1.10.ipa
+artifacts/Firepick-unsigned-0.1.10.ipa.sha256
 ```
 
 保持以下配置不变，否则 SideStore 更新时可能无法保留数据：
@@ -350,12 +350,12 @@ IPA base:    https://dl.yychuiyan.com/firepick
 发布命令：
 
 ```bash
-FIREPICK_BUILD=8 \
+FIREPICK_BUILD=11 \
 FIREPICK_RELEASE_NOTES="本次更新说明" \
 FIREPICK_IPA_BASE_URL="https://dl.yychuiyan.com/firepick" \
 FIREPICK_CURL_DOH_URL="https://223.5.5.5/dns-query" \
 ./scripts/publish-cos-release.sh \
-  0.1.7 \
+  0.1.10 \
   firepick-1302621537 \
   ap-shanghai
 ```
@@ -374,6 +374,8 @@ FIREPICK_CURL_DOH_URL="https://223.5.5.5/dns-query" \
 
 版本规则：
 
+- 后续补丁版本依次使用 `0.1.10`、`0.1.11`、`0.1.12`、`0.1.13`、
+  `0.1.14`，不跳到 `0.2.0`。
 - 每次发布增加 `MARKETING_VERSION`。
 - 同一版本重新构建时仍应增加 `CURRENT_PROJECT_VERSION`。
 - 不复用旧版本号发布不同代码。

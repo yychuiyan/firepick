@@ -7,9 +7,14 @@ struct BrowseView: View {
     @State private var selectedItem: MediaItem?
     @State private var showingSearch = false
 
-    private let columns = [
-        GridItem(.adaptive(minimum: 132, maximum: 210), spacing: 16),
-    ]
+    private var columns: [GridItem] {
+        [
+            GridItem(
+                .adaptive(minimum: model.posterSizePreference.minimumWidth, maximum: 240),
+                spacing: 16
+            ),
+        ]
+    }
 
     var body: some View {
         NavigationStack {
@@ -138,10 +143,10 @@ struct BrowseView: View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(model.selectedSite?.name ?? "拾萤")
-                    .font(.system(size: 34, weight: .bold))
-                    .lineLimit(2)
+                    .font(.system(size: 28, weight: .bold))
+                    .lineLimit(1)
                 if let site = model.selectedSite {
-                    Text(model.routeLabel(for: site))
+          Text("连接方式 · \(model.routeLabel(for: site))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

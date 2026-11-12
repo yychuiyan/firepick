@@ -128,9 +128,9 @@ struct LiveView: View {
 
     private var pageHeader: some View {
         Text("电视")
-            .font(.system(size: 34, weight: .bold))
+            .font(.system(size: 28, weight: .bold))
             .padding(.horizontal)
-            .padding(.top, 8)
+            .padding(.top, 6)
     }
 }
 
