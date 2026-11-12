@@ -1,0 +1,57 @@
+diff --git a/catvod/src/main/java/com/github/catvod/utils/RuntimeModule.java b/catvod/src/main/java/com/github/catvod/utils/RuntimeModule.java
+index db7608c98..9e0fda363 100644
+--- a/catvod/src/main/java/com/github/catvod/utils/RuntimeModule.java
++++ b/catvod/src/main/java/com/github/catvod/utils/RuntimeModule.java
+@@ -34,7 +34,6 @@ import java.util.zip.ZipInputStream;
+ import dalvik.system.DexClassLoader;
+ 
+ public enum RuntimeModule {
+-
+     PYTHON("python", "Python", "libchaquopy_java.so"),
+     NODEJS("nodejs", "Node.js", "libnode.so"),
+     QUICKJS("quickjs", "QuickJS", "libquickjs-wrapper.so"),
+@@ -42,6 +41,10 @@ public enum RuntimeModule {
+     MPV("mpv", "MPV", "libplayer.so"),
+     BDJ("bdj", "BD-J", "");
+ 
++    private static final java.util.Set<String> PINNED_MODULE_CERTIFICATES = java.util.Set.of(
++        "7223de1aae9e09110a3007c980af081b1609a3fec5bbbdfa7d9cedb3525110a1"
++    );
++
+     public final String id;
+     public final String title;
+     private final String library;
+@@ -454,12 +457,32 @@ public enum RuntimeModule {
+             PackageInfo host = Runtime.context().getPackageManager().getPackageInfo(Runtime.context().getPackageName(), signatureFlags());
+             Signature[] expected = signatures(host);
+             Signature[] actual = signatures(info);
+-            if (expected == null || actual == null || expected.length == 0 || expected.length != actual.length || !Arrays.asList(expected).containsAll(Arrays.asList(actual))) throw new IOException("Invalid runtime signer");
++            if (!sameSignatures(expected, actual) && !hasPinnedModuleCertificate(actual)) throw new IOException("Invalid runtime signer");
+         } catch (PackageManager.NameNotFoundException e) {
+             throw new IOException("Unable to verify runtime signer", e);
+         }
+     }
+ 
++    private static boolean sameSignatures(Signature[] expected, Signature[] actual) {
++        return expected != null && actual != null && expected.length > 0
++            && expected.length == actual.length
++            && Arrays.asList(expected).containsAll(Arrays.asList(actual));
++    }
++
++    private static boolean hasPinnedModuleCertificate(Signature[] actual) {
++        if (actual == null) return false;
++        for (Signature signature : actual) {
++            try {
++                String fingerprint = hex(
++                    MessageDigest.getInstance("SHA-256").digest(signature.toByteArray())
++                );
++                if (PINNED_MODULE_CERTIFICATES.contains(fingerprint)) return true;
++            } catch (java.security.NoSuchAlgorithmException ignored) {
++            }
++        }
++        return false;
++    }
++
+     private static void verifyDex(ZipFile apk) throws IOException {
+         var files = new HashSet<String>();
+         for (var entries = apk.entries(); entries.hasMoreElements();) verifyDexEntry(apk, entries.nextElement(), files);

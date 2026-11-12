@@ -1,0 +1,39 @@
+name: Firepick
+options:
+  bundleIdPrefix: com.firepick
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+packages:
+  FirepickKit:
+    path: Packages/FirepickKit
+targets:
+  Firepick:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: apps/ios/Firepick
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.firepick.app
+        PRODUCT_NAME: Firepick
+        INFOPLIST_FILE: apps/ios/Firepick/Info.plist
+        CODE_SIGN_ENTITLEMENTS: apps/ios/Firepick/Firepick.entitlements
+        SWIFT_VERSION: "6.0"
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 0.1.0
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic
+    dependencies:
+      - package: FirepickKit
+        product: FirepickCore
+      - package: FirepickKit
+        product: FirepickProvider
+      - package: FirepickKit
+        product: FirepickBridge
+      - package: FirepickKit
+        product: FirepickPlayback
+

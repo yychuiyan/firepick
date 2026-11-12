@@ -1,0 +1,140 @@
+import AVFoundation
+import Foundation
+import FirepickCore
+import Observation
+
+@MainActor
+public protocol PlaybackEngine: AnyObject {
+    var state: PlaybackState { get }
+    var currentTime: Double { get }
+    var duration: Double { get }
+
+    func load(_ request: PlaybackRequest) async throws
+    func play()
+    func pause()
+    func seek(to seconds: Double) async
+    func stop()
+    func setPlaybackRate(_ rate: Float)
+}
+
+@MainActor
+@Observable
+public final class AVPlayerEngine: PlaybackEngine {
+    public private(set) var state: PlaybackState = .idle
+    public private(set) var currentTime: Double = 0
+    public private(set) var duration: Double = 0
+    public let player = AVPlayer()
+    private var playbackRate: Float = 1
+
+    private var timeObserver: Any?
+    private var statusObservation: NSKeyValueObservation?
+
+    public init() {
+        timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] time in
+            Task { @MainActor in
+                self?.currentTime = time.seconds.isFinite ? max(0, time.seconds) : 0
+                self?.duration = self?.player.currentItem?.duration.seconds ?? 0
+            }
+        }
+    }
+
+    public func load(_ request: PlaybackRequest) async throws {
+        state = .loading
+#if os(iOS)
+        let audio = AVAudioSession.sharedInstance()
+        try audio.setCategory(.playback, mode: .moviePlayback)
+        try audio.setActive(true)
+#endif
+        let headers = request.headers
+        let options: [String: Any] = headers.isEmpty ? [:] : [
+            "AVURLAssetHTTPHeaderFieldsKey": headers,
+        ]
+        let asset = AVURLAsset(url: request.url, options: options)
+        do {
+            let playable = try await asset.load(.isPlayable)
+            guard playable else {
+                throw FirepickError.playback("媒体不可播放")
+            }
+            let item = AVPlayerItem(asset: asset)
+            player.replaceCurrentItem(with: item)
+            statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+                Task { @MainActor in
+                    switch item.status {
+                    case .readyToPlay:
+                        self?.state = .ready
+                    case .failed:
+                        self?.state = .failed(item.error?.localizedDescription ?? "未知播放错误")
+                    default:
+                        break
+                    }
+                }
+            }
+            if request.startPosition > 0 {
+                await player.seek(to: CMTime(seconds: request.startPosition, preferredTimescale: 600))
+                currentTime = request.startPosition
+            }
+        } catch {
+            state = .failed(error.localizedDescription)
+            throw error
+        }
+    }
+
+    public func play() {
+        player.playImmediately(atRate: playbackRate)
+        state = .playing
+    }
+
+    public func pause() {
+        player.pause()
+        state = .paused
+    }
+
+    public func seek(to seconds: Double) async {
+        await player.seek(
+            to: CMTime(seconds: max(0, seconds), preferredTimescale: 600),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        )
+        currentTime = max(0, seconds)
+    }
+
+    public func stop() {
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        currentTime = 0
+        duration = 0
+        state = .idle
+    }
+
+    public func setPlaybackRate(_ rate: Float) {
+        playbackRate = max(0.25, min(rate, 4))
+        player.defaultRate = playbackRate
+        if player.timeControlStatus == .playing {
+            player.rate = playbackRate
+        }
+    }
+}
+
+@MainActor
+public final class UnavailableMPVEngine: PlaybackEngine {
+    public private(set) var state: PlaybackState = .idle
+    public private(set) var currentTime: Double = 0
+    public private(set) var duration: Double = 0
+
+    public init() {}
+
+    public func load(_ request: PlaybackRequest) async throws {
+        state = .failed("MPVKit 尚未链接")
+        throw FirepickError.unsupported("MPVKit 尚未链接")
+    }
+
+    public func play() {}
+    public func pause() {}
+    public func seek(to seconds: Double) async {}
+    public func stop() { state = .idle }
+    public func setPlaybackRate(_ rate: Float) {}
+}
+

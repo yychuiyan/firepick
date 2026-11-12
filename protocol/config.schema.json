@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://firepick.local/schema/config.json",
+  "title": "CatVod configuration",
+  "type": "object",
+  "$defs": {
+    "site": {
+      "type": "object",
+      "required": ["key", "name", "api"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "type": { "type": "integer" },
+        "api": { "type": "string" },
+        "ext": {},
+        "jar": { "type": ["string", "null"] },
+        "searchable": { "type": "integer" },
+        "changeable": { "type": "integer" },
+        "quickSearch": { "type": "integer" },
+        "timeout": { "type": "integer" },
+        "header": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "properties": {
+    "urls": { "type": "array" },
+    "spider": { "type": "string" },
+    "sites": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/site" }
+    },
+    "lives": { "type": "array" },
+    "parses": { "type": "array" },
+    "headers": {},
+    "doh": {},
+    "proxy": {},
+    "rules": {}
+  },
+  "required": ["sites"],
+  "additionalProperties": true
+}
+

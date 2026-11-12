@@ -1,0 +1,248 @@
+openapi: 3.1.0
+info:
+  title: Firepick Bridge API
+  version: 1.0.0
+  description: Versioned contract between the Firepick iOS client and Android source runtimes.
+servers:
+  - url: https://{bridgeHost}:{bridgePort}
+    variables:
+      bridgeHost:
+        default: 192.168.1.8
+      bridgePort:
+        default: "9443"
+security:
+  - bearerAuth: []
+paths:
+  /v1/health:
+    get:
+      security: []
+      operationId: health
+      responses:
+        "200":
+          description: Bridge capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /v1/pair:
+    post:
+      security: []
+      operationId: pair
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  minLength: 6
+                  maxLength: 12
+      responses:
+        "200":
+          description: Device token
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token]
+                properties:
+                  token:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/configs/{digest}:
+    put:
+      operationId: putConfig
+      parameters:
+        - $ref: "#/components/parameters/Digest"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "./config.schema.json"
+      responses:
+        "204":
+          description: Config accepted
+        "400":
+          $ref: "#/components/responses/Error"
+  /v1/sessions:
+    post:
+      operationId: createSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [configDigest, source]
+              properties:
+                configDigest:
+                  type: string
+                timeoutSeconds:
+                  type: integer
+                  minimum: 1
+                  maximum: 120
+                source:
+                  $ref: "./config.schema.json#/$defs/site"
+      responses:
+        "200":
+          description: Created session
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessionId, expiresAt]
+                properties:
+                  sessionId:
+                    type: string
+                  expiresAt:
+                    type: string
+                    format: date-time
+        "401":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /v1/sessions/{sessionId}:
+    delete:
+      operationId: deleteSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "204":
+          description: Session closed
+  /v1/sessions/{sessionId}/invoke:
+    post:
+      operationId: invokeProvider
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [method, arguments]
+              properties:
+                method:
+                  type: string
+                  enum:
+                    - homeContent
+                    - homeVideoContent
+                    - categoryContent
+                    - searchContent
+                    - detailContent
+                    - playerContent
+                    - liveContent
+                    - danmaku
+                    - action
+                    - proxy
+                arguments:
+                  type: array
+                  items: {}
+      responses:
+        "200":
+          description: CatVod-compatible provider result
+          content:
+            application/json:
+              schema:
+                $ref: "./result.schema.json"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "408":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /v1/sessions/{sessionId}/proxy:
+    get:
+      operationId: proxy
+      description: Invokes the active source's CatVod proxy method and streams the response with Range and HEAD support.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - name: siteKey
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Proxied media stream or bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                contentEncoding: binary
+        "206":
+          description: Partial proxied stream
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                contentEncoding: binary
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+    head:
+      operationId: proxyMetadata
+      description: Returns upstream proxy headers without opening the media body.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Proxy metadata
+        "404":
+          $ref: "#/components/responses/Error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    Digest:
+      name: digest
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-f0-9]{64}$"
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    Error:
+      description: Stable bridge error
+      content:
+        application/json:
+          schema:
+            $ref: "./error.schema.json"
+  schemas:
+    Health:
+      type: object
+      required: [protocolVersion, bridgeVersion, runtimes, available]
+      properties:
+        protocolVersion:
+          type: integer
+          const: 1
+        bridgeVersion:
+          type: string
+        configDigest:
+          type: [string, "null"]
+        available:
+          type: boolean
+        runtimes:
+          type: array
+          items:
+            type: string
+            enum: [http, quickJS, python, nodeJS, java, thunder, bdj, nativeCore]
+

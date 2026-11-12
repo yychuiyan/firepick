@@ -1,0 +1,15 @@
+{
+  "class": [
+    { "type_id": "movie", "type_name": "电影" }
+  ],
+  "list": [
+    {
+      "vod_id": "demo-1",
+      "vod_name": "示例影片",
+      "type_name": "电影",
+      "vod_play_from": "主线路",
+      "vod_play_url": "第1集$https://example.com/1.m3u8#第2集$https://example.com/2.m3u8"
+    }
+  ]
+}
+

@@ -1,0 +1,92 @@
+diff --git a/quickjs/src/main/java/com/fongmi/quickjs/QuickJSLoader.java b/quickjs/src/main/java/com/fongmi/quickjs/QuickJSLoader.java
+index 43b6938ba..9c2bb7171 100644
+--- a/quickjs/src/main/java/com/fongmi/quickjs/QuickJSLoader.java
++++ b/quickjs/src/main/java/com/fongmi/quickjs/QuickJSLoader.java
+@@ -1,13 +1,11 @@
+ package com.fongmi.quickjs;
+ 
+-import com.github.catvod.utils.RuntimeModule;
+-
+ public final class QuickJSLoader {
+ 
+     private QuickJSLoader() {
+     }
+ 
+     public static void init() {
+-        RuntimeModule.QUICKJS.load(System::load);
++        System.loadLibrary("quickjs-wrapper");
+     }
+ }
+diff --git a/quickjs/src/main/java/com/fongmi/quickjs/crawler/Spider.java b/quickjs/src/main/java/com/fongmi/quickjs/crawler/Spider.java
+index 792a59705..bda3b6796 100644
+--- a/quickjs/src/main/java/com/fongmi/quickjs/crawler/Spider.java
++++ b/quickjs/src/main/java/com/fongmi/quickjs/crawler/Spider.java
+@@ -10,8 +10,10 @@ import com.fongmi.quickjs.host.Host;
+ import com.fongmi.quickjs.method.Global;
+ import com.fongmi.quickjs.method.Invocation;
+ import com.fongmi.quickjs.utils.Module;
++import com.github.catvod.Runtime;
+ import com.github.catvod.crawler.SpiderDebug;
+ import com.github.catvod.utils.Json;
++import com.github.catvod.utils.Path;
+ import com.github.catvod.utils.RuntimeModule;
+ 
+ import org.json.JSONArray;
+@@ -307,7 +309,13 @@ public class Spider extends com.github.catvod.crawler.Spider {
+     private void createObj() throws Exception {
+         String content = module.load(api);
+         evaluateModule(content, api);
+-        evaluateModule(String.format(RuntimeModule.QUICKJS.readAsset("js/lib/spider.js"), JSONObject.quote(api)), api + "#spider");
++        evaluateModule(String.format(readAsset("js/lib/spider.js"), JSONObject.quote(api)), api + "#spider");
++    }
++
++    private String readAsset(String path) throws Exception {
++        try (InputStream input = Runtime.context().getAssets().open(path)) {
++            return Path.readOrThrow(input);
++        }
+     }
+ 
+     private void evaluateModule(String source, String name) throws Exception {
+diff --git a/quickjs/src/main/java/com/fongmi/quickjs/utils/Module.java b/quickjs/src/main/java/com/fongmi/quickjs/utils/Module.java
+index 01f3d7b9c..e805c47f1 100644
+--- a/quickjs/src/main/java/com/fongmi/quickjs/utils/Module.java
++++ b/quickjs/src/main/java/com/fongmi/quickjs/utils/Module.java
+@@ -5,6 +5,7 @@ import android.util.LruCache;
+ 
+ import com.fongmi.quickjs.ModuleBytecodeCache;
+ import com.fongmi.quickjs.QuickJS;
++import com.github.catvod.Runtime;
+ import com.github.catvod.crawler.SpiderDebug;
+ import com.github.catvod.net.Net;
+ import com.github.catvod.net.NetOptions;
+@@ -118,10 +119,29 @@ public class Module implements QuickJS.ModuleLoader {
+ 
+     private CompletableFuture<String> read(String name, Net client) {
+         if (name.startsWith("http")) return client.requestAsync(name, new NetOptions()).thenApply(this::readResponse);
+-        if (name.startsWith("assets")) return CompletableFuture.completedFuture(RuntimeModule.QUICKJS.readAsset(name));
++        if (name.startsWith("assets")) {
++            String path = name.startsWith("assets://") ? name.substring("assets://".length()) : name;
++            try (java.io.InputStream input = Runtime.context().getAssets().open(path)) {
++                return CompletableFuture.completedFuture(Path.readOrThrow(input));
++            } catch (java.io.IOException error) {
++                String compatible = compatibleAssetPath(path);
++                if (!compatible.equals(path)) {
++                    try (java.io.InputStream input = Runtime.context().getAssets().open(compatible)) {
++                        return CompletableFuture.completedFuture(Path.readOrThrow(input));
++                    } catch (java.io.IOException ignored) {
++                    }
++                }
++                return CompletableFuture.failedFuture(error);
++            }
++        }
+         throw new IllegalArgumentException("Unsupported module URL: " + name);
+     }
+ 
++    private String compatibleAssetPath(String path) {
++        if (path.startsWith("js/lib/")) return "js/vendor/" + path.substring("js/lib/".length());
++        return path;
++    }
++
+     private String readResponse(Net.Result result) {
+         if (result.error != null) throw new IllegalStateException(result.error);
+         int code = (Integer) result.code;

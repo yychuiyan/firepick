@@ -1,0 +1,8 @@
+{
+  "protocolVersion": 1,
+  "bridgeVersion": "0.1.0",
+  "configDigest": null,
+  "runtimes": ["http", "quickJS", "python", "nodeJS", "java", "thunder", "bdj"],
+  "available": true
+}
+

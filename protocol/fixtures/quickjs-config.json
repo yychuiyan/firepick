@@ -1,0 +1,12 @@
+{
+  "sites": [
+    {
+      "key": "quickjs-smoke",
+      "name": "QuickJS 运行时测试",
+      "type": 3,
+      "api": "http://10.0.2.2:8765/quickjs-smoke.js",
+      "searchable": 1,
+      "quickSearch": 1
+    }
+  ]
+}

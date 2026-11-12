@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://firepick.local/schema/result.json",
+  "title": "CatVod-compatible provider result",
+  "type": "object",
+  "properties": {
+    "class": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type_id": { "type": ["string", "number"] },
+          "type_name": { "type": "string" },
+          "type_flag": { "type": ["string", "number"] }
+        },
+        "additionalProperties": true
+      }
+    },
+    "list": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/vod" }
+    },
+    "filters": { "type": "object" },
+    "url": {},
+    "header": { "type": "object" },
+    "msg": { "type": "string" },
+    "subs": { "type": "array" },
+    "danmaku": { "type": "array" },
+    "skips": { "type": "array" },
+    "drm": { "type": "object" },
+    "parse": { "type": "integer" },
+    "position": { "type": ["number", "null"] },
+    "pagecount": { "type": ["number", "null"] }
+  },
+  "$defs": {
+    "vod": {
+      "type": "object",
+      "required": ["vod_id", "vod_name"],
+      "properties": {
+        "vod_id": { "type": ["string", "number"] },
+        "vod_name": { "type": "string" },
+        "type_name": { "type": "string" },
+        "vod_pic": { "type": "string" },
+        "vod_remarks": { "type": "string" },
+        "vod_year": { "type": "string" },
+        "vod_area": { "type": "string" },
+        "vod_director": { "type": "string" },
+        "vod_actor": { "type": "string" },
+        "vod_content": { "type": "string" },
+        "vod_play_from": { "type": "string" },
+        "vod_play_url": { "type": "string" },
+        "vod_play_id": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
+

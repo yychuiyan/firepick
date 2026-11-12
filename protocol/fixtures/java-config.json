@@ -1,0 +1,12 @@
+{
+  "spider": "https://raw.githubusercontent.com/gaotianliuyun/gao/master/jar/pg.jar",
+  "sites": [
+    {
+      "key": "kugou",
+      "name": "酷狗音乐 · Java",
+      "type": 3,
+      "api": "csp_Kugou",
+      "searchable": 1
+    }
+  ]
+}
