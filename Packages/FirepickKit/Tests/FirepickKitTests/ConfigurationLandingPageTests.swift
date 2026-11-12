@@ -24,4 +24,36 @@ struct ConfigurationLandingPageTests {
     #expect(first.absoluteString == "http://example.com/tvbox.json")
     #expect(fallback.absoluteString == "http://img.example.com/config.jpg")
   }
+
+  @Test
+  func expandsGitHubProxyIntoRawAndJSDelivrFallbacks() throws {
+    let proxied =
+      "https://gh-proxy.net/https://raw.githubusercontent.com/yoursmile66/TVBox/refs/heads/main/XC.json"
+    let urls = ConfigurationLandingPage.candidateURLs(
+      from: [proxied],
+      baseURL: URL(string: "https://example.com/")!
+    )
+    let values = urls.map(\.absoluteString)
+
+    #expect(values.contains(proxied))
+    #expect(
+      values.contains(
+        "https://raw.githubusercontent.com/yoursmile66/TVBox/refs/heads/main/XC.json"
+      )
+    )
+    #expect(values.contains("https://cdn.jsdelivr.net/gh/yoursmile66/TVBox@main/XC.json"))
+  }
+
+  @Test
+  func generatesJSDelivrForDirectGitHubRawLinks() {
+    let urls = ConfigurationLandingPage.candidateURLs(
+      from: ["https://raw.githubusercontent.com/owner/repo/main/config/tv.json"],
+      baseURL: URL(string: "https://example.com/")!
+    )
+    #expect(
+      urls.map(\.absoluteString).contains(
+        "https://cdn.jsdelivr.net/gh/owner/repo@main/config/tv.json"
+      )
+    )
+  }
 }

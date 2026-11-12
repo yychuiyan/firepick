@@ -2,14 +2,14 @@
 
 ## Automated
 
-- `swift test --package-path Packages/FirepickKit`: 43 tests, 14 suites, pass.
+- `swift test --package-path Packages/FirepickKit`: 45 tests, 14 suites, pass.
 - Clean iOS simulator Debug build: `BUILD SUCCEEDED`.
 - Android Bridge `:app:assembleDebug`: `BUILD SUCCESSFUL`.
 - Unsigned SideStore IPA: Release device build pass, ZIP integrity pass,
   standard `Payload/` layout and SHA-256 manifest generated.
-- Published `0.1.14` (build `15`): full download from
-  `dl.yychuiyan.com` matched the local 21,157,595-byte IPA and SHA-256
-  `f03ddc9dbc813a17e12454fc32674f99a86ca11df50a2d4cdb26e27876fb5c88`.
+- Published `0.1.15` (build `16`): full download from
+  `dl.yychuiyan.com` matched the local 21,161,410-byte IPA and SHA-256
+  `89e1e93d351429f4724da0732c3f98386c2331be7e30482a8d9ac666f4dc63f1`.
 - Local proxy contract test verifies authenticated upstream fetch and an
   end-to-end loopback Range response.
 - Download contract test verifies chunked transfer, persisted metadata and
@@ -42,7 +42,8 @@ AppleCMS HLS result.
 The iOS simulator also imported `http://www.饭太硬.net/tv` through the
 no-cache, browser-user-agent fallback. Although the first OkHttp-style request
 was served a 100x100 image, the fallback loaded the navigation page and imported
-its 63 VOD sites into the same connection.
+its 63 VOD sites into the same connection. GitHub proxy links are expanded to
+their raw and jsDelivr mirrors when the proxy blocks or delays requests.
 
 ## Device matrix
 

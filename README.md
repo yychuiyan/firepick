@@ -20,9 +20,9 @@ Java/JAR、Python、Node.js 等复杂 Provider。
 当前公开发布版本：
 
 ```text
-Version: 0.1.14
-Build:   15
-SHA-256: f03ddc9dbc813a17e12454fc32674f99a86ca11df50a2d4cdb26e27876fb5c88
+Version: 0.1.15
+Build:   16
+SHA-256: 89e1e93d351429f4724da0732c3f98386c2331be7e30482a8d9ac666f4dc63f1
 ```
 
 SideStore 更新源：
@@ -34,7 +34,7 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 当前 IPA 下载地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/Firepick-0.1.14.ipa
+https://dl.yychuiyan.com/firepick/Firepick-0.1.15.ipa
 ```
 
 ## 功能概览
@@ -184,7 +184,7 @@ make bootstrap
 make test
 ```
 
-当前基线为 43 项测试、14 个 suite 全部通过。
+当前基线为 45 项测试、14 个 suite 全部通过。
 
 生成 Xcode 工程：
 
@@ -375,7 +375,7 @@ FIREPICK_CURL_DOH_URL="https://223.5.5.5/dns-query" \
 版本规则：
 
 - 后续补丁版本依次使用 `0.1.10`、`0.1.11`、`0.1.12`、`0.1.13`、
-  `0.1.14`，不跳到 `0.2.0`。
+  `0.1.14`、`0.1.15`，不跳到 `0.2.0`。
 - 每次发布增加 `MARKETING_VERSION`。
 - 同一版本重新构建时仍应增加 `CURRENT_PROJECT_VERSION`。
 - 不复用旧版本号发布不同代码。
