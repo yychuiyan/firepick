@@ -7,9 +7,9 @@
 - Android Bridge `:app:assembleDebug`: `BUILD SUCCESSFUL`.
 - Unsigned SideStore IPA: Release device build pass, ZIP integrity pass,
   standard `Payload/` layout and SHA-256 manifest generated.
-- Published `0.1.17` (build `18`): full download from
-  `dl.yychuiyan.com` matched the local 21,125,464-byte IPA and SHA-256
-  `3b8d1e3251ecd7f388dd19eaa95b7f4eee0761cb01b3e43beffb97744bb9af98`.
+- Published `0.1.18` (build `19`): full download from
+  `dl.yychuiyan.com` matched the local 21,135,466-byte IPA and SHA-256
+  `5acd24052c494deaa1cdf735a181b4103dbc809cc115f93dfe252743c99c2d94`.
 - Local proxy contract test verifies authenticated upstream fetch and an
   end-to-end loopback Range response.
 - Download contract test verifies chunked transfer, persisted metadata and

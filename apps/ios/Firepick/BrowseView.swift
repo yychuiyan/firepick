@@ -117,17 +117,16 @@ struct BrowseView: View {
               .padding(.vertical, 8)
             }
           } else {
-            ContentUnavailableView(
-              "还没有内容",
-              systemImage: "sparkles"
-            )
+            emptyContent
           }
         }
         .padding(.vertical)
       }
       .refreshable {
-        guard let site = model.selectedSite else { return }
-        await model.selectSite(site)
+        await model.reloadHome()
+      }
+      .task(id: homeLoadToken) {
+        await model.ensureHomeContentLoaded()
       }
       .toolbar(.hidden, for: .navigationBar)
       .sheet(isPresented: $showingSearch) {
@@ -142,18 +141,43 @@ struct BrowseView: View {
     }
   }
 
+  private var homeLoadToken: String {
+    "\(model.currentConnection?.id ?? "")|\(model.configuration.sites.count)|\(model.selectedSite?.key ?? "")"
+  }
+
+  @ViewBuilder
+  private var emptyContent: some View {
+    if model.configuration.sites.isEmpty {
+      ContentUnavailableView(
+        "还没有内容",
+        systemImage: "sparkles",
+        description: Text("请先在设置中添加并选择配置地址，首页会自动加载对应点播内容。")
+      )
+    } else if model.selectedSite == nil {
+      ProgressView("正在加载已选配置…")
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
+    } else {
+      ContentUnavailableView(
+        "这个源暂时没有内容",
+        systemImage: "film",
+        description: Text("下拉刷新，或切换其他点播源试试。")
+      )
+    }
+  }
+
   private var pageHeader: some View {
     HStack(alignment: .center, spacing: 16) {
       VStack(alignment: .leading, spacing: 5) {
-        Text(model.selectedSite?.name ?? "拾萤")
+        Text(headerTitle)
           .font(.system(size: 28, weight: .bold))
           .lineLimit(1)
         Button {
           showingSourcePicker = true
         } label: {
           HStack(spacing: 5) {
-            if let site = model.selectedSite {
-              Text(model.routeLabel(for: site))
+            if let description = headerDescription {
+              Text(description)
             }
             Text(model.selectedSite == nil ? "选择点播源" : "切换点播源")
             Image(systemName: "chevron.down")
@@ -195,6 +219,27 @@ struct BrowseView: View {
     }
     .padding(.horizontal)
     .padding(.top, 8)
+  }
+
+  private var headerTitle: String {
+    if let site = model.selectedSite {
+      return site.name
+    }
+    if let connection = model.currentConnection {
+      return connection.name
+    }
+    return "拾萤"
+  }
+
+  private var headerDescription: String? {
+    if let site = model.selectedSite {
+      let route = model.routeLabel(for: site)
+      if let address = model.currentConnection?.displayAddress, !address.isEmpty {
+        return "\(address) · \(route)"
+      }
+      return route
+    }
+    return model.currentConnection?.displayAddress
   }
 }
 

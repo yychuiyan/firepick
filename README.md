@@ -1,8 +1,8 @@
 # 拾萤 Firepick
 
-拾萤是一个面向 iPhone 与 iPad 的 CatVod/TVBox 兼容影音客户端。它既可以在
-iOS 本机执行 HTTP、XML、JSON 源，也可以通过局域网 Android Bridge 运行
-Java/JAR、Python、Node.js 等复杂 Provider。
+[拾萤用户配置手册](docs/user-configuration.md)
+
+拾萤是一个面向 iPhone 与 iPad 的 CatVod/TVBox 兼容影音客户端。它既可以在 iOS 本机执行 HTTP、XML、JSON 源，也可以通过局域网 Android Bridge 运行 Java/JAR、Python、Node.js 等复杂 Provider。
 
 项目同时包含：
 
@@ -12,17 +12,16 @@ Java/JAR、Python、Node.js 等复杂 Provider。
 - SideStore 未签名 IPA 打包与 COS 发布脚本
 - FongMi/TV、CatVodSpider、QuickJS 和 MPV 的固定版本上游补丁
 
-> 本仓库只提供客户端和运行时桥接实现，不附带影视内容、账号、付费凭据或
-> 第三方接口授权。使用者应自行确认数据源和媒体内容的合法性。
+> 本仓库只提供客户端和运行时桥接实现，不附带影视内容、账号、付费凭据或第三方接口授权。使用者应自行确认数据源和媒体内容的合法性。
 
 ## 当前版本
 
 当前公开发布版本：
 
 ```text
-Version: 0.1.17
-Build:   18
-SHA-256: 3b8d1e3251ecd7f388dd19eaa95b7f4eee0761cb01b3e43beffb97744bb9af98
+Version: 0.1.18
+Build:   19
+SHA-256: 5acd24052c494deaa1cdf735a181b4103dbc809cc115f93dfe252743c99c2d94
 ```
 
 SideStore 更新源：
@@ -34,24 +33,24 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 当前 IPA 下载地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/Firepick-0.1.17.ipa
+https://dl.yychuiyan.com/firepick/Firepick-0.1.18.ipa
 ```
 
 ## 功能概览
 
-| 模块 | 当前能力 |
-| --- | --- |
-| 点播 | CatVod/TVBox 配置、分类、筛选、详情、剧集、搜索、换源 |
-| 源管理 | 设置页只管理配置地址；点播页选择配置内部的点播源 |
-| 直播/电视 | JSON、M3U、TXT 直播源，频道分组、频道头、XMLTV EPG |
-| 播放 | AVPlayer；MPVKit-GPL 支持 MKV、ISO、M2TS、字幕和续播 |
-| 代理 | `proxy://` 解析、Android Bridge Range/HEAD 转发、iOS 回环代理 |
-| 下载 | 分块下载、暂停、重试、断点续传、持久化和离线播放 |
-| 弹幕 | XML、JSON、纯文本解析，同步叠加，透明度、大小和速度设置 |
-| 设置 | 当前连接下拉、播放引擎、海报尺寸、弹幕设置、缓存占用、版本号、扩展连接、签名到期时间 |
-| 媒体库 | 收藏、最近观看 |
-| 局域网 | Android Bridge TLS 二维码配对、DLNA |
-| 分发 | SideStore source、未签名 IPA、COS 和自定义域名发布 |
+| 模块      | 当前能力                                                                             |
+| --------- | ------------------------------------------------------------------------------------ |
+| 点播      | CatVod/TVBox 配置、分类、筛选、详情、剧集、搜索、换源                                |
+| 源管理    | 设置页只管理配置地址；点播页选择配置内部的点播源                                     |
+| 直播/电视 | JSON、M3U、TXT 直播源，频道分组、频道头、XMLTV EPG                                   |
+| 播放      | AVPlayer；MPVKit-GPL 支持 MKV、ISO、M2TS、字幕和续播                                 |
+| 代理      | `proxy://` 解析、Android Bridge Range/HEAD 转发、iOS 回环代理                        |
+| 下载      | 分块下载、暂停、重试、断点续传、持久化和离线播放                                     |
+| 弹幕      | XML、JSON、纯文本解析，同步叠加，透明度、大小和速度设置                              |
+| 设置      | 当前连接下拉、播放引擎、海报尺寸、弹幕设置、缓存占用、版本号、扩展连接、签名到期时间 |
+| 媒体库    | 收藏、最近观看                                                                       |
+| 局域网    | Android Bridge TLS 二维码配对、DLNA                                                  |
+| 分发      | SideStore source、未签名 IPA、COS 和自定义域名发布                                   |
 
 ## 目录结构
 
@@ -76,10 +75,10 @@ artifacts/                         IPA、发布清单，不提交
 
 项目中存在两种不同的“源”，不要混淆：
 
-| 名称 | 作用 | 添加位置 |
-| --- | --- | --- |
-| SideStore Source | 安装和更新拾萤 IPA | SideStore → Sources |
-| Firepick 点播源 | 提供影视分类、详情、剧集和搜索 | 拾萤 → 设置 → 点播源 |
+| 名称             | 作用                           | 添加位置             |
+| ---------------- | ------------------------------ | -------------------- |
+| SideStore Source | 安装和更新拾萤 IPA             | SideStore → Sources  |
+| Firepick 点播源  | 提供影视分类、详情、剧集和搜索 | 拾萤 → 设置 → 点播源 |
 
 SideStore Source 是应用更新清单；Firepick 点播源是 CatVod/TVBox 配置。
 
@@ -91,17 +90,17 @@ SideStore Source 是应用更新清单；Firepick 点播源是 CatVod/TVBox 配�
 
 本仓库当前测试环境：
 
-| 项目 | 版本 |
-| --- | --- |
-| macOS | 15.8，Apple Silicon |
-| Xcode | 26.0.1，Build 17A400 |
-| Swift | 6.2 |
-| iOS Deployment Target | 18.0 |
-| Java | OpenJDK 21.0.7 |
-| Android compileSdk | 37 |
-| Android minSdk | 24 |
-| Android NDK | 28.2.13676358 |
-| MPVKit | 1.1.0-n9.0.2 |
+| 项目                  | 版本                 |
+| --------------------- | -------------------- |
+| macOS                 | 15.8，Apple Silicon  |
+| Xcode                 | 26.0.1，Build 17A400 |
+| Swift                 | 6.2                  |
+| iOS Deployment Target | 18.0                 |
+| Java                  | OpenJDK 21.0.7       |
+| Android compileSdk    | 37                   |
+| Android minSdk        | 24                   |
+| Android NDK           | 28.2.13676358        |
+| MPVKit                | 1.1.0-n9.0.2         |
 
 建议也使用 Apple Silicon Mac。Intel Mac 未纳入当前验证范围。
 
@@ -375,68 +374,10 @@ FIREPICK_CURL_DOH_URL="https://223.5.5.5/dns-query" \
 
 版本规则：
 
-- 后续补丁版本依次使用 `0.1.10`、`0.1.11`、`0.1.12`、`0.1.13`、
-  `0.1.14`、`0.1.15`、`0.1.16`、`0.1.17`，不跳到 `0.2.0`。
+- 后续补丁版本依次使用 `0.1.10`、`0.1.11`、`0.1.12`、`0.1.13`、 `0.1.14`、`0.1.15`、`0.1.16`、`0.1.17`、`0.1.18`，不跳到 `0.2.0`。
 - 每次发布增加 `MARKETING_VERSION`。
 - 同一版本重新构建时仍应增加 `CURRENT_PROJECT_VERSION`。
 - 不复用旧版本号发布不同代码。
 - 不改变 `com.firepick.app`。
 
 ---
-
-# 二、用户配置手册
-
-SideStore 安装、更新源、点播源、电视、Android Bridge、签名到期时间和
-常见问题请参阅：
-
-[拾萤用户配置手册](docs/user-configuration.md)
-
----
-
-# 三、测试与验收
-
-完整本机验证：
-
-```bash
-make verify
-```
-
-该命令会执行：
-
-- Swift 包测试
-- iOS 设备目标 Swift 编译
-- iOS Simulator 构建
-- Android Bridge Debug APK 构建
-
-只运行测试：
-
-```bash
-swift test --package-path Packages/FirepickKit
-```
-
-真机还需验证：
-
-- SideStore 七天续签
-- 本地网络权限
-- MPV 硬解
-- 画中画
-- 后台音频
-- DLNA 局域网互操作
-- Android Bridge 实际播放链路
-
----
-
-# 四、上游与许可
-
-本项目以 `GPL-3.0-only` 发布，详见 `LICENSE` 和 `NOTICE.md`。
-
-固定版本上游记录在 `vendor/upstream.lock`。不要直接修改
-`third_party/` 中的代码；需要变更时，新增或调整 `vendor/patches/` 并在
-独立提交中说明原因。
-
-参考项目：
-
-- [FongMi/TV](https://github.com/FongMi/TV)
-- [FongMi/Release](https://github.com/FongMi/Release)
-- [FongMi/CatVodSpider](https://github.com/FongMi/CatVodSpider)
-- [youhunwl/TVAPP](https://github.com/youhunwl/TVAPP)

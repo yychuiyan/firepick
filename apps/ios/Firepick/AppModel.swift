@@ -1353,24 +1353,37 @@ final class AppModel {
     await selectPendingInitialSite()
   }
 
+  /// Ensures the VOD home has a selected site and loaded content after a
+  /// configuration address is applied — including when the user is still on Settings.
+  func ensureHomeContentLoaded() async {
+    guard selectedSite == nil else { return }
+    await selectPendingInitialSite()
+  }
+
+  func reloadHome() async {
+    if let site = selectedSite {
+      await selectSite(site)
+    } else {
+      await selectPendingInitialSite()
+    }
+  }
+
   private func selectPendingInitialSite() async {
-    guard selectedTab == .vod,
-      selectedSite == nil,
-      !configuration.sites.isEmpty
-    else {
+    guard selectedSite == nil, !configuration.sites.isEmpty else {
       return
     }
     let persisted = pendingInitialSiteKey.flatMap { key in
       configuration.sites.first(where: { $0.key == key })
     }
     pendingInitialSiteKey = nil
-    let fallback =
+    let httpFallback =
       bridgeHealth == nil
       ? configuration.sites.first(where: {
         !$0.isHidden && router.route($0).runtime == .http
       })
       : nil
-    if let site = persisted ?? fallback ?? configuration.sites.first {
+    let visibleFallback = configuration.sites.first(where: { !$0.isHidden })
+    if let site = persisted ?? httpFallback ?? visibleFallback ?? configuration.sites.first {
       await selectSite(site)
     }
   }
