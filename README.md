@@ -85,7 +85,7 @@ SideStore Source 是应用更新清单；Firepick 点播源是 CatVod/TVBox 配�
 拾萤自建聚合配置可直接在 `设置 → 当前线路` 中添加：
 
 ```text
-https://dl.yychuiyan.com/firepick/ios-sources.json
+https://dl.yychuiyan.com/firepick/ios-sources.json?v=7
 ```
 
 它当前是单站「拾萤精选」聚合约二十路 AppleCMS 采集接口，外加三组电视源，

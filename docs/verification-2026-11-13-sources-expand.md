@@ -4,7 +4,8 @@
 
 - `firepick-cms.js` providers: 5 → **22** (LunaTV jin18 candidates + local probe)
 - Search: batch size 8, 8s timeout, title dedupe, light adult-keyword filter
-- Published COS `firepick/sources/firepick-cms.js` and `firepick/ios-sources.json` (`?v=7`)
+- Published COS `firepick/sources/firepick-cms.js` (`?v=7`) and the versioned
+  configuration URL `firepick/ios-sources.json?v=7`
 - Bundle resource copy SHA matches `sources/firepick-cms.js`
 
 ## Probe
@@ -15,7 +16,7 @@ node scripts/probe-cms-providers.mjs
 
 swift run --package-path Packages/FirepickKit firepick-source-probe \
   --invoke --search '庆余年' --site firepick_cms \
-  'https://dl.yychuiyan.com/firepick/ios-sources.json'
+  'https://dl.yychuiyan.com/firepick/ios-sources.json?v=7'
 ```
 
 Result for `庆余年`: home `classes=5 items=58`, search `items=36` (deduped), direct HLS playback OK.

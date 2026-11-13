@@ -89,7 +89,7 @@ with authorized endpoints before uploading a real `ios-sources.json`.
 The current curated configuration is:
 
 ```text
-https://dl.yychuiyan.com/firepick/ios-sources.json
+https://dl.yychuiyan.com/firepick/ios-sources.json?v=7
 ```
 
 Its JavaScript aggregator is:
@@ -103,7 +103,7 @@ Full acceptance probe:
 ```bash
 swift run --package-path Packages/FirepickKit firepick-source-probe \
   --invoke --live --search '庆余年' --site firepick_cms \
-  'https://dl.yychuiyan.com/firepick/ios-sources.json'
+  'https://dl.yychuiyan.com/firepick/ios-sources.json?v=7'
 ```
 
 Expected current shape: one on-device JS site (`拾萤精选`) aggregating ~20+

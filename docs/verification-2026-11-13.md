@@ -13,7 +13,7 @@
 The published configuration is:
 
 ```text
-https://dl.yychuiyan.com/firepick/ios-sources.json
+https://dl.yychuiyan.com/firepick/ios-sources.json?v=7
 ```
 
 The source probe reports:
