@@ -5,7 +5,7 @@
       "key": "firepick_cms",
       "name": "拾萤精选",
       "type": 3,
-      "api": "https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=5",
+      "api": "https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=6",
       "searchable": 1,
       "quickSearch": 1,
       "changeable": 0,

@@ -545,7 +545,18 @@ final class AppModel {
 
   func setPlaybackPreference(_ value: PlaybackPreference) {
     playbackPreference = value
+    if value == .mpv, videoOutputPreference == .system {
+      videoOutputPreference = .automatic
+      persistence?.saveVideoOutputPreference(videoOutputPreference.rawValue)
+    }
     persistence?.savePlaybackPreference(value.rawValue)
+  }
+
+  var availableVideoOutputPreferences: [VideoOutputPreference] {
+    if playbackPreference == .mpv {
+      return VideoOutputPreference.allCases.filter { $0 != .system }
+    }
+    return VideoOutputPreference.allCases
   }
 
   func setPosterSizePreference(_ value: PosterSizePreference) {
@@ -678,7 +689,8 @@ final class AppModel {
     probingConnectionURLs.insert(connection.url)
     defer { probingConnectionURLs.remove(connection.url) }
     let started = Date()
-    var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 8)
+    var request = URLRequest(
+      url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 8)
     request.httpMethod = "GET"
     do {
       let (_, response) = try await URLSession.shared.data(for: request)
@@ -1324,8 +1336,9 @@ final class AppModel {
 
   /// Load folder contents without replacing the VOD home grid (push pages use this).
   func loadFolder(_ item: MediaItem) async -> MediaResult? {
-    guard let site = configuration.sites.first(where: { $0.key == item.sourceKey })
-      ?? selectedSite
+    guard
+      let site = configuration.sites.first(where: { $0.key == item.sourceKey })
+        ?? selectedSite
     else { return nil }
     do {
       let provider = try await provider(for: site)

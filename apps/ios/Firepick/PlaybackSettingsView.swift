@@ -25,13 +25,17 @@ struct PlaybackSettingsView: View {
             set: { model.setVideoOutputPreference($0) }
           )
         ) {
-          ForEach(AppModel.VideoOutputPreference.allCases) { value in
+          ForEach(model.availableVideoOutputPreferences, id: \.self) { value in
             Text(value.title).tag(value)
           }
         }
         .disabled(model.playbackPreference == .avPlayer)
         if model.playbackPreference == .avPlayer {
           Text("AVPlayer 使用系统图层，输出选项对 MPV 更有效。")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        } else {
+          Text("MPVKit 使用 Metal 输出；“系统层”仅用于 AVPlayer。")
             .font(.footnote)
             .foregroundStyle(.secondary)
         }

@@ -684,7 +684,7 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
       let runLoop = RunLoop.current
       let cfRunLoop = runLoop.getCFRunLoop()
       let box = RequestBox()
-      let settle: (Data?, URLResponse?, Error?) -> Void = { data, response, error in
+      let settlement = RequestSettlement { data, response, error in
         CFRunLoopPerformBlock(cfRunLoop, CFRunLoopMode.commonModes.rawValue) {
           guard !box.settled else { return }
           box.settled = true
@@ -745,12 +745,12 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
       }
 
       transportSession.dataTask(with: request) { data, response, error in
-        settle(data, response, error)
+        settlement.settle(data, response, error)
       }.resume()
 
       let timeoutSeconds = max(1.0, timeoutMs / 1000) + 5
       DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeoutSeconds) {
-        settle(nil, nil, RequestError.timeout)
+        settlement.settle(nil, nil, RequestError.timeout)
       }
 
       return promise
@@ -829,6 +829,18 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
       var data: Data?
       var response: URLResponse?
       var error: Error?
+    }
+
+    private final class RequestSettlement: @unchecked Sendable {
+      private let action: (Data?, URLResponse?, Error?) -> Void
+
+      init(action: @escaping (Data?, URLResponse?, Error?) -> Void) {
+        self.action = action
+      }
+
+      func settle(_ data: Data?, _ response: URLResponse?, _ error: Error?) {
+        action(data, response, error)
+      }
     }
 
     private enum RequestError: LocalizedError {

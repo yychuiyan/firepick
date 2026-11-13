@@ -134,11 +134,14 @@ struct PlayerView: View {
   }
 
   private var currentTime: Double {
-    scrubPreview ?? playbackEngine.currentTime
+    PlaybackTimeline.position(
+      scrubPreview ?? playbackEngine.currentTime,
+      duration: playbackEngine.duration
+    )
   }
 
   private var duration: Double {
-    max(playbackEngine.duration, 0)
+    PlaybackTimeline.duration(playbackEngine.duration)
   }
 
   var body: some View {
@@ -293,7 +296,7 @@ struct PlayerView: View {
     ) { note in
       handleInterruption(note)
     }
-      .onDisappear {
+    .onDisappear {
       hideTask?.cancel()
       UIApplication.shared.isIdleTimerDisabled = false
       if !incognitoThisSession, let sourceKey {
@@ -456,7 +459,9 @@ struct PlayerView: View {
         .padding(.bottom, 10)
 
       HStack(spacing: 16) {
-        Button { togglePlayPause() } label: {
+        Button {
+          togglePlayPause()
+        } label: {
           Image(
             systemName: playbackEngine.state == .playing ? "pause.fill" : "play.fill"
           )
@@ -492,24 +497,26 @@ struct PlayerView: View {
 
   private var menuButton: some View {
     Menu {
-            Button {
-              model.download(
-                request: activeRequest ?? request,
-                item: item,
-                episode: activeEpisode ?? episode
-              )
-              showToast("已加入下载")
-            } label: {
-              Label("下载到本机", systemImage: "arrow.down.circle")
-            }
-            Button {
-              playbackEngine.pause()
-              dismiss()
-              model.selectedTab = .settings
-            } label: {
-              Label("查看下载", systemImage: "arrow.down.to.line")
-            }
-      Button { showingCast = true } label: {
+      Button {
+        model.download(
+          request: activeRequest ?? request,
+          item: item,
+          episode: activeEpisode ?? episode
+        )
+        showToast("已加入下载")
+      } label: {
+        Label("下载到本机", systemImage: "arrow.down.circle")
+      }
+      Button {
+        playbackEngine.pause()
+        dismiss()
+        model.selectedTab = .settings
+      } label: {
+        Label("查看下载", systemImage: "arrow.down.to.line")
+      }
+      Button {
+        showingCast = true
+      } label: {
         Label("投屏到 DLNA", systemImage: "airplayvideo")
       }
 
@@ -669,9 +676,14 @@ struct PlayerView: View {
       Slider(
         value: Binding(
           get: { currentTime },
-          set: { scrubPreview = $0 }
+          set: {
+            scrubPreview = PlaybackTimeline.position(
+              $0,
+              duration: duration
+            )
+          }
         ),
-        in: 0...max(duration, 0.1),
+        in: PlaybackTimeline.progressRange(duration: duration),
         onEditingChanged: { editing in
           isScrubbing = editing
           if !editing, let scrubPreview {
@@ -684,6 +696,7 @@ struct PlayerView: View {
         }
       )
       .tint(.orange)
+      .disabled(duration <= 0)
     }
   }
 
@@ -715,6 +728,7 @@ struct PlayerView: View {
         }
         .buttonStyle(.borderedProminent)
         .tint(.orange)
+        .disabled(duration <= 0)
         if !alternateURLs.isEmpty {
           Button("换线路") {
             Task { await retryNextAlternate() }
@@ -817,6 +831,7 @@ struct PlayerView: View {
       var candidate = request
       candidate.url = url
       do {
+        playbackEngine.applyOptions(playbackEngineOptions)
         try await playbackEngine.load(candidate)
         activeRequest = candidate
         failure = nil
@@ -828,6 +843,26 @@ struct PlayerView: View {
       }
     }
     failure = lastError?.localizedDescription ?? "媒体不可播放"
+  }
+
+  private var playbackEngineOptions: PlaybackEngineOptions {
+    let videoOutput: PlaybackVideoOutput
+    switch model.videoOutputPreference {
+    case .automatic: videoOutput = .automatic
+    case .metal: videoOutput = .metal
+    case .system: videoOutput = .system
+    }
+    let decode: PlaybackDecode
+    switch model.decodePreference {
+    case .automatic: decode = .automatic
+    case .hardware: decode = .hardware
+    case .software: decode = .software
+    }
+    return PlaybackEngineOptions(
+      videoOutput: videoOutput,
+      decode: decode,
+      bufferSeconds: model.bufferPreference.seconds
+    )
   }
 
   private func retryNextAlternate() async {
@@ -847,6 +882,7 @@ struct PlayerView: View {
         var candidate = request
         candidate.url = url
         do {
+          playbackEngine.applyOptions(playbackEngineOptions)
           try await playbackEngine.load(candidate)
           activeRequest = candidate
           failure = nil
@@ -868,6 +904,7 @@ struct PlayerView: View {
     var candidate = activeRequest ?? request
     candidate.startPosition = position
     do {
+      playbackEngine.applyOptions(playbackEngineOptions)
       try await playbackEngine.load(candidate)
       activeRequest = candidate
       failure = nil

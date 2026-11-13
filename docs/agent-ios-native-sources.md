@@ -95,7 +95,7 @@ https://dl.yychuiyan.com/firepick/ios-sources.json
 Its JavaScript aggregator is:
 
 ```text
-https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=4
+https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=6
 ```
 
 Full acceptance probe:
