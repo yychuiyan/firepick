@@ -56,6 +56,8 @@ public struct MediaItem: Codable, Equatable, Identifiable, Sendable {
     public var land: Int?
     public var circle: Int?
     public var ratio: Double?
+    public var doubanScore: Double?
+    public var score: Double?
     /// Locally attached origin. It is intentionally excluded from the custom
     /// CatVod wire encoding below.
     public var sourceKey: String? = nil
@@ -84,6 +86,8 @@ public struct MediaItem: Codable, Equatable, Identifiable, Sendable {
         land: Int? = nil,
         circle: Int? = nil,
         ratio: Double? = nil,
+        doubanScore: Double? = nil,
+        score: Double? = nil,
         sourceKey: String? = nil
     ) {
         self.vodId = vodId
@@ -105,6 +109,8 @@ public struct MediaItem: Codable, Equatable, Identifiable, Sendable {
         self.land = land
         self.circle = circle
         self.ratio = ratio
+        self.doubanScore = doubanScore
+        self.score = score
         self.sourceKey = sourceKey
     }
 
@@ -128,6 +134,8 @@ public struct MediaItem: Codable, Equatable, Identifiable, Sendable {
         case land
         case circle
         case ratio
+        case doubanScore = "vod_douban_score"
+        case score = "vod_score"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -151,6 +159,8 @@ public struct MediaItem: Codable, Equatable, Identifiable, Sendable {
         land = try container.flexibleIntIfPresent(forKey: .land)
         circle = try container.flexibleIntIfPresent(forKey: .circle)
         ratio = try container.flexibleDoubleIfPresent(forKey: .ratio)
+        doubanScore = try container.flexibleDoubleIfPresent(forKey: .doubanScore)
+        score = try container.flexibleDoubleIfPresent(forKey: .score)
     }
 }
 

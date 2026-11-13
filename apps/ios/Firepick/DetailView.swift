@@ -10,11 +10,13 @@ struct DetailView: View {
   @State private var playbackFlag: String?
   @State private var resolvingEpisodeID: Episode.ID?
   @State private var playbackError: String?
+  @State private var showingSourcePicker = false
   @State private var selectedFlag: String?
   @State private var reverseEpisodes = false
   @State private var expandSynopsis = false
-  @State private var downloadToast: String?
+  @State private var showingEpisodeDrawer = false
   @State private var didScrollToHistory = false
+  @State private var isPlayerExpanded = false
 
   private var detail: MediaItem {
     if let loaded = model.detailResult?.list.first, loaded.vodId == item.vodId {
@@ -55,12 +57,134 @@ struct DetailView: View {
   }
 
   var body: some View {
+    VStack(spacing: 0) {
+      inlinePlayer
+      if !isPlayerExpanded {
+        detailScroll
+      }
+    }
+    .background(isPlayerExpanded ? Color.black : Color.clear)
+    .navigationTitle(detail.name)
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar(isPlayerExpanded ? .hidden : .automatic, for: .navigationBar)
+    .toolbar(isPlayerExpanded ? .hidden : .automatic, for: .tabBar)
+    .alert(
+      "无法开始播放",
+      isPresented: Binding(
+        get: { playbackError != nil },
+        set: { if !$0 { playbackError = nil } }
+      )
+    ) {
+      Button("知道了", role: .cancel) {
+        playbackError = nil
+      }
+      if lines.count > 1 {
+        Button("换播放线路") {
+          playbackError = nil
+          Task { await playNextLine() }
+        }
+      }
+      if model.onDeviceSites.count > 1 {
+        Button("换点播源") {
+          playbackError = nil
+          showingSourcePicker = true
+        }
+      }
+    } message: {
+      Text(playbackError ?? "")
+    }
+    .sheet(isPresented: $showingSourcePicker) {
+      SourcePickerView()
+    }
+    .onAppear {
+      model.resumeBrowseItem = nil
+    }
+    .onDisappear {
+      if playback != nil {
+        model.resumeBrowseItem = detail
+      }
+    }
+    .task(id: item.vodId) {
+      if model.detailResult?.list.first?.vodId != item.vodId {
+        model.detailResult = nil
+      }
+      selectedFlag = model.preferredPlaybackFlag(
+        sourceKey: item.sourceKey ?? model.selectedSite?.key,
+        vodId: item.vodId
+      )
+      await model.loadDetail(item)
+      if selectedFlag == nil || !lines.contains(where: { $0.name == selectedFlag }) {
+        selectedFlag = lines.first?.name
+      }
+      if playback == nil, !lines.isEmpty {
+        await playPrimary()
+      }
+    }
+    .onChange(of: selectedFlag) { oldFlag, flag in
+      guard let flag else { return }
+      model.setPreferredPlaybackFlag(
+        flag,
+        sourceKey: detail.sourceKey ?? model.selectedSite?.key,
+        vodId: detail.vodId
+      )
+      guard let oldFlag, oldFlag != flag, playback != nil else { return }
+      let episodes = lines.first(where: { $0.name == flag })?.episodes ?? []
+      let currentName = playbackEpisode?.name
+      let next = episodes.first(where: { $0.name == currentName }) ?? episodes.first
+      guard let next else { return }
+      Task { await play(episode: next, flag: flag) }
+    }
+  }
+
+  @ViewBuilder
+  private var inlinePlayer: some View {
+    if let playback {
+      PlayerView(
+        request: playback,
+        item: detail,
+        episode: playbackEpisode,
+        flag: playbackFlag,
+        lineEpisodes: lines.first(where: { $0.name == playbackFlag })?.episodes
+          ?? activeLine?.episodes
+          ?? [],
+        playbackLines: lines,
+        chrome: isPlayerExpanded ? .immersive : .inline,
+        onExpand: { isPlayerExpanded = true },
+        onCollapse: { isPlayerExpanded = false }
+      )
+      .id(playbackEpisode?.value ?? playback.url.absoluteString)
+      .aspectRatio(isPlayerExpanded ? nil : 16.0 / 9.0, contentMode: .fit)
+      .frame(maxWidth: .infinity, maxHeight: isPlayerExpanded ? .infinity : nil)
+      .clipped()
+    } else {
+      ZStack {
+        Color.black
+        CachedRemoteImage(url: detail.pic.flatMap(URL.init(string:))) {
+          Color.black
+        }
+        .scaledToFill()
+        .opacity(0.45)
+        if resolvingEpisodeID != nil || isDetailLoading {
+          ProgressView()
+            .tint(.white)
+        } else if lines.isEmpty && !isDetailLoading {
+          Text("没有可播放线路")
+            .font(.subheadline)
+            .foregroundStyle(.white)
+        }
+      }
+      .aspectRatio(16.0 / 9.0, contentMode: .fit)
+      .frame(maxWidth: .infinity)
+      .clipped()
+    }
+  }
+
+  private var detailScroll: some View {
     ScrollViewReader { proxy in
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
           metadataSection
           synopsisSection
-          playCTA
           if isDetailLoading {
             HStack(spacing: 8) {
               ProgressView()
@@ -85,7 +209,7 @@ struct DetailView: View {
             }
           } else {
             linePicker
-            episodeGrid
+            episodeAccess
           }
         }
         .padding(.vertical)
@@ -98,77 +222,13 @@ struct DetailView: View {
         scrollToHistoryEpisode(using: proxy)
       }
     }
-    .navigationTitle(detail.name)
-    .navigationBarTitleDisplayMode(.inline)
-    .overlay(alignment: .bottom) {
-      if let downloadToast {
-        Text(downloadToast)
-          .font(.subheadline.weight(.medium))
-          .padding(.horizontal, 14)
-          .padding(.vertical, 10)
-          .background(.ultraThinMaterial, in: Capsule())
-          .padding(.bottom, 24)
-          .transition(.move(edge: .bottom).combined(with: .opacity))
-      }
-    }
-    .alert(
-      "无法开始播放",
-      isPresented: Binding(
-        get: { playbackError != nil },
-        set: { if !$0 { playbackError = nil } }
-      )
-    ) {
-      Button("知道了", role: .cancel) {
-        playbackError = nil
-      }
-    } message: {
-      Text(playbackError ?? "")
-    }
-    .task(id: item.vodId) {
-      if model.detailResult?.list.first?.vodId != item.vodId {
-        model.detailResult = nil
-      }
-      selectedFlag = model.preferredPlaybackFlag(
-        sourceKey: item.sourceKey ?? model.selectedSite?.key,
-        vodId: item.vodId
-      )
-      await model.loadDetail(item)
-      if selectedFlag == nil || !lines.contains(where: { $0.name == selectedFlag }) {
-        selectedFlag = lines.first?.name
-      }
-    }
-    .onChange(of: selectedFlag) { _, flag in
-      guard let flag else { return }
-      model.setPreferredPlaybackFlag(
-        flag,
-        sourceKey: detail.sourceKey ?? model.selectedSite?.key,
-        vodId: detail.vodId
-      )
-    }
-    .fullScreenCover(item: $playback) { request in
-      PlayerView(
-        request: request,
-        item: detail,
-        episode: playbackEpisode,
-        flag: playbackFlag,
-        lineEpisodes: lines.first(where: { $0.name == playbackFlag })?.episodes
-          ?? activeLine?.episodes
-          ?? [],
-        playbackLines: lines
-      )
-    }
   }
 
   private var metadataSection: some View {
     HStack(alignment: .top, spacing: 16) {
       CachedRemoteImage(url: detail.pic.flatMap(URL.init(string:))) {
-        ZStack {
-          RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(Color.orange.opacity(0.12))
-          Text(String(detail.name.prefix(1)))
-            .font(.title.weight(.bold))
-            .foregroundStyle(.orange.opacity(0.85))
-        }
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .fill(Color.secondary.opacity(0.12))
       }
       .scaledToFill()
       .frame(width: 120, height: 168)
@@ -239,33 +299,6 @@ struct DetailView: View {
     }
   }
 
-  private var playCTA: some View {
-    Button {
-      Task { await playPrimary() }
-    } label: {
-      HStack {
-        if resolvingEpisodeID != nil && playback == nil {
-          ProgressView()
-            .tint(.white)
-        }
-        Text(ctaTitle)
-          .frame(maxWidth: .infinity)
-      }
-      .padding(.vertical, 4)
-    }
-    .buttonStyle(.borderedProminent)
-    .tint(.orange)
-    .disabled(activeLine?.episodes.isEmpty != false || resolvingEpisodeID != nil)
-    .padding(.horizontal)
-  }
-
-  private var ctaTitle: String {
-    if let history = historyEntry {
-      return "继续 · \(history.episodeName) · \(format(history.position))"
-    }
-    return "立即播放"
-  }
-
   @ViewBuilder
   private var linePicker: some View {
     if lines.count > 1 {
@@ -282,55 +315,128 @@ struct DetailView: View {
         .padding(.horizontal)
       }
       .scrollIndicators(.hidden)
-    } else if let line = lines.first {
-      Text(line.name)
-        .font(.headline)
-        .padding(.horizontal)
     }
   }
 
-  private var episodeGrid: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack {
-        Text("选集")
-          .font(.headline)
-        Spacer()
-        Button(reverseEpisodes ? "正序" : "倒序") {
-          reverseEpisodes.toggle()
-        }
-        .font(.subheadline.weight(.semibold))
-      }
-      .padding(.horizontal)
+  private var isSingleEpisode: Bool {
+    (activeLine?.episodes.count ?? 0) <= 1
+  }
 
-      LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 8)], spacing: 8) {
-        ForEach(displayedEpisodes) { episode in
-          let isHistory = historyEntry?.episodeId == episode.value
-          Button {
-            Task { await play(episode: episode) }
-          } label: {
-            if resolvingEpisodeID == episode.id {
-              ProgressView()
-                .frame(maxWidth: .infinity)
-            } else {
-              Text(episode.name)
+  /// Variety-style lists use titled cards; numbered series stay compact.
+  private var usesEpisodeCards: Bool {
+    let names = activeLine?.episodes.map(\.name) ?? []
+    guard names.count > 1 else { return false }
+    let numericCount = names.filter(Self.isNumericEpisodeName).count
+    return numericCount * 2 < names.count
+  }
+
+  private static func isNumericEpisodeName(_ name: String) -> Bool {
+    let trimmed = name
+      .replacingOccurrences(of: "第", with: "")
+      .replacingOccurrences(of: "集", with: "")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return !trimmed.isEmpty && trimmed.allSatisfy(\.isNumber)
+  }
+
+  private var currentEpisodeLabel: String {
+    if let history = historyEntry,
+      displayedEpisodes.contains(where: { $0.value == history.episodeId })
+    {
+      return history.episodeName
+    }
+    return displayedEpisodes.first?.name ?? "选集"
+  }
+
+  @ViewBuilder
+  private var episodeAccess: some View {
+    if !isSingleEpisode {
+      Button {
+        showingEpisodeDrawer = true
+      } label: {
+        HStack(spacing: 8) {
+          Text("选集")
+            .font(.headline)
+            .foregroundStyle(.primary)
+          Text(currentEpisodeLabel)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+          Spacer()
+          Text("展开")
+            .font(.subheadline.weight(.semibold))
+          Image(systemName: "chevron.up")
+            .font(.caption.weight(.semibold))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+      }
+      .buttonStyle(.plain)
+      .padding(.horizontal)
+      .sheet(isPresented: $showingEpisodeDrawer) {
+        episodeDrawer
+      }
+    }
+  }
+
+  private var episodeDrawer: some View {
+    NavigationStack {
+      ScrollViewReader { proxy in
+        ScrollView {
+          LazyVGrid(
+            columns: [
+              GridItem(
+                .adaptive(minimum: usesEpisodeCards ? 148 : 88),
+                spacing: 8
+              )
+            ],
+            spacing: 8
+          ) {
+            ForEach(displayedEpisodes) { episode in
+              episodeCell(episode)
             }
           }
-          .buttonStyle(.bordered)
-          .tint(isHistory ? .orange : .secondary)
-          .lineLimit(1)
-          .disabled(resolvingEpisodeID != nil)
-          .id(episode.value)
-          .contextMenu {
-            Button {
-              Task { await download(episode: episode) }
-            } label: {
-              Label("下载到本机", systemImage: "arrow.down.circle")
-            }
+          .padding()
+        }
+        .onAppear { scrollToHistoryEpisode(using: proxy) }
+      }
+      .navigationTitle("选集")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("关闭") { showingEpisodeDrawer = false }
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          Button(reverseEpisodes ? "正序" : "倒序") {
+            reverseEpisodes.toggle()
           }
         }
       }
-      .padding(.horizontal)
     }
+    .presentationDetents([.medium, .large])
+    .presentationDragIndicator(.visible)
+  }
+
+  private func episodeCell(_ episode: Episode) -> some View {
+    let isHistory = historyEntry?.episodeId == episode.value
+    return Button {
+      showingEpisodeDrawer = false
+      Task { await play(episode: episode) }
+    } label: {
+      if resolvingEpisodeID == episode.id {
+        ProgressView()
+          .frame(maxWidth: .infinity, minHeight: 36)
+      } else {
+        Text(episode.name)
+          .lineLimit(usesEpisodeCards ? 3 : 1)
+          .multilineTextAlignment(.center)
+          .frame(maxWidth: .infinity, minHeight: usesEpisodeCards ? 64 : 36)
+      }
+    }
+    .buttonStyle(.bordered)
+    .tint(isHistory ? .orange : .secondary)
+    .disabled(resolvingEpisodeID != nil)
+    .id(episode.value)
   }
 
   private func scrollToHistoryEpisode(using proxy: ScrollViewProxy) {
@@ -344,6 +450,20 @@ struct DetailView: View {
         proxy.scrollTo(historyID, anchor: .center)
       }
     }
+  }
+
+  private func playNextLine() async {
+    guard lines.count > 1 else { return }
+    let names = lines.map(\.name)
+    let current = selectedFlag ?? names.first ?? ""
+    let index = names.firstIndex(of: current) ?? 0
+    let nextName = names[(index + 1) % names.count]
+    let episodes = lines.first(where: { $0.name == nextName })?.episodes ?? []
+    let next = episodes.first(where: { $0.name == playbackEpisode?.name }) ?? episodes.first
+    let hadPlayback = playback != nil
+    selectedFlag = nextName
+    guard !hadPlayback, let next else { return }
+    await play(episode: next, flag: nextName)
   }
 
   private func playPrimary() async {
@@ -379,27 +499,6 @@ struct DetailView: View {
     }
   }
 
-  private func download(episode: Episode) async {
-    let lineName = activeLine?.name ?? lines.first?.name ?? ""
-    resolvingEpisodeID = episode.id
-    defer { resolvingEpisodeID = nil }
-    do {
-      let request = try await model.resolvePlayback(
-        item: detail,
-        episode: episode,
-        flag: lineName
-      )
-      model.download(request: request, item: detail, episode: episode)
-      withAnimation {
-        downloadToast = "已加入下载"
-      }
-      try? await Task.sleep(for: .seconds(1.6))
-      withAnimation { downloadToast = nil }
-    } catch {
-      playbackError = error.localizedDescription
-    }
-  }
-
   private func format(_ seconds: Double) -> String {
     guard seconds.isFinite else { return "00:00" }
     let value = Int(seconds)
@@ -412,5 +511,8 @@ struct DetailView: View {
       .replacingOccurrences(of: "&amp;", with: "&")
       .replacingOccurrences(of: "&lt;", with: "<")
       .replacingOccurrences(of: "&gt;", with: ">")
+      .replacingOccurrences(of: "&quot;", with: "\"")
+      .replacingOccurrences(of: "&#39;", with: "'")
+      .replacingOccurrences(of: "&apos;", with: "'")
   }
 }

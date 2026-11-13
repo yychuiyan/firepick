@@ -4,7 +4,6 @@ import SwiftUI
 struct SourceManagementView: View {
   @Environment(AppModel.self) private var model
   @State private var query = ""
-  @State private var showingURLImporter = false
   @State private var showingEditor = false
   @State private var editingSite: SiteConfiguration?
   @State private var sitePendingDeletion: SiteConfiguration?
@@ -21,22 +20,6 @@ struct SourceManagementView: View {
 
   var body: some View {
     List {
-      Section {
-        Button {
-          showingURLImporter = true
-        } label: {
-          Label("从配置地址添加", systemImage: "link.badge.plus")
-        }
-        Button {
-          editingSite = nil
-          showingEditor = true
-        } label: {
-          Label("手动添加点播源", systemImage: "plus.circle")
-        }
-      } footer: {
-        Text("加载完整配置会替换当前点播源列表；单源添加只增加一个站点。")
-      }
-
       if !model.configurationCandidates.isEmpty {
         Section("检测到的配置入口") {
           ForEach(model.configurationCandidates) { candidate in
@@ -72,7 +55,7 @@ struct SourceManagementView: View {
             systemImage: query.isEmpty ? "rectangle.stack.badge.plus" : "magnifyingglass",
             description: Text(
               query.isEmpty
-                ? "从配置地址添加，或手动新增一个点播源。"
+                ? "当前线路还没有点播源。"
                 : "换个名称、标识或地址关键词。"
             )
           )
@@ -144,9 +127,6 @@ struct SourceManagementView: View {
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.visible, for: .navigationBar)
     .searchable(text: $query, prompt: "搜索名称、标识或地址")
-    .sheet(isPresented: $showingURLImporter) {
-      ConfigurationURLView()
-    }
     .sheet(isPresented: $showingEditor) {
       SourceEditorView(site: editingSite)
     }

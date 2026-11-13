@@ -98,14 +98,6 @@ struct SearchView: View {
       .padding(.horizontal, 12)
       .padding(.vertical, 10)
       .background(.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
-
-      Button("查询", action: runSearch)
-        .buttonStyle(.borderedProminent)
-        .tint(.orange)
-        .disabled(
-          model.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || model.isLoading
-        )
     }
     .padding(.horizontal)
     .padding(.vertical, 10)
@@ -118,7 +110,7 @@ struct SearchView: View {
       ContentUnavailableView(
         "暂无历史查询",
         systemImage: "clock.arrow.circlepath",
-        description: Text("输入片名、剧名或演员后点击查询。")
+        description: Text("输入片名、剧名或演员后，在键盘上搜索。")
       )
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else {

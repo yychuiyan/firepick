@@ -9,7 +9,7 @@ struct BrowseView: View {
   @State private var showingSearch = false
   @State private var showingFavorites = false
   @State private var showingHistory = false
-  @State private var showingSourcePicker = false
+  @State private var showingFilterSheet = false
   @State private var resumingHistoryID: String?
 
   private var columns: [GridItem] {
@@ -34,9 +34,7 @@ struct BrowseView: View {
   }
 
   private var showContinueWatching: Bool {
-    guard !continueWatching.isEmpty else { return false }
-    guard let typeId = model.selectedCategory?.typeId else { return true }
-    return typeId.contains("recommend")
+    !continueWatching.isEmpty
   }
 
   private var continueWatching: [HistoryEntry] {
@@ -48,7 +46,56 @@ struct BrowseView: View {
       result.append(entry)
       if result.count >= 12 { break }
     }
-    return result
+    return result.filter(matchesSelectedCategory)
+  }
+
+  private var isRecommendShelf: Bool {
+    let typeId = model.selectedCategory?.typeId ?? ""
+    return typeId.isEmpty || typeId.contains("recommend")
+  }
+
+  private var visibleCategories: [FirepickCore.Category] {
+    (model.homeResult?.classes ?? []).filter { category in
+      let id = category.typeId
+      return !id.hasSuffix("kids") && !id.hasSuffix("doc")
+    }
+  }
+
+  private var highScoreItems: [MediaItem] {
+    guard isRecommendShelf, !hasActiveFilters else { return [] }
+    return Array(
+      (model.homeResult?.list ?? [])
+        .filter { ($0.doubanScore ?? 0) > 0 }
+        .sorted { ($0.doubanScore ?? 0) > ($1.doubanScore ?? 0) }
+        .prefix(12)
+    )
+  }
+
+  private var latestItems: [MediaItem] {
+    let all = model.homeResult?.list ?? []
+    guard !highScoreItems.isEmpty else { return all }
+    let featured = Set(highScoreItems.map(\.id))
+    let rest = all.filter { !featured.contains($0.id) }
+    return rest.isEmpty ? all : rest
+  }
+
+  private func matchesSelectedCategory(_ entry: HistoryEntry) -> Bool {
+    guard !isRecommendShelf else { return true }
+    let typeId = model.selectedCategory?.typeId ?? ""
+    let name = entry.item.typeName ?? ""
+    if typeId.hasSuffix("tv") {
+      return name.contains("剧") && !name.contains("动漫") && !name.contains("动画")
+    }
+    if typeId.hasSuffix("movie") {
+      return name.contains("片") || name.contains("电影")
+    }
+    if typeId.hasSuffix("variety") {
+      return name.contains("综艺")
+    }
+    if typeId.hasSuffix("anime") {
+      return name.contains("动漫") || name.contains("动画")
+    }
+    return false
   }
 
   var body: some View {
@@ -61,8 +108,12 @@ struct BrowseView: View {
           stickyCategoryChrome
         }
 
+        if hasActiveWarehouse, model.officialSourceNeedsUpdate {
+          officialUpdateBanner
+        }
+
         ScrollView {
-          LazyVStack(alignment: .leading, spacing: 20) {
+          LazyVStack(alignment: .leading, spacing: 28) {
             if hasActiveWarehouse, showContinueWatching {
               continueWatchingSection
             }
@@ -74,62 +125,7 @@ struct BrowseView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 48)
             } else if let items = model.homeResult?.list, !items.isEmpty {
-              ZStack {
-                LazyVGrid(columns: columns, spacing: 18) {
-                  ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    Button {
-                      Task {
-                        if item.isAction {
-                          await model.performAction(item)
-                        } else if item.isFolder {
-                          selectedFolder = item
-                        } else {
-                          model.detailResult = nil
-                          selectedItem = item
-                        }
-                      }
-                    } label: {
-                      MediaCardView(
-                        item: item,
-                        progress: model.historyProgress(for: item)
-                      )
-                    }
-                    .buttonStyle(.plain)
-                    .onAppear {
-                      let threshold = max(0, items.count - 6)
-                      if index >= threshold {
-                        Task { await model.loadMore() }
-                      }
-                    }
-                  }
-                }
-                .padding(.horizontal)
-                .opacity(model.isLoadingHome ? 0.45 : 1)
-
-                if model.isLoadingHome {
-                  ProgressView()
-                    .padding(.vertical, 48)
-                }
-              }
-              if model.isLoadingMore {
-                ProgressView()
-                  .frame(maxWidth: .infinity)
-                  .padding(.vertical, 8)
-              } else if model.loadMoreFailed {
-                Button("加载失败 · 重试") {
-                  Task { await model.loadMore() }
-                }
-                .buttonStyle(.bordered)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-              } else if model.currentPage < (model.homeResult?.pagecount ?? 0) {
-                Button("加载更多") {
-                  Task { await model.loadMore() }
-                }
-                .buttonStyle(.bordered)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-              }
+              catalogSection
             } else if model.isLoadingHome {
               ProgressView("正在读取数据源…")
                 .frame(maxWidth: .infinity)
@@ -150,8 +146,10 @@ struct BrowseView: View {
         await model.ensureHomeContentLoaded()
       }
       .toolbar(isRootVisible ? .hidden : .automatic, for: .navigationBar)
-      .sheet(isPresented: $showingSourcePicker) {
-        SourcePickerView()
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        if isRootVisible, let item = model.resumeBrowseItem {
+          resumeBar(item)
+        }
       }
       .navigationDestination(isPresented: $showingSearch) {
         SearchView()
@@ -189,75 +187,74 @@ struct BrowseView: View {
     "\(model.currentConnection?.id ?? "")|\(model.configuration.sites.count)|\(model.selectedSite?.key ?? "")"
   }
 
+  private var showsPinnedFilter: Bool {
+    guard !model.categoryFilters.isEmpty else { return false }
+    guard let typeId = model.selectedCategory?.typeId else { return false }
+    return !typeId.contains("recommend")
+  }
+
+  private var hasActiveFilters: Bool {
+    model.filterSelections.contains { _, value in
+      !value.isEmpty
+    }
+  }
+
   @ViewBuilder
   private var stickyCategoryChrome: some View {
     VStack(spacing: 10) {
-      if let categories = model.homeResult?.classes, !categories.isEmpty {
-        ScrollView(.horizontal) {
-          HStack {
-            ForEach(categories) { category in
-              Button(category.typeName) {
-                Task { await model.loadCategory(category) }
-              }
-              .buttonStyle(.bordered)
-              .tint(model.selectedCategory?.typeId == category.typeId ? .orange : .secondary)
-            }
-          }
-          .padding(.horizontal)
-        }
-        .scrollIndicators(.hidden)
-      }
-
-      if !model.categoryFilters.isEmpty {
-        ScrollView(.horizontal) {
-          HStack(spacing: 8) {
-            ForEach(model.categoryFilters, id: \.key) { filter in
-              Menu {
-                ForEach(
-                  Array(filter.value.enumerated()),
-                  id: \.offset
-                ) { entry in
-                  let value = entry.element
-                  Button {
-                    Task {
-                      await model.selectFilter(filter, value: value)
-                    }
-                  } label: {
-                    if model.filterSelections[filter.key] == value.value {
-                      Label(value.name, systemImage: "checkmark")
-                    } else {
-                      Text(value.name)
-                    }
-                  }
+      if !visibleCategories.isEmpty {
+        // Chips scroll; 筛选 pins on the trailing edge of the row (not floating).
+        HStack(spacing: 0) {
+          ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+              ForEach(visibleCategories) { category in
+                BrowseChip(
+                  title: category.typeName,
+                  selected: model.selectedCategory?.typeId == category.typeId
+                ) {
+                  Task { await model.loadCategory(category) }
                 }
-              } label: {
-                Label(
-                  "\(filter.name)：\(model.selectedFilterName(filter))",
-                  systemImage: "line.3.horizontal.decrease.circle"
-                )
-                .font(.subheadline)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.secondary.opacity(0.1), in: Capsule())
               }
             }
+            .padding(.leading)
+            .padding(.trailing, showsPinnedFilter ? 8 : 16)
           }
-          .padding(.horizontal)
+          .scrollIndicators(.hidden)
+
+          if showsPinnedFilter {
+            Divider()
+              .frame(height: 24)
+              .padding(.trailing, 4)
+            Button {
+              showingFilterSheet = true
+            } label: {
+              BrowseChipLabel(
+                title: "筛选",
+                systemImage: "line.3.horizontal.decrease",
+                selected: hasActiveFilters,
+                showsDot: hasActiveFilters
+              )
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 12)
+          }
         }
-        .scrollIndicators(.hidden)
       }
     }
     .padding(.bottom, 8)
     .background(.background)
+    .sheet(isPresented: $showingFilterSheet) {
+      BrowseFilterSheet()
+    }
   }
 
   private var continueWatchingSection: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: 12) {
       Text("继续观看")
         .font(.headline)
         .padding(.horizontal)
       ScrollView(.horizontal) {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 10) {
           ForEach(continueWatching) { entry in
             Button {
               Task { await resumeOrOpen(entry) }
@@ -267,9 +264,9 @@ struct BrowseView: View {
                 progress: entry.duration > 0
                   ? min(1, max(0, entry.position / entry.duration))
                   : nil,
-                subtitle: entry.episodeName
+                subtitle: entry.episodeName,
+                compactPosterHeight: 104
               )
-              .frame(width: model.posterSizePreference.minimumWidth + 12)
               .overlay {
                 if resumingHistoryID == entry.id {
                   ZStack {
@@ -291,6 +288,147 @@ struct BrowseView: View {
     }
   }
 
+  private var catalogSection: some View {
+    VStack(alignment: .leading, spacing: 22) {
+      if model.isLoadingHome {
+        ProgressView()
+          .controlSize(.small)
+          .frame(maxWidth: .infinity)
+      }
+      if hasActiveFilters {
+        Text("年份、地区和类型会交给采集站。站不支持的条件会再在返回结果里筛一次。")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .padding(.horizontal)
+      }
+      if !highScoreItems.isEmpty {
+        VStack(alignment: .leading, spacing: 12) {
+          Text("高分")
+            .font(.headline)
+            .padding(.horizontal)
+          ScrollView(.horizontal) {
+            HStack(alignment: .top, spacing: 10) {
+              ForEach(highScoreItems) { item in
+                posterButton(item, compactPosterHeight: 140)
+              }
+            }
+            .padding(.horizontal)
+          }
+          .scrollIndicators(.hidden)
+        }
+      }
+      VStack(alignment: .leading, spacing: 12) {
+        if isRecommendShelf {
+          Text("最近更新")
+            .font(.headline)
+            .padding(.horizontal)
+        }
+        LazyVGrid(columns: columns, spacing: 18) {
+          ForEach(Array(latestItems.enumerated()), id: \.element.id) { index, item in
+            posterButton(item)
+              .onAppear {
+                let threshold = max(0, latestItems.count - 6)
+                if index >= threshold {
+                  Task { await model.loadMore() }
+                }
+              }
+          }
+        }
+        .padding(.horizontal)
+      }
+      if model.isLoadingMore {
+        ProgressView()
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 8)
+      } else if model.loadMoreFailed {
+        Button("加载失败 · 重试") {
+          Task { await model.loadMore() }
+        }
+        .buttonStyle(.bordered)
+        .frame(maxWidth: .infinity)
+      } else if model.currentPage < (model.homeResult?.pagecount ?? 0) {
+        Button("加载更多") {
+          Task { await model.loadMore() }
+        }
+        .buttonStyle(.bordered)
+        .frame(maxWidth: .infinity)
+      }
+    }
+  }
+
+  private func posterButton(_ item: MediaItem, compactPosterHeight: CGFloat? = nil) -> some View {
+    Button {
+      Task { await open(item) }
+    } label: {
+      MediaCardView(
+        item: item,
+        progress: model.historyProgress(for: item),
+        compactPosterHeight: compactPosterHeight
+      )
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func open(_ item: MediaItem) async {
+    if item.isAction {
+      await model.performAction(item)
+    } else if item.isFolder {
+      selectedFolder = item
+    } else {
+      model.detailResult = nil
+      model.resumeBrowseItem = nil
+      selectedItem = item
+    }
+  }
+
+  private var officialUpdateBanner: some View {
+    HStack(spacing: 12) {
+      Text("拾萤配置有更新")
+        .font(.subheadline)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      Button("更新") {
+        Task { await model.applyOfficialSource() }
+      }
+      .buttonStyle(.borderedProminent)
+      .tint(.orange)
+      .controlSize(.small)
+      .disabled(model.isSwitchingConnection)
+    }
+    .padding(.horizontal)
+    .padding(.vertical, 8)
+    .background(Color.orange.opacity(0.12))
+  }
+
+  private func resumeBar(_ item: MediaItem) -> some View {
+    HStack(spacing: 12) {
+      Button {
+        model.detailResult = nil
+        selectedItem = item
+      } label: {
+        HStack(spacing: 8) {
+          Image(systemName: "play.fill")
+          Text("继续播放 \(item.name)")
+            .lineLimit(1)
+          Spacer(minLength: 0)
+        }
+      }
+      .buttonStyle(.plain)
+      Button {
+        model.resumeBrowseItem = nil
+      } label: {
+        Image(systemName: "xmark")
+          .font(.caption.weight(.bold))
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("关闭继续播放")
+    }
+    .font(.subheadline.weight(.semibold))
+    .foregroundStyle(.primary)
+    .padding(.horizontal, 16)
+    .padding(.vertical, 12)
+    .background(.bar)
+  }
+
   @ViewBuilder
   private var emptyContent: some View {
     if model.currentConnection == nil || model.configuration.sites.isEmpty {
@@ -299,11 +437,16 @@ struct BrowseView: View {
       } description: {
         Text(Self.defaultWarehouseDescription)
       } actions: {
-        Button("去设置添加线路") {
-          model.selectedTab = .settings
+        Button("使用拾萤") {
+          Task { await model.applyOfficialSource() }
         }
         .buttonStyle(.borderedProminent)
         .tint(.orange)
+        .disabled(model.isSwitchingConnection)
+        Button("去设置添加线路") {
+          model.selectedTab = .settings
+        }
+        .buttonStyle(.bordered)
       }
     } else if model.onDeviceSites.isEmpty {
       ContentUnavailableView(
@@ -327,12 +470,41 @@ struct BrowseView: View {
         .buttonStyle(.bordered)
       }
     } else {
-      ContentUnavailableView(
-        "这个源暂时没有内容",
-        systemImage: "film",
-        description: Text("下拉刷新试试。")
-      )
+      ContentUnavailableView {
+        Label(
+          hasActiveFilters ? "当前筛选没有结果" : emptyCategoryTitle,
+          systemImage: "film"
+        )
+      } description: {
+        Text(emptyCategoryMessage)
+      } actions: {
+        if hasActiveFilters {
+          Button("调整筛选") {
+            showingFilterSheet = true
+          }
+          .buttonStyle(.bordered)
+        }
+      }
     }
+  }
+
+  private var emptyCategoryTitle: String {
+    let typeId = model.selectedCategory?.typeId ?? ""
+    if typeId.hasSuffix("kids") || typeId.hasSuffix("doc") {
+      return "这个分类暂时没有内容"
+    }
+    return "这个源暂时没有内容"
+  }
+
+  private var emptyCategoryMessage: String {
+    if hasActiveFilters {
+      return "类型、地区和年份会交给采集站筛选。站不支持的条件会再在结果里筛一次。可以重置后再看。"
+    }
+    let typeId = model.selectedCategory?.typeId ?? ""
+    if typeId.hasSuffix("kids") || typeId.hasSuffix("doc") {
+      return "采集站分类名对不上时，少儿和纪录片会是空的。"
+    }
+    return "下拉刷新试试。"
   }
 
   private var pageHeader: some View {
@@ -342,19 +514,6 @@ struct BrowseView: View {
           Text(headerTitle)
             .font(.system(size: 28, weight: .bold))
             .lineLimit(1)
-          if model.onDeviceSites.count > 1 {
-            Button {
-              showingSourcePicker = true
-            } label: {
-              Text("源")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.secondary.opacity(0.12), in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("切换点播源")
-          }
         }
         if !hasActiveWarehouse {
           Text(
@@ -409,7 +568,7 @@ struct BrowseView: View {
     .padding(.top, 8)
   }
 
-  /// Prefer the active site name (e.g. 拾萤精选), then warehouse notice, never a raw host alone.
+  /// Prefer the active site name (e.g. 拾萤), then warehouse notice, never a raw host alone.
   private var headerTitle: String {
     guard model.currentConnection != nil else { return "拾萤" }
     if let site = model.selectedSite {
@@ -437,8 +596,48 @@ struct BrowseView: View {
       return
     }
     model.detailResult = nil
+    model.resumeBrowseItem = nil
     selectedItem = entry.item
   }
 
   private static let defaultWarehouseDescription = "在设置中添加配置地址后，点播内容会出现在这里"
+}
+
+private struct BrowseChip: View {
+  let title: String
+  var selected: Bool
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      BrowseChipLabel(title: title, selected: selected)
+    }
+    .buttonStyle(.plain)
+  }
+}
+
+private struct BrowseChipLabel: View {
+  let title: String
+  var systemImage: String? = nil
+  var selected: Bool
+  var showsDot: Bool = false
+
+  var body: some View {
+    HStack(spacing: 4) {
+      if let systemImage {
+        Image(systemName: systemImage)
+      }
+      Text(title)
+      if showsDot {
+        Circle()
+          .fill(selected ? Color.white : Color.orange)
+          .frame(width: 6, height: 6)
+      }
+    }
+    .font(.subheadline.weight(.semibold))
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .foregroundStyle(selected ? Color.white : Color.primary)
+    .background(selected ? Color.orange : Color.secondary.opacity(0.12), in: Capsule())
+  }
 }

@@ -23,6 +23,7 @@ struct LivePlaybackShell: View {
   @State private var mpvEngine = MPVPlayerEngine()
   @State private var engineKind: PlaybackEngineKind = .avPlayer
   @State private var hideTask: Task<Void, Never>?
+  @State private var orientationLocked = false
 
   private var playbackEngine: any PlaybackEngine {
     engineKind == .mpv ? mpvEngine : avEngine
@@ -126,6 +127,11 @@ struct LivePlaybackShell: View {
     .onDisappear {
       hideTask?.cancel()
       playbackEngine.stop()
+      if orientationLocked {
+        orientationLocked = false
+        OrientationBridge.unlock()
+      }
+      model.releasePlaybackCache()
     }
     .gesture(
       DragGesture(minimumDistance: 40)
@@ -194,6 +200,28 @@ struct LivePlaybackShell: View {
         }
         Spacer()
         Button {
+          orientationLocked.toggle()
+          if orientationLocked {
+            OrientationBridge.lockCurrent()
+          } else {
+            OrientationBridge.unlock()
+          }
+        } label: {
+          HStack(spacing: 4) {
+            Image(
+              systemName: orientationLocked
+                ? "lock.fill" : "rectangle.landscape.rotate"
+            )
+            Text("方向")
+          }
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.white)
+          .padding(.horizontal, 10)
+          .padding(.vertical, 8)
+          .background(.black.opacity(0.35), in: Capsule())
+        }
+        .accessibilityLabel(orientationLocked ? "已锁定方向" : "锁定方向")
+        Button {
           model.toggleLiveFavorite(channel)
         } label: {
           Image(systemName: model.isLiveFavorite(channel) ? "star.fill" : "star")
@@ -215,15 +243,21 @@ struct LivePlaybackShell: View {
         Button {
           if playbackEngine.state == .playing {
             playbackEngine.pause()
-          } else {
+          } else if playbackEngine.state != .loading {
             playbackEngine.play()
           }
         } label: {
-          Image(
-            systemName: playbackEngine.state == .playing ? "pause.fill" : "play.fill"
-          )
-          .font(.title2)
+          if playbackEngine.state == .loading {
+            ProgressView()
+              .tint(.white)
+          } else {
+            Image(
+              systemName: playbackEngine.state == .playing ? "pause.fill" : "play.fill"
+            )
+            .font(.title2)
+          }
         }
+        .disabled(playbackEngine.state == .loading)
         Button { zap(delta: 1) } label: {
           Image(systemName: "chevron.down")
             .font(.title2.weight(.semibold))
@@ -241,8 +275,8 @@ struct LivePlaybackShell: View {
       .buttonStyle(.plain)
       .foregroundStyle(.white)
       .padding(.horizontal, 16)
-      .padding(.vertical, 14)
-      .background(.ultraThinMaterial.opacity(0.9))
+      .padding(.bottom, 18)
+      .padding(.top, 8)
     }
   }
 

@@ -1,5 +1,5 @@
 {
-  "probedAt": "2026-11-13T06:43:01.798Z",
+  "probedAt": "2026-11-13T08:33:23.261Z",
   "keywords": [
     "庆余年",
     "三体",
@@ -7,8 +7,8 @@
     "绝命毒师"
   ],
   "total": 28,
-  "passed": 22,
-  "whitelistCount": 22,
+  "passed": 24,
+  "whitelistCount": 24,
   "whitelist": [
     {
       "key": "iqiyi",
@@ -44,6 +44,11 @@
       "key": "jisu",
       "name": "极速资源",
       "api": "https://jszyapi.com/api.php/provide/vod"
+    },
+    {
+      "key": "modu",
+      "name": "魔都资源",
+      "api": "https://www.mdzyapi.com/api.php/provide/vod"
     },
     {
       "key": "ffzy",
@@ -96,6 +101,11 @@
       "api": "https://caiji.moduapi.cc/api.php/provide/vod"
     },
     {
+      "key": "ruyi",
+      "name": "如意资源",
+      "api": "https://cj.rycjapi.com/api.php/provide/vod"
+    },
+    {
       "key": "haohua",
       "name": "豪华资源",
       "api": "https://hhzyapi.com/api.php/provide/vod"
@@ -133,56 +143,26 @@
         "庆余年": {
           "ok": false,
           "n": 0,
-          "ms": 32,
+          "ms": 38,
           "error": "TypeError"
         },
         "三体": {
           "ok": false,
           "n": 0,
-          "ms": 47,
+          "ms": 39,
           "error": "TypeError"
         },
         "进击的巨人": {
           "ok": false,
           "n": 0,
-          "ms": 28,
+          "ms": 27,
           "error": "TypeError"
         },
         "绝命毒师": {
           "ok": false,
           "n": 0,
-          "ms": 34,
+          "ms": 29,
           "error": "TypeError"
-        }
-      }
-    },
-    {
-      "key": "modu",
-      "name": "魔都资源",
-      "api": "https://www.mdzyapi.com/api.php/provide/vod",
-      "listOk": false,
-      "searchable": true,
-      "listError": "AbortError",
-      "hits": {
-        "庆余年": {
-          "ok": true,
-          "n": 3,
-          "ms": 4660
-        },
-        "三体": {
-          "ok": true,
-          "n": 3,
-          "ms": 1761
-        },
-        "进击的巨人": {
-          "ok": true,
-          "n": 20,
-          "ms": 1046
-        },
-        "绝命毒师": {
-          "ok": true,
-          "n": 6,
-          "ms": 1103
         }
       }
     },
@@ -196,56 +176,26 @@
         "庆余年": {
           "ok": false,
           "n": 0,
-          "ms": 310,
+          "ms": 144,
           "error": "HTTP 403"
         },
         "三体": {
           "ok": false,
           "n": 0,
-          "ms": 4543,
+          "ms": 706,
           "error": "HTTP 403"
         },
         "进击的巨人": {
           "ok": false,
           "n": 0,
-          "ms": 2208,
+          "ms": 3815,
           "error": "HTTP 403"
         },
         "绝命毒师": {
           "ok": false,
           "n": 0,
-          "ms": 2515,
+          "ms": 1277,
           "error": "HTTP 403"
-        }
-      }
-    },
-    {
-      "key": "ruyi",
-      "name": "如意资源",
-      "api": "https://cj.rycjapi.com/api.php/provide/vod",
-      "listOk": false,
-      "searchable": true,
-      "listError": "AbortError",
-      "hits": {
-        "庆余年": {
-          "ok": true,
-          "n": 3,
-          "ms": 3184
-        },
-        "三体": {
-          "ok": true,
-          "n": 7,
-          "ms": 2720
-        },
-        "进击的巨人": {
-          "ok": true,
-          "n": 16,
-          "ms": 919
-        },
-        "绝命毒师": {
-          "ok": true,
-          "n": 7,
-          "ms": 738
         }
       }
     },
@@ -260,25 +210,25 @@
         "庆余年": {
           "ok": false,
           "n": 0,
-          "ms": 699,
+          "ms": 344,
           "error": "non-json"
         },
         "三体": {
           "ok": false,
           "n": 0,
-          "ms": 615,
+          "ms": 310,
           "error": "non-json"
         },
         "进击的巨人": {
           "ok": false,
           "n": 0,
-          "ms": 521,
+          "ms": 539,
           "error": "non-json"
         },
         "绝命毒师": {
           "ok": false,
           "n": 0,
-          "ms": 1013,
+          "ms": 322,
           "error": "non-json"
         }
       }
@@ -293,22 +243,22 @@
         "庆余年": {
           "ok": true,
           "n": 0,
-          "ms": 1772
+          "ms": 1094
         },
         "三体": {
           "ok": true,
           "n": 0,
-          "ms": 1110
+          "ms": 1181
         },
         "进击的巨人": {
           "ok": true,
           "n": 0,
-          "ms": 1390
+          "ms": 1091
         },
         "绝命毒师": {
           "ok": true,
           "n": 0,
-          "ms": 1408
+          "ms": 1049
         }
       }
     }
@@ -319,28 +269,28 @@
       "name": "爱奇艺资源",
       "api": "https://iqiyizyapi.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 4097,
+      "listMs": 1795,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 2,
-          "ms": 3310
+          "ms": 1579
         },
         "三体": {
           "ok": true,
           "n": 2,
-          "ms": 3110
+          "ms": 1128
         },
         "进击的巨人": {
           "ok": true,
           "n": 20,
-          "ms": 2454
+          "ms": 1148
         },
         "绝命毒师": {
           "ok": true,
           "n": 6,
-          "ms": 2719
+          "ms": 1236
         }
       },
       "pass": true
@@ -350,32 +300,32 @@
       "name": "iKun资源",
       "api": "https://ikunzyapi.com/api.php/provide/vod",
       "listOk": false,
-      "listMs": 43,
+      "listMs": 33,
       "listError": "TypeError",
       "searchable": false,
       "hits": {
         "庆余年": {
           "ok": false,
           "n": 0,
-          "ms": 32,
+          "ms": 38,
           "error": "TypeError"
         },
         "三体": {
           "ok": false,
           "n": 0,
-          "ms": 47,
+          "ms": 39,
           "error": "TypeError"
         },
         "进击的巨人": {
           "ok": false,
           "n": 0,
-          "ms": 28,
+          "ms": 27,
           "error": "TypeError"
         },
         "绝命毒师": {
           "ok": false,
           "n": 0,
-          "ms": 34,
+          "ms": 29,
           "error": "TypeError"
         }
       },
@@ -386,28 +336,28 @@
       "name": "电影天堂",
       "api": "https://caiji.dyttzyapi.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 3813,
+      "listMs": 1926,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 7,
-          "ms": 2478
+          "ms": 536
         },
         "三体": {
           "ok": true,
           "n": 2,
-          "ms": 1875
+          "ms": 325
         },
         "进击的巨人": {
           "ok": true,
           "n": 19,
-          "ms": 3721
+          "ms": 487
         },
         "绝命毒师": {
           "ok": true,
           "n": 5,
-          "ms": 1478
+          "ms": 391
         }
       },
       "pass": true
@@ -417,28 +367,28 @@
       "name": "猫眼资源",
       "api": "https://api.maoyanapi.top/api.php/provide/vod",
       "listOk": true,
-      "listMs": 3531,
+      "listMs": 1174,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 1,
-          "ms": 2510
+          "ms": 386
         },
         "三体": {
           "ok": true,
           "n": 4,
-          "ms": 2501
+          "ms": 340
         },
         "进击的巨人": {
           "ok": true,
           "n": 3,
-          "ms": 1525
+          "ms": 789
         },
         "绝命毒师": {
           "ok": true,
           "n": 2,
-          "ms": 1908
+          "ms": 1146
         }
       },
       "pass": true
@@ -448,28 +398,28 @@
       "name": "量子资源",
       "api": "https://cj.lzcaiji.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 2615,
+      "listMs": 1496,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 20,
-          "ms": 1942
+          "ms": 698
         },
         "三体": {
           "ok": true,
           "n": 20,
-          "ms": 3208
+          "ms": 441
         },
         "进击的巨人": {
           "ok": true,
           "n": 20,
-          "ms": 1387
+          "ms": 332
         },
         "绝命毒师": {
           "ok": true,
           "n": 20,
-          "ms": 1935
+          "ms": 332
         }
       },
       "pass": true
@@ -479,28 +429,28 @@
       "name": "量子影视",
       "api": "https://cj.lziapi.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 6578,
+      "listMs": 1001,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 20,
-          "ms": 2883
+          "ms": 552
         },
         "三体": {
           "ok": true,
           "n": 20,
-          "ms": 2290
+          "ms": 569
         },
         "进击的巨人": {
           "ok": true,
           "n": 20,
-          "ms": 1556
+          "ms": 312
         },
         "绝命毒师": {
           "ok": true,
           "n": 20,
-          "ms": 600
+          "ms": 269
         }
       },
       "pass": true
@@ -510,28 +460,28 @@
       "name": "360资源",
       "api": "https://360zyzz.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 4652,
+      "listMs": 1812,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 3,
-          "ms": 1638
+          "ms": 892
         },
         "三体": {
           "ok": true,
           "n": 6,
-          "ms": 2868
+          "ms": 393
         },
         "进击的巨人": {
           "ok": true,
           "n": 2,
-          "ms": 1935
+          "ms": 1054
         },
         "绝命毒师": {
           "ok": true,
           "n": 1,
-          "ms": 1774
+          "ms": 875
         }
       },
       "pass": true
@@ -541,28 +491,28 @@
       "name": "极速资源",
       "api": "https://jszyapi.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 6813,
+      "listMs": 1178,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 8,
-          "ms": 1750
+          "ms": 700
         },
         "三体": {
           "ok": true,
           "n": 7,
-          "ms": 2566
+          "ms": 489
         },
         "进击的巨人": {
           "ok": true,
           "n": 16,
-          "ms": 1001
+          "ms": 551
         },
         "绝命毒师": {
           "ok": true,
           "n": 10,
-          "ms": 1966
+          "ms": 642
         }
       },
       "pass": true
@@ -571,61 +521,60 @@
       "key": "modu",
       "name": "魔都资源",
       "api": "https://www.mdzyapi.com/api.php/provide/vod",
-      "listOk": false,
-      "listMs": 8002,
-      "listError": "AbortError",
+      "listOk": true,
+      "listMs": 1066,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 3,
-          "ms": 4660
+          "ms": 434
         },
         "三体": {
           "ok": true,
           "n": 3,
-          "ms": 1761
+          "ms": 783
         },
         "进击的巨人": {
           "ok": true,
           "n": 20,
-          "ms": 1046
+          "ms": 502
         },
         "绝命毒师": {
           "ok": true,
           "n": 6,
-          "ms": 1103
+          "ms": 409
         }
       },
-      "pass": false
+      "pass": true
     },
     {
       "key": "ffzy",
       "name": "非凡资源",
       "api": "https://api.ffzyapi.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 5893,
+      "listMs": 1657,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 8,
-          "ms": 1430
+          "ms": 626
         },
         "三体": {
           "ok": true,
           "n": 3,
-          "ms": 741
+          "ms": 403
         },
         "进击的巨人": {
           "ok": true,
           "n": 20,
-          "ms": 702
+          "ms": 817
         },
         "绝命毒师": {
           "ok": true,
           "n": 5,
-          "ms": 2081
+          "ms": 493
         }
       },
       "pass": true
@@ -635,28 +584,28 @@
       "name": "暴风资源",
       "api": "https://bfzyapi.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 5968,
+      "listMs": 1101,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 20,
-          "ms": 784
+          "ms": 521
         },
         "三体": {
           "ok": true,
           "n": 20,
-          "ms": 768
+          "ms": 410
         },
         "进击的巨人": {
           "ok": true,
           "n": 20,
-          "ms": 1552
+          "ms": 346
         },
         "绝命毒师": {
           "ok": true,
           "n": 20,
-          "ms": 905
+          "ms": 428
         }
       },
       "pass": true
@@ -666,28 +615,28 @@
       "name": "最大资源",
       "api": "https://api.zuidapi.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 5644,
+      "listMs": 866,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 7,
-          "ms": 2338
+          "ms": 215
         },
         "三体": {
           "ok": true,
           "n": 8,
-          "ms": 2717
+          "ms": 974
         },
         "进击的巨人": {
           "ok": true,
           "n": 17,
-          "ms": 1939
+          "ms": 302
         },
         "绝命毒师": {
           "ok": true,
           "n": 6,
-          "ms": 2420
+          "ms": 348
         }
       },
       "pass": true
@@ -697,31 +646,31 @@
       "name": "无尽资源",
       "api": "https://api.wujinapi.me/api.php/provide/vod",
       "listOk": true,
-      "listMs": 3378,
+      "listMs": 969,
       "searchable": false,
       "hits": {
         "庆余年": {
           "ok": false,
           "n": 0,
-          "ms": 310,
+          "ms": 144,
           "error": "HTTP 403"
         },
         "三体": {
           "ok": false,
           "n": 0,
-          "ms": 4543,
+          "ms": 706,
           "error": "HTTP 403"
         },
         "进击的巨人": {
           "ok": false,
           "n": 0,
-          "ms": 2208,
+          "ms": 3815,
           "error": "HTTP 403"
         },
         "绝命毒师": {
           "ok": false,
           "n": 0,
-          "ms": 2515,
+          "ms": 1277,
           "error": "HTTP 403"
         }
       },
@@ -732,28 +681,28 @@
       "name": "新浪资源",
       "api": "https://api.xinlangapi.com/xinlangapi.php/provide/vod",
       "listOk": true,
-      "listMs": 1753,
+      "listMs": 1095,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 8,
-          "ms": 863
+          "ms": 1209
         },
         "三体": {
           "ok": true,
           "n": 10,
-          "ms": 1161
+          "ms": 1564
         },
         "进击的巨人": {
           "ok": true,
           "n": 16,
-          "ms": 827
+          "ms": 1386
         },
         "绝命毒师": {
           "ok": true,
           "n": 10,
-          "ms": 926
+          "ms": 866
         }
       },
       "pass": true
@@ -763,28 +712,28 @@
       "name": "速播资源",
       "api": "https://subocaiji.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 6121,
+      "listMs": 1415,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 8,
-          "ms": 821
+          "ms": 656
         },
         "三体": {
           "ok": true,
           "n": 10,
-          "ms": 729
+          "ms": 1747
         },
         "进击的巨人": {
           "ok": true,
           "n": 16,
-          "ms": 823
+          "ms": 675
         },
         "绝命毒师": {
           "ok": true,
           "n": 10,
-          "ms": 1212
+          "ms": 424
         }
       },
       "pass": true
@@ -794,28 +743,28 @@
       "name": "金鹰点播",
       "api": "https://jyzyapi.com/provide/vod/from/jinyingyun/at/json",
       "listOk": true,
-      "listMs": 3091,
+      "listMs": 4094,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
-          "n": 0,
-          "ms": 727
+          "n": 8,
+          "ms": 1660
         },
         "三体": {
           "ok": true,
-          "n": 0,
-          "ms": 910
+          "n": 10,
+          "ms": 915
         },
         "进击的巨人": {
           "ok": true,
-          "n": 0,
-          "ms": 877
+          "n": 16,
+          "ms": 555
         },
         "绝命毒师": {
           "ok": true,
           "n": 10,
-          "ms": 1443
+          "ms": 772
         }
       },
       "pass": true
@@ -825,28 +774,28 @@
       "name": "U酷影视",
       "api": "https://api.ukuapi88.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 2838,
+      "listMs": 1978,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 3,
-          "ms": 921
+          "ms": 526
         },
         "三体": {
           "ok": true,
           "n": 5,
-          "ms": 1473
+          "ms": 1176
         },
         "进击的巨人": {
           "ok": true,
           "n": 8,
-          "ms": 936
+          "ms": 361
         },
         "绝命毒师": {
           "ok": true,
           "n": 0,
-          "ms": 897
+          "ms": 388
         }
       },
       "pass": true
@@ -856,28 +805,28 @@
       "name": "光速资源",
       "api": "https://api.guangsuapi.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 4369,
+      "listMs": 1120,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 8,
-          "ms": 1395
+          "ms": 459
         },
         "三体": {
           "ok": true,
           "n": 10,
-          "ms": 4449
+          "ms": 969
         },
         "进击的巨人": {
           "ok": true,
           "n": 16,
-          "ms": 2004
+          "ms": 617
         },
         "绝命毒师": {
           "ok": true,
           "n": 10,
-          "ms": 3065
+          "ms": 732
         }
       },
       "pass": true
@@ -887,28 +836,28 @@
       "name": "红牛资源",
       "api": "https://www.hongniuzy2.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 4152,
+      "listMs": 2200,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 8,
-          "ms": 1267
+          "ms": 588
         },
         "三体": {
           "ok": true,
           "n": 10,
-          "ms": 4025
+          "ms": 657
         },
         "进击的巨人": {
           "ok": true,
           "n": 16,
-          "ms": 1937
+          "ms": 590
         },
         "绝命毒师": {
           "ok": true,
           "n": 10,
-          "ms": 1778
+          "ms": 483
         }
       },
       "pass": true
@@ -918,28 +867,28 @@
       "name": "魔都动漫",
       "api": "https://caiji.moduapi.cc/api.php/provide/vod",
       "listOk": true,
-      "listMs": 7910,
+      "listMs": 1476,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 3,
-          "ms": 2472
+          "ms": 539
         },
         "三体": {
           "ok": true,
           "n": 3,
-          "ms": 1426
+          "ms": 684
         },
         "进击的巨人": {
           "ok": true,
           "n": 20,
-          "ms": 931
+          "ms": 937
         },
         "绝命毒师": {
           "ok": true,
           "n": 6,
-          "ms": 1155
+          "ms": 673
         }
       },
       "pass": true
@@ -948,61 +897,60 @@
       "key": "ruyi",
       "name": "如意资源",
       "api": "https://cj.rycjapi.com/api.php/provide/vod",
-      "listOk": false,
-      "listMs": 8001,
-      "listError": "AbortError",
+      "listOk": true,
+      "listMs": 2438,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 3,
-          "ms": 3184
+          "ms": 457
         },
         "三体": {
           "ok": true,
           "n": 7,
-          "ms": 2720
+          "ms": 527
         },
         "进击的巨人": {
           "ok": true,
           "n": 16,
-          "ms": 919
+          "ms": 676
         },
         "绝命毒师": {
           "ok": true,
           "n": 7,
-          "ms": 738
+          "ms": 537
         }
       },
-      "pass": false
+      "pass": true
     },
     {
       "key": "haohua",
       "name": "豪华资源",
       "api": "https://hhzyapi.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 5890,
+      "listMs": 961,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 8,
-          "ms": 573
+          "ms": 523
         },
         "三体": {
           "ok": true,
           "n": 10,
-          "ms": 873
+          "ms": 1005
         },
         "进击的巨人": {
           "ok": true,
           "n": 16,
-          "ms": 414
+          "ms": 419
         },
         "绝命毒师": {
           "ok": true,
           "n": 10,
-          "ms": 1025
+          "ms": 446
         }
       },
       "pass": true
@@ -1012,28 +960,28 @@
       "name": "优质资源",
       "api": "https://api.yzzy-api.com/inc/apijson.php",
       "listOk": true,
-      "listMs": 4271,
+      "listMs": 2409,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 5,
-          "ms": 565
+          "ms": 484
         },
         "三体": {
           "ok": true,
           "n": 5,
-          "ms": 439
+          "ms": 501
         },
         "进击的巨人": {
           "ok": true,
           "n": 13,
-          "ms": 829
+          "ms": 523
         },
         "绝命毒师": {
           "ok": true,
           "n": 5,
-          "ms": 835
+          "ms": 498
         }
       },
       "pass": true
@@ -1043,28 +991,28 @@
       "name": "虎牙资源",
       "api": "https://www.huyaapi.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 2436,
+      "listMs": 1527,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
-          "n": 0,
-          "ms": 431
+          "n": 8,
+          "ms": 480
         },
         "三体": {
           "ok": true,
           "n": 10,
-          "ms": 1305
+          "ms": 601
         },
         "进击的巨人": {
           "ok": true,
           "n": 16,
-          "ms": 1001
+          "ms": 910
         },
         "绝命毒师": {
           "ok": true,
           "n": 10,
-          "ms": 816
+          "ms": 699
         }
       },
       "pass": true
@@ -1074,32 +1022,32 @@
       "name": "卧龙资源",
       "api": "https://wolongzyw.com/api.php/provide/vod",
       "listOk": false,
-      "listMs": 3299,
+      "listMs": 1941,
       "listError": "non-json",
       "searchable": false,
       "hits": {
         "庆余年": {
           "ok": false,
           "n": 0,
-          "ms": 699,
+          "ms": 344,
           "error": "non-json"
         },
         "三体": {
           "ok": false,
           "n": 0,
-          "ms": 615,
+          "ms": 310,
           "error": "non-json"
         },
         "进击的巨人": {
           "ok": false,
           "n": 0,
-          "ms": 521,
+          "ms": 539,
           "error": "non-json"
         },
         "绝命毒师": {
           "ok": false,
           "n": 0,
-          "ms": 1013,
+          "ms": 322,
           "error": "non-json"
         }
       },
@@ -1110,28 +1058,28 @@
       "name": "茅台资源",
       "api": "https://caiji.maotaizy.cc/api.php/provide/vod",
       "listOk": true,
-      "listMs": 5367,
+      "listMs": 2668,
       "searchable": false,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 0,
-          "ms": 1772
+          "ms": 1094
         },
         "三体": {
           "ok": true,
           "n": 0,
-          "ms": 1110
+          "ms": 1181
         },
         "进击的巨人": {
           "ok": true,
           "n": 0,
-          "ms": 1390
+          "ms": 1091
         },
         "绝命毒师": {
           "ok": true,
           "n": 0,
-          "ms": 1408
+          "ms": 1049
         }
       },
       "pass": false
@@ -1141,28 +1089,28 @@
       "name": "非凡采集",
       "api": "https://cj.ffzyapi.com/api.php/provide/vod",
       "listOk": true,
-      "listMs": 4774,
+      "listMs": 1354,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 8,
-          "ms": 919
+          "ms": 538
         },
         "三体": {
           "ok": true,
           "n": 3,
-          "ms": 988
+          "ms": 376
         },
         "进击的巨人": {
           "ok": true,
           "n": 20,
-          "ms": 1067
+          "ms": 607
         },
         "绝命毒师": {
           "ok": true,
           "n": 5,
-          "ms": 789
+          "ms": 463
         }
       },
       "pass": true
@@ -1172,28 +1120,28 @@
       "name": "影视资源",
       "api": "https://dy.7772888.xyz/api.php/tvbox",
       "listOk": true,
-      "listMs": 3437,
+      "listMs": 1569,
       "searchable": true,
       "hits": {
         "庆余年": {
           "ok": true,
           "n": 11,
-          "ms": 1667
+          "ms": 1671
         },
         "三体": {
           "ok": true,
           "n": 11,
-          "ms": 1899
+          "ms": 1308
         },
         "进击的巨人": {
           "ok": true,
           "n": 16,
-          "ms": 1642
+          "ms": 1181
         },
         "绝命毒师": {
           "ok": true,
           "n": 12,
-          "ms": 2124
+          "ms": 1590
         }
       },
       "pass": true

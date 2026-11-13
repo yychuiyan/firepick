@@ -20,6 +20,7 @@ final class AppPersistence {
     static let decodePreference = "decodePreference"
     static let adSkipPreference = "adSkipPreference"
     static let backgroundPlaybackEnabled = "backgroundPlaybackEnabled"
+    static let cloudAdSkipEnabled = "cloudAdSkipEnabled"
     static let incognitoModeEnabled = "incognitoModeEnabled"
     static let multiSourceSearchEnabled = "multiSourceSearchEnabled"
     static let bufferPreference = "bufferPreference"
@@ -189,6 +190,10 @@ final class AppPersistence {
     guard defaults.object(forKey: Key.backgroundPlaybackEnabled) != nil else { return nil }
     return defaults.bool(forKey: Key.backgroundPlaybackEnabled)
   }
+  var cloudAdSkipEnabled: Bool? {
+    guard defaults.object(forKey: Key.cloudAdSkipEnabled) != nil else { return nil }
+    return defaults.bool(forKey: Key.cloudAdSkipEnabled)
+  }
   var incognitoModeEnabled: Bool? {
     guard defaults.object(forKey: Key.incognitoModeEnabled) != nil else { return nil }
     return defaults.bool(forKey: Key.incognitoModeEnabled)
@@ -216,6 +221,9 @@ final class AppPersistence {
   }
   func saveBackgroundPlaybackEnabled(_ value: Bool) {
     defaults.set(value, forKey: Key.backgroundPlaybackEnabled)
+  }
+  func saveCloudAdSkipEnabled(_ value: Bool) {
+    defaults.set(value, forKey: Key.cloudAdSkipEnabled)
   }
   func saveIncognitoModeEnabled(_ value: Bool) {
     defaults.set(value, forKey: Key.incognitoModeEnabled)

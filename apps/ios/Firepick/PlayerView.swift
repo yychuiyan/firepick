@@ -5,6 +5,11 @@ import MediaPlayer
 import SwiftUI
 import UIKit
 
+enum PlayerChrome: Equatable {
+  case immersive
+  case inline
+}
+
 struct PlayerView: View {
   @Environment(AppModel.self) private var model
   @Environment(\.dismiss) private var dismiss
@@ -17,6 +22,10 @@ struct PlayerView: View {
   var flag: String? = nil
   var lineEpisodes: [Episode] = []
   var playbackLines: [PlaybackLine] = []
+  /// Inline detail player. Immersive is the existing full-screen cover.
+  var chrome: PlayerChrome = .immersive
+  var onExpand: (() -> Void)? = nil
+  var onCollapse: (() -> Void)? = nil
 
   @State private var avEngine = AVPlayerEngine()
   @State private var mpvEngine = MPVPlayerEngine()
@@ -55,6 +64,8 @@ struct PlayerView: View {
   @State private var dragStartVolume: Float = 0
   @State private var dragStartTime: Double = 0
   @State private var remoteCommandsConfigured = false
+  @State private var showingRatePicker = false
+  @State private var orientationLocked = false
 
   private enum DragAxis {
     case horizontal
@@ -68,7 +79,10 @@ struct PlayerView: View {
     alternateURLs: [URL] = [],
     flag: String? = nil,
     lineEpisodes: [Episode] = [],
-    playbackLines: [PlaybackLine] = []
+    playbackLines: [PlaybackLine] = [],
+    chrome: PlayerChrome = .immersive,
+    onExpand: (() -> Void)? = nil,
+    onCollapse: (() -> Void)? = nil
   ) {
     self.request = request
     self.item = item
@@ -77,6 +91,9 @@ struct PlayerView: View {
     self.flag = flag
     self.lineEpisodes = lineEpisodes
     self.playbackLines = playbackLines
+    self.chrome = chrome
+    self.onExpand = onExpand
+    self.onCollapse = onCollapse
     let kind =
       (try? PlayerSelector().select(
         request,
@@ -149,6 +166,8 @@ struct PlayerView: View {
       ZStack {
         Color.black.ignoresSafeArea()
         videoLayer
+          .contentShape(Rectangle())
+          .gesture(playerDrag(in: geo.size))
         DanmakuOverlay(
           comments: danmakuComments,
           currentTime: playbackEngine.currentTime,
@@ -212,7 +231,6 @@ struct PlayerView: View {
         }
       }
       .contentShape(Rectangle())
-      .gesture(playerDrag(in: geo.size))
       .onTapGesture(count: 2) {
         togglePlayPause()
       }
@@ -236,6 +254,15 @@ struct PlayerView: View {
     .sheet(isPresented: $showingLines) {
       linePickerSheet
         .presentationDetents([.medium])
+    }
+    .confirmationDialog("倍速", isPresented: $showingRatePicker, titleVisibility: .visible) {
+      ForEach([0.75, 1, 1.25, 1.5, 2], id: \.self) { rate in
+        Button(rate == 1 ? "1×" : "\(rate.formatted())×") {
+          playbackRate = Float(rate)
+          playbackEngine.setPlaybackRate(Float(rate))
+          scheduleHideControls()
+        }
+      }
     }
     .sheet(isPresented: $showingDanmakuSettings) {
       NavigationStack {
@@ -319,6 +346,11 @@ struct PlayerView: View {
       }
       clearNowPlaying()
       playbackEngine.stop()
+      if orientationLocked {
+        orientationLocked = false
+        OrientationBridge.unlock()
+      }
+      model.releasePlaybackCache()
     }
   }
 
@@ -423,26 +455,62 @@ struct PlayerView: View {
     VStack(spacing: 0) {
       HStack {
         Button {
-          playbackEngine.stop()
-          dismiss()
-        } label: {
-          Image(systemName: "xmark")
-            .font(.body.weight(.semibold))
-            .frame(width: 36, height: 36)
-            .background(.black.opacity(0.35), in: Circle())
-        }
-        VStack(alignment: .leading, spacing: 2) {
-          Text(item.name)
-            .font(.headline)
-            .lineLimit(1)
-          if let activeEpisode {
-            Text(activeEpisode.name)
-              .font(.caption)
-              .foregroundStyle(.white.opacity(0.8))
+          if chrome == .inline {
+            onExpand?()
+          } else if let onCollapse {
+            onCollapse()
+          } else {
+            playbackEngine.stop()
+            dismiss()
           }
+        } label: {
+          Image(
+            systemName: chrome == .inline
+              ? "arrow.up.left.and.arrow.down.right" : "xmark"
+          )
+          .font(.body.weight(.semibold))
+          .frame(width: 36, height: 36)
+          .background(.black.opacity(0.35), in: Circle())
         }
-        Spacer()
-        menuButton
+        if chrome == .inline {
+          Spacer()
+        } else {
+          VStack(alignment: .leading, spacing: 2) {
+            Text(item.name)
+              .font(.headline)
+              .lineLimit(1)
+            if let activeEpisode {
+              Text(activeEpisode.name)
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.8))
+            }
+          }
+          Spacer()
+          Button {
+            orientationLocked.toggle()
+            if orientationLocked {
+              OrientationBridge.lockCurrent()
+              showToast("已锁定方向")
+            } else {
+              OrientationBridge.unlock()
+              showToast("已解除方向锁定")
+            }
+          } label: {
+            HStack(spacing: 4) {
+              Image(
+                systemName: orientationLocked
+                  ? "lock.fill" : "rectangle.landscape.rotate"
+              )
+              Text("方向")
+            }
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(.black.opacity(0.35), in: Capsule())
+          }
+          .accessibilityLabel(orientationLocked ? "已锁定方向" : "锁定方向")
+          menuButton
+        }
       }
       .foregroundStyle(.white)
       .padding(.horizontal, 16)
@@ -450,9 +518,11 @@ struct PlayerView: View {
 
       Spacer()
 
-      skipButtons
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
+      if chrome != .inline {
+        skipButtons
+          .padding(.horizontal, 16)
+          .padding(.bottom, 8)
+      }
 
       progressBar
         .padding(.horizontal, 16)
@@ -462,58 +532,52 @@ struct PlayerView: View {
         Button {
           togglePlayPause()
         } label: {
-          Image(
-            systemName: playbackEngine.state == .playing ? "pause.fill" : "play.fill"
-          )
-          .font(.title2)
+          if playbackEngine.state == .loading || isResolvingNext {
+            ProgressView()
+              .tint(.white)
+          } else {
+            Image(
+              systemName: playbackEngine.state == .playing ? "pause.fill" : "play.fill"
+            )
+            .font(.title2)
+          }
         }
+        .disabled(playbackEngine.state == .loading || isResolvingNext)
         Text(
           "\(format(currentTime)) / \(duration > 0 ? format(duration) : "--:--")"
         )
         .font(.caption.monospacedDigit())
         Spacer(minLength: 8)
-        if !currentLineEpisodes.isEmpty {
-          Button("选集") {
-            showingEpisodes = true
+        if chrome != .inline {
+          if !currentLineEpisodes.isEmpty {
+            Button("选集") {
+              showingEpisodes = true
+            }
+            .font(.subheadline.weight(.semibold))
           }
-          .font(.subheadline.weight(.semibold))
-        }
-        if playbackLines.count > 1 {
-          Button("线路") {
-            showingLines = true
+          if playbackLines.count > 1 {
+            Button("线路") {
+              showingLines = true
+            }
+            .font(.subheadline.weight(.semibold))
           }
-          .font(.subheadline.weight(.semibold))
+          Button {
+            showingRatePicker = true
+          } label: {
+            Text("\(Double(playbackRate).formatted())×")
+              .font(.caption.weight(.semibold))
+          }
         }
-        Text("\(Double(playbackRate).formatted())×")
-          .font(.caption.weight(.semibold))
       }
       .foregroundStyle(.white)
       .padding(.horizontal, 16)
-      .padding(.bottom, 18)
+      .padding(.bottom, chrome == .inline ? 10 : 18)
       .padding(.top, 8)
-      .background(.ultraThinMaterial.opacity(0.85))
     }
   }
 
   private var menuButton: some View {
     Menu {
-      Button {
-        model.download(
-          request: activeRequest ?? request,
-          item: item,
-          episode: activeEpisode ?? episode
-        )
-        showToast("已加入下载")
-      } label: {
-        Label("下载到本机", systemImage: "arrow.down.circle")
-      }
-      Button {
-        playbackEngine.pause()
-        dismiss()
-        model.selectedTab = .settings
-      } label: {
-        Label("查看下载", systemImage: "arrow.down.to.line")
-      }
       Button {
         showingCast = true
       } label: {

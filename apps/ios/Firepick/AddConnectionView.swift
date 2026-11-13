@@ -9,6 +9,19 @@ struct AddConnectionView: View {
   var body: some View {
     Form {
       Section {
+        Button("使用拾萤") {
+          Task {
+            if await model.applyOfficialSource() {
+              dismiss()
+            }
+          }
+        }
+        .disabled(model.isSwitchingConnection)
+      } footer: {
+        Text("一键使用当前发布的拾萤配置。")
+      }
+
+      Section {
         TextField("https://…/ios-sources.json", text: $urlText)
           .textInputAutocapitalization(.never)
           .autocorrectionDisabled()

@@ -36,6 +36,11 @@
       "api": "https://jszyapi.com/api.php/provide/vod"
     },
     {
+      "key": "modu",
+      "name": "魔都资源",
+      "api": "https://www.mdzyapi.com/api.php/provide/vod"
+    },
+    {
       "key": "ffzy",
       "name": "非凡资源",
       "api": "https://api.ffzyapi.com/api.php/provide/vod"
@@ -86,6 +91,11 @@
       "api": "https://caiji.moduapi.cc/api.php/provide/vod"
     },
     {
+      "key": "ruyi",
+      "name": "如意资源",
+      "api": "https://cj.rycjapi.com/api.php/provide/vod"
+    },
+    {
       "key": "haohua",
       "name": "豪华资源",
       "api": "https://hhzyapi.com/api.php/provide/vod"
@@ -112,7 +122,7 @@
     }
   ],
   "meta": {
-    "probedAt": "2026-11-13T06:43:01.798Z",
+    "probedAt": "2026-11-13T08:33:23.261Z",
     "keywords": [
       "庆余年",
       "三体",

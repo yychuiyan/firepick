@@ -10,6 +10,7 @@ const DEFAULT_PROVIDERS = [
   { key: 'lzi', name: '量子影视', api: 'https://cj.lziapi.com/api.php/provide/vod' },
   { key: 'zy360', name: '360资源', api: 'https://360zyzz.com/api.php/provide/vod' },
   { key: 'jisu', name: '极速资源', api: 'https://jszyapi.com/api.php/provide/vod' },
+  { key: 'modu', name: '魔都资源', api: 'https://www.mdzyapi.com/api.php/provide/vod' },
   { key: 'ffzy', name: '非凡资源', api: 'https://api.ffzyapi.com/api.php/provide/vod' },
   { key: 'bfzy', name: '暴风资源', api: 'https://bfzyapi.com/api.php/provide/vod' },
   { key: 'zuid', name: '最大资源', api: 'https://api.zuidapi.com/api.php/provide/vod' },
@@ -20,6 +21,7 @@ const DEFAULT_PROVIDERS = [
   { key: 'guangsu', name: '光速资源', api: 'https://api.guangsuapi.com/api.php/provide/vod' },
   { key: 'hongniu', name: '红牛资源', api: 'https://www.hongniuzy2.com/api.php/provide/vod' },
   { key: 'moduanime', name: '魔都动漫', api: 'https://caiji.moduapi.cc/api.php/provide/vod' },
+  { key: 'ruyi', name: '如意资源', api: 'https://cj.rycjapi.com/api.php/provide/vod' },
   { key: 'haohua', name: '豪华资源', api: 'https://hhzyapi.com/api.php/provide/vod' },
   { key: 'yzzy', name: '优质资源', api: 'https://api.yzzy-api.com/inc/apijson.php' },
   { key: 'huya', name: '虎牙资源', api: 'https://www.huyaapi.com/api.php/provide/vod' },
@@ -35,12 +37,147 @@ const MENU = [
   { id: 'anime', name: '动漫' },
 ];
 
+const FILTER_CLASS = [
+  { n: '全部', v: '' },
+  { n: '剧情', v: '剧情' },
+  { n: '喜剧', v: '喜剧' },
+  { n: '爱情', v: '爱情' },
+  { n: '动作', v: '动作' },
+  { n: '科幻', v: '科幻' },
+  { n: '悬疑', v: '悬疑' },
+  { n: '犯罪', v: '犯罪' },
+  { n: '奇幻', v: '奇幻' },
+  { n: '恐怖', v: '恐怖' },
+  { n: '战争', v: '战争' },
+  { n: '古装', v: '古装' },
+  { n: '家庭', v: '家庭' },
+];
+
+const FILTER_AREA = [
+  { n: '全部', v: '' },
+  { n: '大陆', v: '大陆' },
+  { n: '香港', v: '香港' },
+  { n: '台湾', v: '台湾' },
+  { n: '美国', v: '美国' },
+  { n: '韩国', v: '韩国' },
+  { n: '日本', v: '日本' },
+  { n: '英国', v: '英国' },
+  { n: '其他', v: '其他' },
+];
+
+const FILTER_YEAR = [
+  { n: '全部', v: '' },
+  { n: '2026', v: '2026' },
+  { n: '2025', v: '2025' },
+  { n: '2024', v: '2024' },
+  { n: '2023', v: '2023' },
+  { n: '2022', v: '2022' },
+  { n: '2021', v: '2021' },
+  { n: '2020', v: '2020' },
+  { n: '10年代', v: '2010' },
+  { n: '更早', v: '2000' },
+];
+
+const FILTER_SORT = [
+  { n: '综合', v: '' },
+  { n: '最新', v: 'year' },
+  { n: '豆瓣评分', v: 'douban' },
+];
+
+function bucketFilters() {
+  return [
+    { key: 'class', name: '类型', value: FILTER_CLASS },
+    { key: 'area', name: '地区', value: FILTER_AREA },
+    { key: 'year', name: '年份', value: FILTER_YEAR },
+    { key: 'by', name: '排序', value: FILTER_SORT },
+  ];
+}
+
+function menuFilters() {
+  const filters = {};
+  for (let i = 0; i < MENU.length; i++) {
+    const entry = MENU[i];
+    if (entry.id === 'recommend') continue;
+    filters['bucket|' + entry.id] = bucketFilters();
+  }
+  return filters;
+}
+
+function parseScore(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function applyExtend(list, extend) {
+  const ext = extend && typeof extend === 'object' ? extend : {};
+  const classKey = String(ext.class || '');
+  const areaKey = String(ext.area || '');
+  const yearKey = String(ext.year || '');
+  const sortKey = String(ext.by || '');
+  let out = list.slice();
+  if (classKey) {
+    out = out.filter(function (item) {
+      const blob = [item.type_name, item.vod_class, item.vod_tag, item.vod_name].join(' ');
+      return blob.indexOf(classKey) >= 0;
+    });
+  }
+  if (areaKey) {
+    out = out.filter(function (item) {
+      const area = String(item.vod_area || '');
+      if (areaKey === '其他') {
+        return !/(大陆|中国|香港|台湾|美国|韩国|日本|英国)/.test(area);
+      }
+      return area.indexOf(areaKey) >= 0 || (areaKey === '大陆' && /中国/.test(area));
+    });
+  }
+  if (yearKey) {
+    out = out.filter(function (item) {
+      const year = String(item.vod_year || '');
+      if (yearKey === '2010') return /^201\d/.test(year);
+      if (yearKey === '2000') {
+        const y = Number(year);
+        return Number.isFinite(y) && y > 0 && y < 2010;
+      }
+      return year.indexOf(yearKey) >= 0;
+    });
+  }
+  if (sortKey === 'year') {
+    out.sort(function (a, b) {
+      return String(b.vod_year || '').localeCompare(String(a.vod_year || ''));
+    });
+  } else if (sortKey === 'douban') {
+    out.sort(function (a, b) {
+      const left = parseScore(a.vod_douban_score) || parseScore(a.vod_score);
+      const right = parseScore(b.vod_douban_score) || parseScore(b.vod_score);
+      if (right !== left) return right - left;
+      return 0;
+    });
+  }
+  return out;
+}
+
 const BATCH_SIZE = 8;
 const REQUEST_TIMEOUT_MS = 8000;
 const ADULT_PATTERN = /伦理|福利|里番|无码|有码|SWAG|色情|成人|黄游|性爱|口交|三级片/i;
 
 function encode(value) {
   return encodeURIComponent(String(value == null ? '' : value));
+}
+
+function catalogParams(typeId, page, extend) {
+  const params = {
+    ac: 'videolist',
+    t: typeId,
+    pg: page,
+  };
+  const ext = extend && typeof extend === 'object' ? extend : {};
+  const yearParam = String(ext.year || '');
+  const areaParam = String(ext.area || '');
+  const classParam = String(ext.class || '');
+  if (/^\d{4}$/.test(yearParam)) params.year = yearParam;
+  if (areaParam && areaParam !== '其他') params.area = areaParam;
+  if (classParam) params.class = classParam;
+  return params;
 }
 
 function buildURL(api, params) {
@@ -152,7 +289,9 @@ function dedupeByTitle(list) {
 
 function classifyTypeName(name) {
   const n = String(name || '');
-  if (/动漫|动画|卡通|番剧|国漫|日漫/.test(n)) return 'anime';
+  if (/少儿|儿童|亲子|幼儿|Kids|卡通片/.test(n)) return 'kids';
+  if (/纪录|纪录片|Doc|纪录片/.test(n)) return 'doc';
+  if (/动漫|动画|番剧|国漫|日漫/.test(n)) return 'anime';
   if (/综艺|晚会|真人|脱口秀|娱乐|选秀/.test(n)) return 'variety';
   if (/电影|影片|院线/.test(n)) return 'movie';
   if (/剧|电视|连续|剧集|美剧|韩剧|日剧|港剧|台剧|泰剧|短剧/.test(n)) return 'tv';
@@ -196,7 +335,7 @@ function preferDirectPlaybackLines(item) {
 }
 
 function emptyBucketMap() {
-  return { tv: [], movie: [], variety: [], anime: [] };
+  return { tv: [], movie: [], variety: [], anime: [], kids: [], doc: [] };
 }
 
 function menuClasses() {
@@ -315,6 +454,7 @@ export default class extends Spider {
     return {
       class: menuClasses(),
       list: this.buildRecommendList(results),
+      filters: menuFilters(),
     };
   }
 
@@ -323,7 +463,7 @@ export default class extends Spider {
     return { list: result.list };
   }
 
-  async bucketContent(bucket, pg) {
+  async bucketContent(bucket, pg, extend) {
     const providers = this.providers || DEFAULT_PROVIDERS;
     const page = String(pg || 1);
 
@@ -335,7 +475,7 @@ export default class extends Spider {
         });
         return { provider: provider, latest: latest };
       });
-      const list = this.buildRecommendList(results);
+      const list = applyExtend(this.buildRecommendList(results), extend);
       return {
         page: Number(page) || 1,
         pagecount: list.length ? Number(page) + 1 : Number(page) || 1,
@@ -374,11 +514,10 @@ export default class extends Spider {
     const uniqueTargets = Array.from(byProvider.values());
 
     const results = await mapInBatches(uniqueTargets, BATCH_SIZE, async function (target) {
-      const data = await requestJSON(target.provider.api, {
-        ac: 'videolist',
-        t: target.typeId,
-        pg: page,
-      });
+      const data = await requestJSON(
+        target.provider.api,
+        catalogParams(target.typeId, page, extend)
+      );
       return { provider: target.provider, data: data };
     });
 
@@ -399,7 +538,7 @@ export default class extends Spider {
         if (item) list.push(item);
       }
     }
-    const deduped = dedupeByTitle(list);
+    const deduped = applyExtend(dedupeByTitle(list), extend);
     return {
       page: Number(page) || 1,
       pagecount: pagecount,
@@ -414,27 +553,30 @@ export default class extends Spider {
     if (!value) return { list: [] };
 
     if (value.provider === 'bucket') {
-      return this.bucketContent(value.id, pg);
+      return this.bucketContent(value.id, pg, extend);
     }
 
     const provider = this.providers.find(function (item) {
       return item.key === value.provider;
     });
     if (!provider) return { list: [] };
-    const data = await requestJSON(provider.api, {
-      ac: 'videolist',
-      t: value.id,
-      pg: String(pg || 1),
-    });
+    const data = await requestJSON(
+      provider.api,
+      catalogParams(value.id, String(pg || 1), extend)
+    );
     const list = data && Array.isArray(data.list) ? data.list : [];
+    const mapped = applyExtend(
+      list.map(function (item) {
+        return mediaItem(provider, Object.assign({}, item));
+      }).filter(Boolean),
+      extend
+    );
     return {
       page: pg || 1,
       pagecount: data && data.pagecount ? data.pagecount : 1,
-      limit: data && data.limit ? data.limit : list.length,
-      total: data && data.total ? data.total : list.length,
-      list: list.map(function (item) {
-        return mediaItem(provider, Object.assign({}, item));
-      }).filter(Boolean),
+      limit: data && data.limit ? data.limit : mapped.length,
+      total: data && data.total ? data.total : mapped.length,
+      list: mapped,
     };
   }
 

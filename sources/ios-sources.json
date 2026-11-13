@@ -1,11 +1,11 @@
 {
-  "notice": "拾萤精选",
+  "notice": "拾萤",
   "sites": [
     {
       "key": "firepick_cms",
-      "name": "拾萤精选",
+      "name": "拾萤",
       "type": 3,
-      "api": "https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=7",
+      "api": "https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=10",
       "searchable": 1,
       "quickSearch": 1,
       "changeable": 0,

@@ -11,10 +11,34 @@ struct SourceConnection: Codable, Identifiable, Equatable {
   var name: String
   var updatedAt: Date
   var displayURL: String?
+  var enabled: Bool
 
   var id: String { url }
   var displayAddress: String {
     SourceAddress.displayURL(displayURL ?? url)
+  }
+
+  init(
+    url: String,
+    name: String,
+    updatedAt: Date,
+    displayURL: String? = nil,
+    enabled: Bool = true
+  ) {
+    self.url = url
+    self.name = name
+    self.updatedAt = updatedAt
+    self.displayURL = displayURL
+    self.enabled = enabled
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    url = try container.decode(String.self, forKey: .url)
+    name = try container.decode(String.self, forKey: .name)
+    updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    displayURL = try container.decodeIfPresent(String.self, forKey: .displayURL)
+    enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
   }
 }
 
@@ -198,6 +222,10 @@ final class AppModel {
   var selectedTab: Tab = .vod
   var configuration: VodConfiguration = .empty
   var selectedSite: SiteConfiguration?
+  /// Item the user left playing on the detail page. Browse shows a return bar.
+  var resumeBrowseItem: MediaItem?
+  static let officialSourceVersion = "10"
+  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=10"
   var selectedCategory: FirepickCore.Category?
   var homeResult: MediaResult?
   var detailResult: MediaResult?
@@ -232,11 +260,16 @@ final class AppModel {
   var errorMessage: String?
   /// NWPathMonitor: false when no usable route.
   var isNetworkAvailable = true
+  /// Cellular or constrained path. Shown as a dismissible weak-network banner.
+  var isNetworkConstrained = false
   /// User dismissed the offline banner until connectivity changes.
   var suppressNetworkBanner = false
+  var suppressConstrainedBanner = false
   private var homeLoadGeneration = 0
   private var searchLoadGeneration = 0
   var connectionLatencyMS: [String: Int] = [:]
+  /// Reserved. Cloud skip is not wired; local intro/outro marks still apply.
+  var cloudAdSkipEnabled = false
   var probingConnectionURLs: Set<String> = []
   var videoOutputPreference: VideoOutputPreference = .automatic
   var decodePreference: DecodePreference = .automatic
@@ -291,7 +324,6 @@ final class AppModel {
 
   private var coordinator: ProviderCoordinator?
   private var library: LibraryStore?
-  var downloads: DownloadManager?
   private var persistence: AppPersistence?
   private var bridgeClient: BridgeClient?
   private let router = SourceRouter()
@@ -309,7 +341,6 @@ final class AppModel {
     startNetworkMonitoring()
     do {
       library = try LibraryStore()
-      downloads = try DownloadManager()
       persistence = try AppPersistence()
       loadPreferences()
       try await refreshLibrary()
@@ -415,6 +446,9 @@ final class AppModel {
     if let value = persistence?.backgroundPlaybackEnabled {
       backgroundPlaybackEnabled = value
     }
+    if let value = persistence?.cloudAdSkipEnabled {
+      cloudAdSkipEnabled = value
+    }
     if let value = persistence?.incognitoModeEnabled {
       incognitoModeEnabled = value
     }
@@ -449,7 +483,7 @@ final class AppModel {
     sourceConnections = (try? persistence?.loadSourceConnections()) ?? []
     searchHistory = persistence?.searchHistory ?? []
     if let currentURL = persistence?.currentConnectionURL {
-      currentConnection = sourceConnections.first { $0.url == currentURL }
+      currentConnection = sourceConnections.first { $0.url == currentURL && $0.enabled }
     }
     refreshCacheSize()
   }
@@ -498,11 +532,31 @@ final class AppModel {
   }
 
   func loadConnection(_ connection: SourceConnection) async {
+    guard connection.enabled else {
+      errorMessage = "这条线路已禁用"
+      return
+    }
     if await applyConfiguration(
       urlString: connection.url,
       displayURL: connection.displayAddress
     ) {
       currentConnection = connection
+    }
+  }
+
+  func setConnectionEnabled(_ connection: SourceConnection, enabled: Bool) async {
+    guard let index = sourceConnections.firstIndex(where: { $0.id == connection.id }) else { return }
+    guard sourceConnections[index].enabled != enabled else { return }
+    sourceConnections[index].enabled = enabled
+    try? persistence?.saveSourceConnections(sourceConnections)
+    guard !enabled, currentConnection?.id == connection.id else { return }
+    if let next = sourceConnections.first(where: \.enabled) {
+      await loadConnection(next)
+    }
+    if currentConnection?.id == connection.id {
+      currentConnection = nil
+      persistence?.saveCurrentConnectionURL(nil)
+      unloadConfiguration()
     }
   }
 
@@ -534,7 +588,8 @@ final class AppModel {
       url: url.absoluteString,
       name: url.host ?? url.absoluteString,
       updatedAt: .now,
-      displayURL: displayURL ?? existing?.displayURL
+      displayURL: displayURL ?? existing?.displayURL,
+      enabled: true
     )
     sourceConnections.removeAll { $0.url == connection.url }
     sourceConnections.insert(connection, at: 0)
@@ -582,6 +637,11 @@ final class AppModel {
   func setBackgroundPlaybackEnabled(_ value: Bool) {
     backgroundPlaybackEnabled = value
     persistence?.saveBackgroundPlaybackEnabled(value)
+  }
+
+  func setCloudAdSkipEnabled(_ value: Bool) {
+    cloudAdSkipEnabled = value
+    persistence?.saveCloudAdSkipEnabled(value)
   }
 
   func setIncognitoModeEnabled(_ value: Bool) {
@@ -853,6 +913,11 @@ final class AppModel {
     persistence?.saveSearchHistory(searchHistory)
   }
 
+  /// Drop shared URL responses left by playback. Poster memory cache stays.
+  func releasePlaybackCache() {
+    URLCache.shared.removeAllCachedResponses()
+  }
+
   func clearCache() {
     URLCache.shared.removeAllCachedResponses()
     RemoteImageCache.clear()
@@ -869,7 +934,7 @@ final class AppModel {
         try? FileManager.default.removeItem(at: item)
       }
     }
-    cacheStatus = "已清理网络与临时缓存（不含下载与观看记录）"
+    cacheStatus = "已清理网络与临时缓存"
     cacheSizeText = "0 KB"
   }
 
@@ -1156,6 +1221,9 @@ final class AppModel {
       errorMessage = nil
       if let first = homeResult?.classes.first {
         selectedCategory = first
+        // 推荐首页不展示筛选；切到分类时再由 loadCategory 注入 filters。
+        categoryFilters = []
+        filterSelections = [:]
         // Home already returns the 推荐 list; skip a redundant category fetch.
         if !first.typeId.hasPrefix("bucket|recommend") {
           await loadCategory(first, site: site)
@@ -1197,8 +1265,12 @@ final class AppModel {
       Task { @MainActor in
         let online = path.status == .satisfied
         self?.isNetworkAvailable = online
+        self?.isNetworkConstrained = online && path.isConstrained
         if online {
           self?.suppressNetworkBanner = false
+        }
+        if !path.isConstrained {
+          self?.suppressConstrainedBanner = false
         }
       }
     }
@@ -1270,6 +1342,9 @@ final class AppModel {
       if result.classes.isEmpty {
         result.classes = homeResult?.classes ?? []
       }
+      if result.filters == nil {
+        result.filters = homeResult?.filters
+      }
       attachSourceKey(site.key, to: &result)
       homeResult = result
       currentPage = 1
@@ -1282,6 +1357,12 @@ final class AppModel {
 
   func selectFilter(_ filter: SourceFilter, value: FilterValue) async {
     filterSelections[filter.key] = value.value
+    guard let selectedCategory else { return }
+    await loadCategory(selectedCategory)
+  }
+
+  func applyFilters(_ selections: [String: String]) async {
+    filterSelections = selections
     guard let selectedCategory else { return }
     await loadCategory(selectedCategory)
   }
@@ -1317,6 +1398,9 @@ final class AppModel {
       guard generation == homeLoadGeneration else { return }
       if result.classes.isEmpty {
         result.classes = homeResult?.classes ?? []
+      }
+      if result.filters == nil {
+        result.filters = homeResult?.filters
       }
       attachSourceKey(site.key, to: &result)
       let existing = Set(homeResult?.list.map(\.id) ?? [])
@@ -1829,27 +1913,6 @@ final class AppModel {
     }
   }
 
-  func download(
-    request: PlaybackRequest,
-    item: MediaItem,
-    episode: Episode?
-  ) {
-    guard let downloads else { return }
-    let sourceKey = item.sourceKey ?? selectedSite?.key ?? "unknown"
-    let episode =
-      episode
-      ?? Episode(
-        name: item.name,
-        value: request.url.absoluteString
-      )
-    downloads.download(
-      request: request,
-      sourceKey: sourceKey,
-      item: item,
-      episode: episode
-    )
-  }
-
   func isFavorite(sourceKey: String, item: MediaItem) -> Bool {
     favorites.contains {
       $0.sourceKey == sourceKey && $0.item.vodId == item.vodId
@@ -2006,9 +2069,16 @@ final class AppModel {
     }
 
     if let currentURL = persistence.currentConnectionURL {
-      currentConnection = sourceConnections.first { $0.url == currentURL }
+      currentConnection = sourceConnections.first { $0.url == currentURL && $0.enabled }
     }
     if currentConnection == nil {
+      if let fallback = sourceConnections.first(where: \.enabled) {
+        await loadConnection(fallback)
+        if currentConnection != nil {
+          await selectPendingInitialSite()
+          return
+        }
+      }
       // No selected warehouse → never keep orphaned sites (e.g. leftover 虎牙).
       unloadConfiguration()
       return
@@ -2052,6 +2122,22 @@ final class AppModel {
     } else {
       await selectPendingInitialSite()
     }
+  }
+
+  var officialSourceNeedsUpdate: Bool {
+    guard let raw = currentConnection?.url,
+      let components = URLComponents(string: raw),
+      let host = components.host?.lowercased()
+    else { return false }
+    let officialHost = host == "dl.yychuiyan.com" || host == "firepick-1302621537.cos.ap-shanghai.myqcloud.com"
+    guard officialHost, components.path.contains("ios-sources.json") else { return false }
+    let version = components.queryItems?.first(where: { $0.name == "v" })?.value
+    return version != Self.officialSourceVersion
+  }
+
+  @discardableResult
+  func applyOfficialSource() async -> Bool {
+    await applyConfiguration(urlString: Self.officialSourceURL)
   }
 
   /// Sites that can run on-device (HTTP / QuickJS) without Android Bridge.

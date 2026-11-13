@@ -25,9 +25,24 @@ struct SourceProbe {
     } else {
       siteKey = nil
     }
+    let categoryID: String?
+    if let index = urls.firstIndex(of: "--category"), index + 1 < urls.count {
+      categoryID = urls[index + 1]
+      urls.removeSubrange(index...index + 1)
+    } else {
+      categoryID = nil
+    }
+    var filterValues: [String: String] = [:]
+    while let index = urls.firstIndex(of: "--filter"), index + 1 < urls.count {
+      let pair = urls[index + 1].split(separator: "=", maxSplits: 1).map(String.init)
+      if pair.count == 2 {
+        filterValues[pair[0]] = pair[1]
+      }
+      urls.removeSubrange(index...index + 1)
+    }
     guard !urls.isEmpty else {
       print(
-        "Usage: firepick-source-probe [--invoke] [--live] [--search <keyword>] [--site <key>] <config-url> [...]"
+        "Usage: firepick-source-probe [--invoke] [--live] [--search <keyword>] [--site <key>] [--category <type-id>] [--filter <key=value>] <config-url> [...]"
       )
       exit(2)
     }
@@ -38,7 +53,9 @@ struct SourceProbe {
         invoke: invoke,
         includeLive: includeLive,
         searchKeyword: searchKeyword,
-        siteKey: siteKey
+        siteKey: siteKey,
+        categoryID: categoryID,
+        filterValues: filterValues
       )
     }
   }
@@ -48,7 +65,9 @@ struct SourceProbe {
     invoke: Bool,
     includeLive: Bool,
     searchKeyword: String?,
-    siteKey: String?
+    siteKey: String?,
+    categoryID: String?,
+    filterValues: [String: String]
   ) async {
     print("SOURCE \(rawURL)")
     guard let url = URL(string: rawURL) else {
@@ -103,7 +122,9 @@ struct SourceProbe {
             configuration: configuration,
             baseURL: url,
             searchKeyword: searchKeyword,
-            siteKey: siteKey
+            siteKey: siteKey,
+            categoryID: categoryID,
+            filterValues: filterValues
           )
         }
         if includeLive {
@@ -160,7 +181,9 @@ struct SourceProbe {
     configuration: VodConfiguration,
     baseURL: URL,
     searchKeyword: String?,
-    siteKey: String?
+    siteKey: String?,
+    categoryID: String?,
+    filterValues: [String: String]
   ) async throws {
     let site =
       siteKey.flatMap { key in
@@ -205,6 +228,21 @@ struct SourceProbe {
     }
     let home = try await provider.homeContent()
     print("  INVOKE \(resolved.name) home classes=\(home.classes.count) items=\(home.list.count)")
+    if let categoryID {
+      let category = try await provider.categoryContent(
+        typeId: categoryID,
+        page: 1,
+        filter: true,
+        extend: filterValues
+      )
+      let selected = filterValues
+        .sorted { $0.key < $1.key }
+        .map { "\($0.key)=\($0.value)" }
+        .joined(separator: ",")
+      print(
+        "  INVOKE category=\(categoryID) filters=\(selected.isEmpty ? "-" : selected) items=\(category.list.count)"
+      )
+    }
     guard site.isSearchable || searchKeyword != nil else {
       print("  INVOKE search skipped")
       if let item = home.list.first {

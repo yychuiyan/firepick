@@ -6,7 +6,6 @@ enum SettingsDestination: Hashable {
   case connectionDetail(String)
   case addConnection
   case sources
-  case downloads
   case playback
 }
 
@@ -20,7 +19,6 @@ struct SettingsView: View {
     NavigationStack(path: $path) {
       Form {
         linesSection
-        downloadsSection
         playbackSection
         storageSection
         ProvisioningExpirySection()
@@ -48,8 +46,6 @@ struct SettingsView: View {
           AddConnectionView()
         case .sources:
           SourceManagementView()
-        case .downloads:
-          LibraryView(mode: .downloads)
         case .playback:
           PlaybackSettingsView()
         }
@@ -63,7 +59,7 @@ struct SettingsView: View {
         }
         Button("取消", role: .cancel) {}
       } message: {
-        Text("不会删除收藏、历史、源配置或本机下载文件。")
+        Text("不会删除收藏、历史或源配置。")
       }
       .onAppear {
         model.refreshCacheSize()
@@ -79,40 +75,36 @@ struct SettingsView: View {
   @ViewBuilder
   private var linesSection: some View {
     Section {
-      HStack(alignment: .center, spacing: 12) {
-        VStack(alignment: .leading, spacing: 4) {
-          Text("当前线路")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Text(currentLineTitle)
-            .foregroundStyle(.primary)
-            .lineLimit(1)
-          if let connection = model.currentConnection {
+      if let connection = model.currentConnection {
+        HStack(alignment: .center, spacing: 12) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("当前线路")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            Text(currentLineTitle)
+              .foregroundStyle(.primary)
+              .lineLimit(1)
             MiddleTruncatingText(
               text: connection.displayAddress,
               font: .preferredFont(forTextStyle: .caption1).monospaced(),
               textColor: .secondaryLabel
             )
             .frame(height: 16)
-          } else {
-            Text("尚未选择")
-              .font(.caption)
+          }
+          Spacer(minLength: 8)
+          if let ms = model.connectionLatencyMS[connection.url] {
+            Text("\(ms)ms")
+              .font(.caption.monospacedDigit().weight(.medium))
               .foregroundStyle(.secondary)
+              .padding(.horizontal, 8)
+              .padding(.vertical, 4)
+              .background(.secondary.opacity(0.12), in: Capsule())
           }
         }
-        Spacer(minLength: 8)
-        if let connection = model.currentConnection,
-          let ms = model.connectionLatencyMS[connection.url]
-        {
-          Text("\(ms)ms")
-            .font(.caption.monospacedDigit().weight(.medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.secondary.opacity(0.12), in: Capsule())
-        }
+        .accessibilityElement(children: .combine)
+      } else {
+        LabeledContent("当前线路", value: "尚未选择")
       }
-      .accessibilityElement(children: .combine)
 
       if model.isSwitchingConnection {
         HStack(spacing: 8) {
@@ -123,14 +115,23 @@ struct SettingsView: View {
       }
 
       NavigationLink(value: SettingsDestination.lines) {
-        LabeledContent(
-          "已添加的线路",
-          value: "\(model.sourceConnections.count) 个"
-        )
+        Text("线路管理")
       }
 
       NavigationLink(value: SettingsDestination.addConnection) {
-        Label("添加线路", systemImage: "plus.circle")
+        Text("添加线路")
+      }
+
+      if model.officialSourceNeedsUpdate {
+        Button("更新拾萤配置") {
+          Task { await model.applyOfficialSource() }
+        }
+        .disabled(model.isSwitchingConnection)
+      } else if model.currentConnection == nil {
+        Button("使用拾萤") {
+          Task { await model.applyOfficialSource() }
+        }
+        .disabled(model.isSwitchingConnection)
       }
 
       if !model.availableDepots.isEmpty {
@@ -189,17 +190,6 @@ struct SettingsView: View {
     }
   }
 
-  private var downloadsSection: some View {
-    Section("本机") {
-      NavigationLink(value: SettingsDestination.downloads) {
-        LabeledContent(
-          "本机下载",
-          value: "\(model.downloads?.entries.count ?? 0)"
-        )
-      }
-    }
-  }
-
   private var playbackSection: some View {
     Section("播放") {
       NavigationLink(value: SettingsDestination.playback) {
@@ -244,10 +234,6 @@ struct SettingsView: View {
   }
 
   private var currentLineTitle: String {
-    if let site = model.selectedSite {
-      let name = site.name.trimmingCharacters(in: .whitespacesAndNewlines)
-      if !name.isEmpty { return name }
-    }
     if let notice = model.configuration.notice?
       .trimmingCharacters(in: .whitespacesAndNewlines),
       !notice.isEmpty

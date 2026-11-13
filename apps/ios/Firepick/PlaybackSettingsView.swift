@@ -71,7 +71,7 @@ struct PlaybackSettingsView: View {
             Text(value.title).tag(value)
           }
         }
-        Text("基于本机标记的片头片尾跳过，不是云端广告识别。")
+        Text("基于本机标记的片头片尾跳过。")
           .font(.footnote)
           .foregroundStyle(.secondary)
         if model.adSkipPreference != .off {

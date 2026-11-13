@@ -37,17 +37,34 @@ struct CachedRemoteImage<Placeholder: View>: View {
   @ViewBuilder var placeholder: () -> Placeholder
 
   @State private var image: UIImage?
+  @State private var failed = false
+  @State private var reloadToken = 0
 
   var body: some View {
     Group {
       if let image {
         Image(uiImage: image)
           .resizable()
+      } else if failed {
+        placeholder()
+          .overlay {
+            Button {
+              failed = false
+              reloadToken += 1
+            } label: {
+              Image(systemName: "arrow.clockwise")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(8)
+                .background(.ultraThinMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+          }
       } else {
         placeholder()
       }
     }
-    .task(id: url?.absoluteString) {
+    .task(id: "\(url?.absoluteString ?? "")|\(reloadToken)") {
       await load()
     }
   }
@@ -55,10 +72,12 @@ struct CachedRemoteImage<Placeholder: View>: View {
   private func load() async {
     guard let url else {
       image = nil
+      failed = false
       return
     }
     if let cached = RemoteImageCache.cachedImage(for: url) {
       image = cached
+      failed = false
       return
     }
     do {
@@ -67,12 +86,14 @@ struct CachedRemoteImage<Placeholder: View>: View {
         (200..<300).contains(http.statusCode),
         let loaded = UIImage(data: data)
       else {
+        failed = true
         return
       }
       RemoteImageCache.store(loaded, for: url)
       image = loaded
+      failed = false
     } catch {
-      // Keep placeholder on failure; scrolling can retry via task(id:).
+      failed = true
     }
   }
 }

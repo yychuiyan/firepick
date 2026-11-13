@@ -74,27 +74,19 @@ https://raw.githubusercontent.com/gaotianliuyun/gao/master/js.json
 拾萤自建的聚合配置地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/ios-sources.json?v=7
+https://dl.yychuiyan.com/firepick/ios-sources.json?v=10
 ```
 
-该地址提供一个聚合点播站「拾萤精选」（背后扇出多路 AppleCMS 采集接口）
+该地址提供一个聚合点播站「拾萤」（背后扇出多路 AppleCMS 采集接口）
 和三组电视源，可直接验证首页、分类、搜索、详情、选集、HLS 播放与频道直播。
 显示名里的「爱奇艺 / 量子」等是采集库名称，不是正版平台官方接口。
 上游采集接口和直播频道可能临时失效，不承诺长期固定内容；维护时可重跑
 `node scripts/probe-cms-providers.mjs` 更新白名单并 bump `firepick-cms.js?v=`，
 不必反复重装 App。
 
-### 手动添加单个源
+### 添加线路
 
-填写：
-
-- 源标识 `key`
-- 显示名称
-- 类型 `0/1/2/3/4`
-- API 地址
-- 可选 JAR 地址
-
-单个源适合手动维护 HTTP/XML/JSON 接口；完整配置适合一次导入多个站点。
+在「设置 → 线路管理」添加上面的配置地址。点播源页只列出当前线路里的源，用来切换；不再提供「从配置地址添加」或「手动添加点播源」。
 
 ## 4. 判断配置地址是否有效
 
@@ -181,15 +173,14 @@ https://dl.yychuiyan.com/firepick/ios-sources.json?v=7
 - 无网时顶部显示「网络不可用」横幅，可重试或关闭。
 - 「智能去广」开启后可在菜单标记片头结束/片尾开始；播放中出现「跳过片头」。
 - 后台播放关：切到后台会暂停；开：按系统音频会话尽量续播。
-- 下载支持暂停、重试和断点续传；DLNA 投屏需同一局域网。
+- DLNA 投屏需同一局域网。
 
 设置结构：
 
-- **线路与源**：当前线路、已添加线路、添加线路、点播源管理
-- **本机下载**：仅下载队列（收藏/最近观看不在设置里）
+- **线路与源**：当前线路、已添加线路（可禁用）、添加线路、点播源管理
 - **播放设置**：引擎 / 输出 / 解码 / 智能去广 / 后台播放 / 无痕 / 多源搜索 /
   缓冲 / 字幕特效 / 海报尺寸；并可进入弹幕设置
-- **存储与关于**：清理缓存（不删收藏、历史、源配置或下载文件）
+- **存储与关于**：清理缓存（不删收藏、历史或源配置）
 
 点播顶栏从右到左为：**最近观看 | 收藏 | 搜索**。收藏与最近观看为海报网格，
 支持清空。首页有观看记录时显示「继续观看」横滑行。
@@ -215,7 +206,6 @@ iOS 应用沙盒内主要保存：
 ```text
 Library/Application Support/Firepick/configuration.json
 Library/Application Support/Firepick/Firepick.sqlite
-Library/Application Support/Firepick/Downloads/downloads.json
 ```
 
 Bridge 凭据保存在 Keychain。普通 SideStore 更新不会清除应用容器数据。

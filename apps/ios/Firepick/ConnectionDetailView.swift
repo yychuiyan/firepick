@@ -17,6 +17,10 @@ struct ConnectionDetailView: View {
     model.currentConnection?.id == connection.id
   }
 
+  private var liveConnection: SourceConnection {
+    model.sourceConnections.first { $0.id == connection.id } ?? connection
+  }
+
   var body: some View {
     List {
       Section {
@@ -40,8 +44,19 @@ struct ConnectionDetailView: View {
         Button("重新测速") {
           Task { await model.probeConnectionLatency(connection) }
         }
+        Toggle(
+          "启用",
+          isOn: Binding(
+            get: { liveConnection.enabled },
+            set: { enabled in
+              Task { await model.setConnectionEnabled(liveConnection, enabled: enabled) }
+            }
+          )
+        )
       } header: {
         Text("线路")
+      } footer: {
+        Text(liveConnection.enabled ? "关闭后这条线路不会被选为当前线路。" : "已禁用。打开后才能切换到这条线路。")
       }
 
       if isLoadingPreview {
@@ -101,11 +116,15 @@ struct ConnectionDetailView: View {
             if model.isSwitchingConnection {
               ProgressView()
             }
-            Text(isCurrent ? "刷新此线路" : "切换到此线路")
+            Text(
+              liveConnection.enabled
+                ? (isCurrent ? "刷新此线路" : "切换到此线路")
+                : "线路已禁用"
+            )
               .frame(maxWidth: .infinity)
           }
         }
-        .disabled(model.isSwitchingConnection)
+        .disabled(model.isSwitchingConnection || !liveConnection.enabled)
       }
     }
     .navigationTitle(connection.name)

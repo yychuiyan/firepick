@@ -31,6 +31,11 @@ struct RootView: View {
             },
             onDismiss: { model.suppressNetworkBanner = true }
           )
+        } else if model.isNetworkConstrained, !model.suppressConstrainedBanner {
+          ErrorBannerView(
+            message: "低数据模式已开启，播放可能更卡",
+            onDismiss: { model.suppressConstrainedBanner = true }
+          )
         } else if let message = model.errorMessage, !message.isEmpty {
           ErrorBannerView(
             message: message,
@@ -42,6 +47,7 @@ struct RootView: View {
         }
       }
       .animation(.easeInOut(duration: 0.2), value: model.isNetworkAvailable)
+      .animation(.easeInOut(duration: 0.2), value: model.isNetworkConstrained)
       .animation(.easeInOut(duration: 0.2), value: model.errorMessage)
     }
     .fullScreenCover(

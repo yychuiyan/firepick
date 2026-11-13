@@ -80,11 +80,7 @@ struct ProvisioningExpirySection: View {
       Bundle.main.object(
         forInfoDictionaryKey: "CFBundleShortVersionString"
       ) as? String ?? "未知"
-    let build =
-      Bundle.main.object(
-        forInfoDictionaryKey: "CFBundleVersion"
-      ) as? String ?? "未知"
-    return "拾萤 \(version)（\(build)）"
+    return "拾萤 \(version)"
   }
 
   private static let dateFormatter: DateFormatter = {

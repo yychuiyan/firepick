@@ -89,13 +89,13 @@ with authorized endpoints before uploading a real `ios-sources.json`.
 The current curated configuration is:
 
 ```text
-https://dl.yychuiyan.com/firepick/ios-sources.json?v=7
+https://dl.yychuiyan.com/firepick/ios-sources.json?v=10
 ```
 
 Its JavaScript aggregator is:
 
 ```text
-https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=7
+https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=10
 ```
 
 Full acceptance probe:
@@ -103,10 +103,10 @@ Full acceptance probe:
 ```bash
 swift run --package-path Packages/FirepickKit firepick-source-probe \
   --invoke --live --search '庆余年' --site firepick_cms \
-  'https://dl.yychuiyan.com/firepick/ios-sources.json?v=7'
+  'https://dl.yychuiyan.com/firepick/ios-sources.json?v=10'
 ```
 
-Expected current shape: one on-device JS site (`拾萤精选`) aggregating ~20+
+Expected current shape: one on-device JS site (`拾萤`) aggregating ~20+
 AppleCMS providers (see `sources/providers.whitelist.json`), synthetic menu
 buckets, non-zero search results for probe keywords, a direct playback URL,
 and three parsed live playlists. Re-probe with
