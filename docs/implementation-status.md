@@ -26,7 +26,7 @@ Updated 2026-11-12.
 
 ## Verification on 2026-11-12
 
-- Swift Package: 48 tests in 14 suites passed
+- Swift Package: 57 tests in 16 suites passed
 - iPhone 17 Pro / iOS 26 simulator: clean Debug build, install and launch
 - iPad Pro 11-inch (M4) / iOS 26 simulator: install and HLS playback verified
 - MPVKit-GPL: MKV video and embedded subtitle rendering verified in the iPhone

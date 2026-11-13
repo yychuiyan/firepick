@@ -43,10 +43,12 @@ Bridge 复用固定版本的 FongMi CatVodSpider、QuickJS 和运行时模块，
 | Provider | iOS 本机 | Firepick Bridge |
 | --- | --- | --- |
 | HTTP/XML/JSON | 是 | 是 |
-| QuickJS `.js` | 当前需 Bridge | 是 |
-| Java `csp_` / JAR | 否 | 是 |
+| QuickJS / CatVod `.js` | 是（JavaScriptCore 宿主，见 `OnDeviceJavaScriptHost`） | 可选 |
+| Java `csp_` / JAR | 否 | 是（遗留） |
 | Python `.py` | 否 | 需安装运行时 |
 | Node.js `node:` | 否 | 需安装运行时 |
 | Thunder / BD-J / Native | 否 | 需安装运行时 |
+
+产品默认走本机 HTTP/JS；Agent 接手说明见 [agent-ios-native-sources.md](agent-ios-native-sources.md)。
 
 所有 UI 只通过 `SourceRouter` 消费路由结果，不直接判断 API 字符串。

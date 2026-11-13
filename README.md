@@ -2,7 +2,7 @@
 
 [拾萤用户配置手册](docs/user-configuration.md)
 
-拾萤是一个面向 iPhone 与 iPad 的 CatVod/TVBox 兼容影音客户端。它既可以在 iOS 本机执行 HTTP、XML、JSON 源，也可以通过局域网 Android Bridge 运行 Java/JAR、Python、Node.js 等复杂 Provider。
+拾萤是一个面向 iPhone 与 iPad 的 CatVod/TVBox 兼容影音客户端。日常以 iOS 本机 HTTP、XML、JSON 与 CatVod JS 源为主；仓库仍保留 Android Bridge 工程，但 App 设置中已不再提供配对入口。
 
 项目同时包含：
 
@@ -19,9 +19,9 @@
 当前公开发布版本：
 
 ```text
-Version: 0.1.18
-Build:   19
-SHA-256: 5acd24052c494deaa1cdf735a181b4103dbc809cc115f93dfe252743c99c2d94
+Version: 0.1.19
+Build:   20
+SHA-256: 75d692b8db12f49cd0f9065faca939d305dce09f3aa2d9a656e7e3dd2d4e0d2a
 ```
 
 SideStore 更新源：
@@ -33,7 +33,7 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 当前 IPA 下载地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/Firepick-0.1.18.ipa
+https://dl.yychuiyan.com/firepick/Firepick-0.1.19.ipa
 ```
 
 ## 功能概览
@@ -183,7 +183,7 @@ make bootstrap
 make test
 ```
 
-当前基线为 48 项测试、14 个 suite 全部通过。
+当前基线为 57 项测试、16 个 suite 全部通过。
 
 生成 Xcode 工程：
 
@@ -253,22 +253,8 @@ Bridge 默认端口：
 9443
 ```
 
-Android 设备安装 Bridge 后：
-
-1. 将 Android 与 iOS 设备接入同一局域网。
-2. 打开拾萤 Bridge，等待状态显示“运行中”。
-3. 在 Bridge 页面按需安装 Python、Node.js、Thunder、BD-J 运行时。
-4. 在 iOS 拾萤的“设置 → 扩展与连接 → Android Bridge”扫码或粘贴配对 URI。
-
-Bridge 内置：
-
-- QuickJS
-- Java/JAR CatVod Provider
-- TLS 证书固定
-- 一次性配对码
-- 设备 Bearer Token
-- 配置 SHA-256 校验
-- 独立 Provider 会话
+当前产品路径以 iOS 本机 HTTP / CatVod JS 为主，**设置页已不再提供 Bridge 配对入口**。
+Android Bridge 工程仍保留在仓库中供实验/诊断，日常自用不需配对。
 
 ## 7. 源配置诊断工具
 
@@ -374,7 +360,7 @@ FIREPICK_CURL_DOH_URL="https://223.5.5.5/dns-query" \
 
 版本规则：
 
-- 后续补丁版本依次使用 `0.1.10`、`0.1.11`、`0.1.12`、`0.1.13`、 `0.1.14`、`0.1.15`、`0.1.16`、`0.1.17`、`0.1.18`，不跳到 `0.2.0`。
+- 后续补丁版本依次使用 `0.1.10`、`0.1.11`、`0.1.12`、`0.1.13`、 `0.1.14`、`0.1.15`、`0.1.16`、`0.1.17`、`0.1.18`、`0.1.19`，不跳到 `0.2.0`。
 - 每次发布增加 `MARKETING_VERSION`。
 - 同一版本重新构建时仍应增加 `CURRENT_PROJECT_VERSION`。
 - 不复用旧版本号发布不同代码。

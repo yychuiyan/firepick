@@ -148,45 +148,21 @@ https://raw.githubusercontent.com/gaotianliuyun/gao/master/js.json
 https://live.zbds.top/tv/iptv4.m3u
 ```
 
-## 8. Android Bridge
+## 8. Android Bridge（已下线设置入口）
 
-没有 Android 设备时无需配置 Bridge。iOS 本机可以运行 HTTP、XML、JSON
-点播源和 M3U/TXT 直播源。
+日常使用**不需要** Android Bridge。iOS 本机可运行：
 
-需要 Bridge 的情况：
+- HTTP / XML / JSON 点播源
+- CatVod QuickJS `.js` 源（`OnDeviceJavaScriptHost`）
+- M3U / TXT 直播源
 
-- QuickJS `.js`
+设置页已移除 Bridge 配对。以下类型当前不可用，请改用本机 HTTP/JS
+或自建 iOS 配置仓：
+
 - Java `csp_` / JAR
-- Python
-- Node.js
-- Thunder
-- BD-J
-- 动态原生模块
-- 复杂 `proxy://` 代理流
-
-配对步骤：
-
-1. Android 安装拾萤 Bridge。
-2. 保持 Android 与 iPhone/iPad 在同一 Wi-Fi。
-3. 打开 Android Bridge，等待状态显示“运行中”。
-4. 在 iPhone 上进入：
-
-```text
-设置 → 扩展与连接 → Android Bridge
-```
-
-5. 点击“扫描 Bridge 二维码”。
-6. 允许相机和本地网络访问。
-7. 扫描 Android 页面上的二维码。
-
-也可以复制 Android 页面显示的 `firepick://pair?...` URI，在 iOS 中粘贴后
-点击“配对 Bridge”。
-
-QuickJS 和 Java/JAR 已内置于 Bridge；Python、Node.js、Thunder、BD-J 可在
-Android Bridge 页面按需安装。
-
-Bridge 离线时，HTTP/XML/JSON 源仍可由 iOS 本机运行；Java、Python、
-Node.js、JAR 等复杂源将不可用。
+- Python / Node.js
+- Thunder / BD-J / 动态原生模块
+- 依赖 Android 侧代理的复杂 `proxy://` 流
 
 ## 9. 播放和投屏
 

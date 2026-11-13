@@ -151,17 +151,25 @@ struct BrowseView: View {
       ContentUnavailableView(
         "还没有内容",
         systemImage: "sparkles",
-        description: Text("请先在设置中添加并选择配置地址，首页会自动加载对应点播内容。")
+        description: Text("请在设置中添加本机可用的配置地址（HTTP/JS 仓），首页会自动加载。")
+      )
+    } else if model.onDeviceSites.isEmpty {
+      ContentUnavailableView(
+        "当前配置没有本机可播源",
+        systemImage: "iphone.slash",
+        description: Text(
+          "该配置主要是 Java 等需安卓运行时的站点。请换用自建 iOS 配置仓（仅 HTTP/JS），或在点播源列表里查看说明。"
+        )
       )
     } else if model.selectedSite == nil {
-      ProgressView("正在加载已选配置…")
+      ProgressView("正在加载本机源…")
         .frame(maxWidth: .infinity)
         .padding(.vertical, 48)
     } else {
       ContentUnavailableView(
         "这个源暂时没有内容",
         systemImage: "film",
-        description: Text("下拉刷新，或切换其他点播源试试。")
+        description: Text("下拉刷新，或切换其他本机点播源试试。")
       )
     }
   }

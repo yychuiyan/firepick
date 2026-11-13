@@ -599,6 +599,11 @@ final class AppModel {
   }
 
   func selectSite(_ site: SiteConfiguration) async {
+    if !isOnDeviceCapable(site), bridgeHealth == nil {
+      errorMessage =
+        "「\(site.name)」需要 Android 运行时（Java/Python 等）。当前以本机 HTTP/JS 为主，请改选本机可用源，或使用自建 iOS 配置仓。"
+      return
+    }
     selectedSite = site
     searchSections = []
     liveSearchResults = []
@@ -625,7 +630,12 @@ final class AppModel {
         await loadCategory(first, site: site)
       }
     } catch {
-      errorMessage = error.localizedDescription
+      let text = error.localizedDescription
+      if text.contains("Bridge") || text.contains("不可达") {
+        errorMessage = "本机无法运行该源。请换用 HTTP/JS 源，或查看自建仓说明。"
+      } else {
+        errorMessage = text
+      }
     }
   }
 
@@ -873,23 +883,19 @@ final class AppModel {
 
   func routeLabel(for site: SiteConfiguration) -> String {
     let route = router.route(site)
-    let externalRuntime = route.runtime == .quickJS && bridgeHealth != nil
     switch route.execution {
     case .onDevice:
-      if externalRuntime {
-        return "外部 · QuickJS"
-      }
-      return route.runtime == .http ? "本机 HTTP" : "未连接 QuickJS"
+      return route.runtime == .http ? "本机 HTTP" : "本机 JS"
     case .bridge:
       return switch route.runtime {
-      case .java: "Bridge · Java"
-      case .python: "Bridge · Python"
-      case .nodeJS: "Bridge · Node"
-      case .quickJS: "Bridge · JS"
-      case .thunder: "Bridge · Thunder"
-      case .bdj: "Bridge · BD-J"
-      case .nativeCore: "Bridge · Native"
-      case .http: "Bridge · HTTP"
+      case .java: "需安卓 · Java"
+      case .python: "需安卓 · Python"
+      case .nodeJS: "需安卓 · Node"
+      case .quickJS: "需安卓 · JS"
+      case .thunder: "需安卓 · Thunder"
+      case .bdj: "需安卓 · BD-J"
+      case .nativeCore: "需安卓 · Native"
+      case .http: "需安卓 · HTTP"
       }
     case .unsupported:
       return "不支持"
@@ -1282,6 +1288,7 @@ final class AppModel {
       if let bridgeClient {
         configDigest = try await bridgeClient.uploadConfiguration(decoded)
       }
+      await coordinator?.invalidate()
       coordinator = makeCoordinator(client: bridgeClient)
       selectedSite = nil
       homeResult = nil
@@ -1368,22 +1375,38 @@ final class AppModel {
     }
   }
 
+  /// Sites that can run on-device (HTTP / QuickJS) without Android Bridge.
+  func isOnDeviceCapable(_ site: SiteConfiguration) -> Bool {
+    let route = router.route(site)
+    switch route.execution {
+    case .onDevice where route.runtime == .http || route.runtime == .quickJS:
+      return true
+    default:
+      return false
+    }
+  }
+
+  var onDeviceSites: [SiteConfiguration] {
+    configuration.sites.filter { !$0.isHidden && isOnDeviceCapable($0) }
+  }
+
+  var bridgeOnlySites: [SiteConfiguration] {
+    configuration.sites.filter { site in
+      !site.isHidden && !isOnDeviceCapable(site)
+    }
+  }
+
   private func selectPendingInitialSite() async {
     guard selectedSite == nil, !configuration.sites.isEmpty else {
       return
     }
     let persisted = pendingInitialSiteKey.flatMap { key in
-      configuration.sites.first(where: { $0.key == key })
+      configuration.sites.first(where: { $0.key == key && isOnDeviceCapable($0) })
     }
     pendingInitialSiteKey = nil
-    let httpFallback =
-      bridgeHealth == nil
-      ? configuration.sites.first(where: {
-        !$0.isHidden && router.route($0).runtime == .http
-      })
-      : nil
-    let visibleFallback = configuration.sites.first(where: { !$0.isHidden })
-    if let site = persisted ?? httpFallback ?? visibleFallback ?? configuration.sites.first {
+    let httpFirst = onDeviceSites.first(where: { router.route($0).runtime == .http })
+    let anyOnDevice = onDeviceSites.first
+    if let site = persisted ?? httpFirst ?? anyOnDevice {
       await selectSite(site)
     }
   }
@@ -1551,7 +1574,7 @@ final class AppModel {
     let bridgeFactory: @Sendable (SiteConfiguration) throws -> any SourceProvider = { site in
       let resolvedSite = Self.resolve(site, baseURL: baseURL)
       guard let client = firepickBridge else {
-        throw FirepickError.bridgeUnavailable
+        throw FirepickError.unsupported("该源需要 Android 运行时，当前未连接")
       }
       return BridgeProvider(
         site: resolvedSite,
@@ -1559,9 +1582,17 @@ final class AppModel {
         configDigest: configDigest
       )
     }
+    let quickJSFactory: @Sendable (SiteConfiguration) throws -> any SourceProvider = { site in
+      let resolvedSite = Self.resolve(site, baseURL: baseURL)
+      return QuickJSProvider(
+        site: resolvedSite,
+        host: OnDeviceJavaScriptHost(baseURL: baseURL)
+      )
+    }
     return ProviderCoordinator(
-      preferBridgeForQuickJS: firepickBridge != nil,
-      bridgeFactory: bridgeFactory
+      preferBridgeForQuickJS: false,
+      bridgeFactory: bridgeFactory,
+      quickJSFactory: quickJSFactory
     )
   }
 

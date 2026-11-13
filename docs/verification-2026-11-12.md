@@ -2,14 +2,14 @@
 
 ## Automated
 
-- `swift test --package-path Packages/FirepickKit`: 48 tests, 14 suites, pass.
+- `swift test --package-path Packages/FirepickKit`: 57 tests, 16 suites, pass.
 - Clean iOS simulator Debug build: `BUILD SUCCEEDED`.
 - Android Bridge `:app:assembleDebug`: `BUILD SUCCESSFUL`.
 - Unsigned SideStore IPA: Release device build pass, ZIP integrity pass,
   standard `Payload/` layout and SHA-256 manifest generated.
-- Published `0.1.18` (build `19`): full download from
-  `dl.yychuiyan.com` matched the local 21,135,466-byte IPA and SHA-256
-  `5acd24052c494deaa1cdf735a181b4103dbc809cc115f93dfe252743c99c2d94`.
+- Published `0.1.19` (build `20`): full download from
+  `dl.yychuiyan.com` matched the local 21,354,522-byte IPA and SHA-256
+  `75d692b8db12f49cd0f9065faca939d305dce09f3aa2d9a656e7e3dd2d4e0d2a`.
 - Local proxy contract test verifies authenticated upstream fetch and an
   end-to-end loopback Range response.
 - Download contract test verifies chunked transfer, persisted metadata and

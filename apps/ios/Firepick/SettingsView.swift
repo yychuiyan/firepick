@@ -212,14 +212,6 @@ struct SettingsView: View {
           }
         }
 
-        Section {
-          NavigationLink {
-            ExtensionSettingsView()
-          } label: {
-            LabeledContent("Android Bridge", value: bridgeStatus)
-          }
-        }
-
         ProvisioningExpirySection()
       }
       .contentMargins(.top, 8, for: .scrollContent)
@@ -254,11 +246,6 @@ struct SettingsView: View {
       }
       .toolbar(.hidden, for: .navigationBar)
     }
-  }
-
-  private var bridgeStatus: String {
-    guard model.bridgeHealth != nil else { return "未连接" }
-    return "已连接"
   }
 
   private func addSourceFromURL() {

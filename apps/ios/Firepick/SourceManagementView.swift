@@ -121,10 +121,11 @@ struct SourceManagementView: View {
             .foregroundStyle(.secondary)
         }
         if !model.sourceRouteCounts.isEmpty,
-          model.bridgeHealth == nil,
-          model.sourceRouteCounts.contains(where: { $0.runtime != .http })
+          model.sourceRouteCounts.contains(where: {
+            $0.runtime != .http && $0.runtime != .quickJS
+          })
         {
-          Text("Java、Python、Node.js 和兼容 QuickJS 源需要连接 Firepick Bridge。")
+          Text("Java、Python、Node.js 等源当前无法在本机运行，请改用 HTTP/JS 或自建 iOS 配置仓。")
             .font(.footnote)
             .foregroundStyle(.orange)
         }
@@ -370,7 +371,7 @@ private struct SourceEditorView: View {
         } header: {
           Text("执行方式")
         } footer: {
-          Text("QuickJS、Python、Node.js 和 csp_/JAR 通常需要 Android Bridge。")
+          Text("本机可跑 HTTP 与 CatVod JS；Python / Node.js / csp_/JAR 暂不可用。")
         }
       }
       .navigationTitle(originalSite == nil ? "新增点播源" : "修改点播源")

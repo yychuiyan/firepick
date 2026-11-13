@@ -32,6 +32,9 @@ let package = Package(
             dependencies: [
                 "FirepickCore",
                 .product(name: "SwiftSoup", package: "SwiftSoup"),
+            ],
+            resources: [
+                .process("Resources"),
             ]
         ),
         .target(

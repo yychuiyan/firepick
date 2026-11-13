@@ -1,0 +1,26 @@
+{
+  "sites": [
+    {
+      "key": "demo_http",
+      "name": "示例 HTTP（请换成你有权使用的 CMS）",
+      "type": 1,
+      "api": "https://example.com/api.php/provide/vod/",
+      "searchable": 1,
+      "quickSearch": 1
+    },
+    {
+      "key": "demo_js",
+      "name": "示例 JS（请换成自建 spider.js 直链）",
+      "type": 3,
+      "api": "https://example.com/spider.js",
+      "searchable": 1,
+      "quickSearch": 1
+    }
+  ],
+  "lives": [
+    {
+      "name": "示例直播",
+      "url": "https://example.com/live.m3u"
+    }
+  ]
+}

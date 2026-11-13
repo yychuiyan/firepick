@@ -25,14 +25,12 @@
 		7EFE794F4C6AF4246CBB00C1 /* ProvisioningExpiryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4676A26293D75A95757D4A8C /* ProvisioningExpiryView.swift */; };
 		8ED4F4BF9811684D667A99AB /* DanmakuSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68964CAC4A11B003ADE5EF23 /* DanmakuSettingsView.swift */; };
 		8FDDEAE7CE94E79DD0336FA4 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15F1A48D7B7D4F18CD3B72E0 /* SettingsView.swift */; };
-		928057BCEDFD488B4E851F90 /* ExtensionSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBD370AEAE28DCE0993CCC1D /* ExtensionSettingsView.swift */; };
 		9D51269D1491C27F603C131A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 62DE027BA3F9570841E293A3 /* Assets.xcassets */; };
 		A5A5148787DEBEFEB8739A4E /* PlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE02C211147015A1AB863F08 /* PlayerView.swift */; };
 		B65DEC177A516442A1C7236A /* DLNACastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41AC6E1084DB23277EA497FF /* DLNACastView.swift */; };
 		BF1A3F1798B55D3F26950C26 /* SourcePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE5F82CABA149E98E879DC20 /* SourcePickerView.swift */; };
 		E453604A064BAF9DD2D89C9E /* FirepickBridge in Frameworks */ = {isa = PBXBuildFile; productRef = A504A30197E66A6EEDE1E506 /* FirepickBridge */; };
 		F0ECBA96B08467C2BF0F0876 /* FirepickPlayback in Frameworks */ = {isa = PBXBuildFile; productRef = 8B2E7F2448F446CCC95D5EA7 /* FirepickPlayback */; };
-		F5ECA2C70D0E18F336557B79 /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 555FA1ABB2446A268E99A6A0 /* QRScannerView.swift */; };
 		FEB0695FE418AB62A97727A9 /* ConfigurationManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95ED5FFE00DFDB9AD9DB5FCB /* ConfigurationManagementView.swift */; };
 /* End PBXBuildFile section */
 
@@ -47,7 +45,6 @@
 		41AC6E1084DB23277EA497FF /* DLNACastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DLNACastView.swift; sourceTree = "<group>"; };
 		4676A26293D75A95757D4A8C /* ProvisioningExpiryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProvisioningExpiryView.swift; sourceTree = "<group>"; };
 		4AB5BB1B39DDFC68E268ACE9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		555FA1ABB2446A268E99A6A0 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
 		5E017903E97421648A607305 /* Firepick.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Firepick.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		62DE027BA3F9570841E293A3 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		68964CAC4A11B003ADE5EF23 /* DanmakuSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DanmakuSettingsView.swift; sourceTree = "<group>"; };
@@ -63,7 +60,6 @@
 		BE02C211147015A1AB863F08 /* PlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerView.swift; sourceTree = "<group>"; };
 		C522E1F54F8EDCFBDA494D40 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		E50EB6262D056DF6B19AFBF6 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
-		EBD370AEAE28DCE0993CCC1D /* ExtensionSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionSettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -125,7 +121,6 @@
 				68964CAC4A11B003ADE5EF23 /* DanmakuSettingsView.swift */,
 				39D426E5BF64F85D713A6F25 /* DetailView.swift */,
 				41AC6E1084DB23277EA497FF /* DLNACastView.swift */,
-				EBD370AEAE28DCE0993CCC1D /* ExtensionSettingsView.swift */,
 				8764AA710399DA3C242FEA9F /* Firepick.entitlements */,
 				0D6D39978364C5C5D45904F2 /* FirepickApp.swift */,
 				4AB5BB1B39DDFC68E268ACE9 /* Info.plist */,
@@ -136,7 +131,6 @@
 				69D3DD2CF729D1C71CFC095E /* LiveView.swift */,
 				BE02C211147015A1AB863F08 /* PlayerView.swift */,
 				4676A26293D75A95757D4A8C /* ProvisioningExpiryView.swift */,
-				555FA1ABB2446A268E99A6A0 /* QRScannerView.swift */,
 				B1F681642E64727908F3D814 /* RootView.swift */,
 				07A7F9C2D284DAFBC0B15DB1 /* SearchView.swift */,
 				15F1A48D7B7D4F18CD3B72E0 /* SettingsView.swift */,
@@ -244,14 +238,12 @@
 				B65DEC177A516442A1C7236A /* DLNACastView.swift in Sources */,
 				8ED4F4BF9811684D667A99AB /* DanmakuSettingsView.swift in Sources */,
 				088AD96810B59C6A1F9B6E6E /* DetailView.swift in Sources */,
-				928057BCEDFD488B4E851F90 /* ExtensionSettingsView.swift in Sources */,
 				0B3CD1CE5CBFBA4990B72433 /* FirepickApp.swift in Sources */,
 				46D1F3446B1BA73B2685F6A1 /* KeyboardDismissOnTap.swift in Sources */,
 				4C3AD8A0CC0F4F91DF9C6B37 /* LibraryView.swift in Sources */,
 				4E0FB80FD5BD2D94AAC7CAFA /* LiveView.swift in Sources */,
 				A5A5148787DEBEFEB8739A4E /* PlayerView.swift in Sources */,
 				7EFE794F4C6AF4246CBB00C1 /* ProvisioningExpiryView.swift in Sources */,
-				F5ECA2C70D0E18F336557B79 /* QRScannerView.swift in Sources */,
 				6AAAE625EA55B2029E96C868 /* RootView.swift in Sources */,
 				0818F4090044B3FFA590F5BE /* SearchView.swift in Sources */,
 				8FDDEAE7CE94E79DD0336FA4 /* SettingsView.swift in Sources */,
