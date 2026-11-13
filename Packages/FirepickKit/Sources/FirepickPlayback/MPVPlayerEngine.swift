@@ -96,6 +96,16 @@ public final class MPVPlayerEngine: PlaybackEngine {
         runtime.setDouble("speed", Double(max(0.25, min(rate, 4))))
     }
 
+    /// Selects an external subtitle by 0-based index from `PlaybackRequest.subtitles`.
+    /// Pass `nil` to disable subtitles (`sid=no`).
+    public func selectSubtitleTrack(index: Int?) {
+        if let index {
+            runtime.command(["set", "sid", "\(index + 1)"])
+        } else {
+            runtime.command(["set", "sid", "no"])
+        }
+    }
+
     private func startPolling() {
         guard pollTask == nil else { return }
         pollTask = Task { @MainActor [weak self] in

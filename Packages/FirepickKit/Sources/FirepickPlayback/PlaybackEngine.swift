@@ -28,6 +28,7 @@ public final class AVPlayerEngine: PlaybackEngine {
 
     private var timeObserver: Any?
     private var statusObservation: NSKeyValueObservation?
+    private var endObserver: NSObjectProtocol?
 
     public init() {
         timeObserver = player.addPeriodicTimeObserver(
@@ -72,6 +73,18 @@ public final class AVPlayerEngine: PlaybackEngine {
                     }
                 }
             }
+            if let endObserver {
+                NotificationCenter.default.removeObserver(endObserver)
+            }
+            endObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.state = .ended
+                }
+            }
             if request.startPosition > 0 {
                 await player.seek(to: CMTime(seconds: request.startPosition, preferredTimescale: 600))
                 currentTime = request.startPosition
@@ -102,6 +115,10 @@ public final class AVPlayerEngine: PlaybackEngine {
     }
 
     public func stop() {
+        if let endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+            self.endObserver = nil
+        }
         player.pause()
         player.replaceCurrentItem(with: nil)
         currentTime = 0

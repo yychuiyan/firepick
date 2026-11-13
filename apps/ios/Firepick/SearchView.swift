@@ -1,63 +1,65 @@
 import FirepickCore
-import FirepickPlayback
 import SwiftUI
 
 struct SearchView: View {
   @Environment(AppModel.self) private var model
-  @Environment(\.dismiss) private var dismiss
   @FocusState private var searchFocused: Bool
   @State private var selectedItem: MediaItem?
-  @State private var selectedLive: LiveChannel?
   @State private var selectedHistory = Set<String>()
   @State private var isEditingHistory = false
   @State private var showingDeleteConfirmation = false
 
   var body: some View {
     @Bindable var model = model
-    NavigationStack {
-      VStack(spacing: 0) {
-        searchBar
-        Divider()
+    VStack(spacing: 0) {
+      searchBar
+      Divider()
 
-        if !model.searchHasRun, !model.isLoading {
-          historyContent
-        } else {
-          resultsContent
-        }
+      if !model.searchHasRun, !model.isLoading {
+        historyContent
+      } else {
+        resultsContent
       }
-      .toolbar(.hidden, for: .navigationBar)
-      .task {
-        resetForNewSearch()
+    }
+    .navigationTitle("搜索")
+    .navigationBarTitleDisplayMode(.inline)
+    .scrollDismissesKeyboard(.interactively)
+    .dismissKeyboardOnBackgroundTap()
+    .task {
+      if !model.searchHasRun, model.searchText.isEmpty {
         try? await Task.sleep(for: .milliseconds(250))
         searchFocused = true
       }
-      .sheet(item: $selectedItem) { item in
-        DetailView(item: item)
-      }
-      .fullScreenCover(item: $selectedLive) { channel in
-        if let url = channel.playableURL {
-          PlayerView(
-            request: PlaybackRequest(url: url, headers: channel.headers),
-            item: MediaItem(
-              vodId: channel.id,
-              name: channel.name,
-              sourceKey: "live"
-            ),
-            episode: nil,
-            alternateURLs: channel.urls.dropFirst().compactMap(URL.init(string:))
-          )
+    }
+    .toolbar {
+      if model.searchHasRun || !model.searchText.isEmpty {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("清除") {
+            resetForNewSearch()
+            searchFocused = true
+          }
         }
       }
-      .alert("删除选中的查询记录？", isPresented: $showingDeleteConfirmation) {
-        Button("删除", role: .destructive) {
-          model.removeSearchHistory(selectedHistory)
-          selectedHistory.removeAll()
-          isEditingHistory = false
-        }
-        Button("取消", role: .cancel) {}
-      } message: {
-        Text("将删除 \(selectedHistory.count) 条历史查询，不会删除观看记录。")
+    }
+    .navigationDestination(
+      isPresented: Binding(
+        get: { selectedItem != nil },
+        set: { if !$0 { selectedItem = nil } }
+      )
+    ) {
+      if let selectedItem {
+        DetailView(item: selectedItem)
       }
+    }
+    .alert("删除选中的查询记录？", isPresented: $showingDeleteConfirmation) {
+      Button("删除", role: .destructive) {
+        model.removeSearchHistory(selectedHistory)
+        selectedHistory.removeAll()
+        isEditingHistory = false
+      }
+      Button("取消", role: .cancel) {}
+    } message: {
+      Text("将删除 \(selectedHistory.count) 条历史查询，不会删除观看记录。")
     }
   }
 
@@ -104,13 +106,6 @@ struct SearchView: View {
           model.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || model.isLoading
         )
-
-      Button("取消") {
-        searchFocused = false
-        dismiss()
-      }
-      .buttonStyle(.plain)
-      .foregroundStyle(.secondary)
     }
     .padding(.horizontal)
     .padding(.vertical, 10)
@@ -148,6 +143,9 @@ struct SearchView: View {
               isEditingHistory = false
             }
           } else {
+            Button("全部删除", role: .destructive) {
+              model.clearSearchHistory()
+            }
             Button("管理") {
               isEditingHistory = true
             }
@@ -201,51 +199,112 @@ struct SearchView: View {
   }
 
   private var resultsContent: some View {
-    List {
-      if model.isLoading {
-        ProgressView()
-          .frame(maxWidth: .infinity)
-          .listRowSeparator(.hidden)
-      }
-      if !model.liveSearchResults.isEmpty {
-        Section("直播") {
+    let columns = [
+      GridItem(
+        .adaptive(minimum: model.posterSizePreference.minimumWidth, maximum: 240),
+        spacing: 14
+      )
+    ]
+    return ScrollView {
+      LazyVStack(alignment: .leading, spacing: 20) {
+        if model.isLoadingSearch || model.isLoading {
+          ProgressView("正在搜索…")
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 32)
+        }
+        if !model.liveSearchResults.isEmpty {
+          Text("直播")
+            .font(.headline)
+            .padding(.horizontal)
           ForEach(model.liveSearchResults) { channel in
             Button {
-              selectedLive = channel
+              model.playLiveFromSearch(channel)
             } label: {
-              Text(channel.name)
-            }
-          }
-        }
-      }
-      ForEach(model.searchSections) { section in
-        Section(section.siteName) {
-          ForEach(section.result.list) { item in
-            Button {
-              selectedItem = item
-            } label: {
-              VStack(alignment: .leading, spacing: 4) {
-                Text(item.name)
-                if let remarks = item.remarks {
-                  Text(remarks)
-                    .font(.caption)
+              HStack(spacing: 12) {
+                CachedRemoteImage(url: channel.logo.flatMap(URL.init(string:))) {
+                  Image(systemName: "tv")
                     .foregroundStyle(.secondary)
                 }
+                .frame(width: 36, height: 36)
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(channel.name)
+                  if let number = channel.number {
+                    Text(number)
+                      .font(.caption)
+                      .foregroundStyle(.secondary)
+                  }
+                }
+                Spacer()
               }
+              .padding(.horizontal)
             }
+            .buttonStyle(.plain)
           }
         }
+        ForEach(model.searchSections) { section in
+          Text(section.siteName)
+            .font(.headline)
+            .padding(.horizontal)
+          LazyVGrid(columns: columns, spacing: 18) {
+            ForEach(section.result.list) { item in
+              Button {
+                model.detailResult = nil
+                selectedItem = item
+              } label: {
+                MediaCardView(item: item)
+              }
+              .buttonStyle(.plain)
+            }
+          }
+          .padding(.horizontal)
+        }
+        if !model.searchFailures.isEmpty {
+          Text("失败的源")
+            .font(.headline)
+            .padding(.horizontal)
+          ForEach(model.searchFailures) { failure in
+            HStack(alignment: .top, spacing: 10) {
+              Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+              VStack(alignment: .leading, spacing: 2) {
+                Text(failure.siteName)
+                  .font(.subheadline.weight(.semibold))
+                Text(failure.message)
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+              Spacer()
+            }
+            .padding(.horizontal)
+          }
+        }
+        if model.searchHasRun,
+          !model.isLoadingSearch,
+          !model.isLoading,
+          model.searchSections.isEmpty,
+          model.liveSearchResults.isEmpty
+        {
+          ContentUnavailableView {
+            Label(
+              model.searchFailureCount > 0 ? "搜索失败" : "没有找到结果",
+              systemImage: model.searchFailureCount > 0
+                ? "exclamationmark.triangle" : "magnifyingglass"
+            )
+          } description: {
+            Text(
+              model.searchFailureCount > 0
+                ? "全部源都没有返回结果。"
+                : "换个关键词试试。"
+            )
+          } actions: {
+            Button("重试", action: runSearch)
+              .buttonStyle(.bordered)
+          }
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 48)
+        }
       }
-    }
-    .listStyle(.plain)
-    .overlay {
-      if !model.isLoading, model.searchSections.isEmpty,
-        model.liveSearchResults.isEmpty
-      {
-        Text("没有找到结果")
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
-      }
+      .padding(.vertical)
     }
   }
 

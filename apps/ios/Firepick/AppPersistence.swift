@@ -16,6 +16,23 @@ final class AppPersistence {
     static let currentConnectionURL = "currentConnectionURL"
     static let searchHistory = "searchHistory"
     static let simulatorBridgeCredentials = "simulatorBridgeCredentials"
+    static let videoOutputPreference = "videoOutputPreference"
+    static let decodePreference = "decodePreference"
+    static let adSkipPreference = "adSkipPreference"
+    static let backgroundPlaybackEnabled = "backgroundPlaybackEnabled"
+    static let incognitoModeEnabled = "incognitoModeEnabled"
+    static let multiSourceSearchEnabled = "multiSourceSearchEnabled"
+    static let bufferPreference = "bufferPreference"
+    static let subtitleFontPreference = "subtitleFontPreference"
+    static let subtitleColorPreference = "subtitleColorPreference"
+    static let subtitleOutlineEnabled = "subtitleOutlineEnabled"
+    static let skipMarks = "skipMarks"
+    static let connectionLatencies = "connectionLatencies"
+    static let playbackFlagSelections = "playbackFlagSelections"
+    static let favoriteLiveChannelIDs = "favoriteLiveChannelIDs"
+    static let lastLiveChannelID = "lastLiveChannelID"
+    static let lastLiveGroupName = "lastLiveGroupName"
+    static let lastLiveURLIndex = "lastLiveURLIndex"
   }
 
   private let defaults = UserDefaults.standard
@@ -163,6 +180,126 @@ final class AppPersistence {
 
   func saveDanmakuSpeed(_ value: Double) {
     defaults.set(value, forKey: Key.danmakuSpeed)
+  }
+
+  var videoOutputPreference: String? { defaults.string(forKey: Key.videoOutputPreference) }
+  var decodePreference: String? { defaults.string(forKey: Key.decodePreference) }
+  var adSkipPreference: String? { defaults.string(forKey: Key.adSkipPreference) }
+  var backgroundPlaybackEnabled: Bool? {
+    guard defaults.object(forKey: Key.backgroundPlaybackEnabled) != nil else { return nil }
+    return defaults.bool(forKey: Key.backgroundPlaybackEnabled)
+  }
+  var incognitoModeEnabled: Bool? {
+    guard defaults.object(forKey: Key.incognitoModeEnabled) != nil else { return nil }
+    return defaults.bool(forKey: Key.incognitoModeEnabled)
+  }
+  var multiSourceSearchEnabled: Bool? {
+    guard defaults.object(forKey: Key.multiSourceSearchEnabled) != nil else { return nil }
+    return defaults.bool(forKey: Key.multiSourceSearchEnabled)
+  }
+  var bufferPreference: String? { defaults.string(forKey: Key.bufferPreference) }
+  var subtitleFontPreference: String? { defaults.string(forKey: Key.subtitleFontPreference) }
+  var subtitleColorPreference: String? { defaults.string(forKey: Key.subtitleColorPreference) }
+  var subtitleOutlineEnabled: Bool? {
+    guard defaults.object(forKey: Key.subtitleOutlineEnabled) != nil else { return nil }
+    return defaults.bool(forKey: Key.subtitleOutlineEnabled)
+  }
+
+  func saveVideoOutputPreference(_ value: String) {
+    defaults.set(value, forKey: Key.videoOutputPreference)
+  }
+  func saveDecodePreference(_ value: String) {
+    defaults.set(value, forKey: Key.decodePreference)
+  }
+  func saveAdSkipPreference(_ value: String) {
+    defaults.set(value, forKey: Key.adSkipPreference)
+  }
+  func saveBackgroundPlaybackEnabled(_ value: Bool) {
+    defaults.set(value, forKey: Key.backgroundPlaybackEnabled)
+  }
+  func saveIncognitoModeEnabled(_ value: Bool) {
+    defaults.set(value, forKey: Key.incognitoModeEnabled)
+  }
+  func saveMultiSourceSearchEnabled(_ value: Bool) {
+    defaults.set(value, forKey: Key.multiSourceSearchEnabled)
+  }
+  func saveBufferPreference(_ value: String) {
+    defaults.set(value, forKey: Key.bufferPreference)
+  }
+  func saveSubtitleFontPreference(_ value: String) {
+    defaults.set(value, forKey: Key.subtitleFontPreference)
+  }
+  func saveSubtitleColorPreference(_ value: String) {
+    defaults.set(value, forKey: Key.subtitleColorPreference)
+  }
+  func saveSubtitleOutlineEnabled(_ value: Bool) {
+    defaults.set(value, forKey: Key.subtitleOutlineEnabled)
+  }
+
+  func loadSkipMarks() -> [String: AppModel.SkipMark] {
+    guard let data = defaults.data(forKey: Key.skipMarks),
+      let decoded = try? JSONDecoder().decode([String: AppModel.SkipMark].self, from: data)
+    else { return [:] }
+    return decoded
+  }
+
+  func saveSkipMarks(_ marks: [String: AppModel.SkipMark]) {
+    if let data = try? JSONEncoder().encode(marks) {
+      defaults.set(data, forKey: Key.skipMarks)
+    }
+  }
+
+  func loadConnectionLatencies() -> [String: Int] {
+    guard let data = defaults.data(forKey: Key.connectionLatencies),
+      let decoded = try? JSONDecoder().decode([String: Int].self, from: data)
+    else { return [:] }
+    return decoded
+  }
+
+  func saveConnectionLatencies(_ values: [String: Int]) {
+    if let data = try? JSONEncoder().encode(values) {
+      defaults.set(data, forKey: Key.connectionLatencies)
+    }
+  }
+
+  func loadPlaybackFlagSelections() -> [String: String] {
+    guard let data = defaults.data(forKey: Key.playbackFlagSelections),
+      let decoded = try? JSONDecoder().decode([String: String].self, from: data)
+    else { return [:] }
+    return decoded
+  }
+
+  func savePlaybackFlagSelections(_ values: [String: String]) {
+    if let data = try? JSONEncoder().encode(values) {
+      defaults.set(data, forKey: Key.playbackFlagSelections)
+    }
+  }
+
+  func loadFavoriteLiveChannelIDs() -> [String] {
+    defaults.stringArray(forKey: Key.favoriteLiveChannelIDs) ?? []
+  }
+
+  func saveFavoriteLiveChannelIDs(_ values: [String]) {
+    defaults.set(values, forKey: Key.favoriteLiveChannelIDs)
+  }
+
+  var lastLiveChannelID: String? { defaults.string(forKey: Key.lastLiveChannelID) }
+  var lastLiveGroupName: String? { defaults.string(forKey: Key.lastLiveGroupName) }
+  var lastLiveURLIndex: Int? {
+    guard defaults.object(forKey: Key.lastLiveURLIndex) != nil else { return nil }
+    return defaults.integer(forKey: Key.lastLiveURLIndex)
+  }
+
+  func saveLastLiveChannelID(_ value: String?) {
+    defaults.set(value, forKey: Key.lastLiveChannelID)
+  }
+
+  func saveLastLiveGroupName(_ value: String?) {
+    defaults.set(value, forKey: Key.lastLiveGroupName)
+  }
+
+  func saveLastLiveURLIndex(_ value: Int) {
+    defaults.set(value, forKey: Key.lastLiveURLIndex)
   }
 
   func loadBridgeCredentials() throws -> BridgeCredentials? {

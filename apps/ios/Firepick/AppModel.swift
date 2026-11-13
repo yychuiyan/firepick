@@ -3,6 +3,7 @@ import FirepickCore
 import FirepickPlayback
 import FirepickProvider
 import Foundation
+import Network
 import Observation
 
 struct SourceConnection: Codable, Identifiable, Equatable {
@@ -74,10 +75,112 @@ final class AppModel {
     }
   }
 
+  enum VideoOutputPreference: String, CaseIterable, Identifiable {
+    case automatic
+    case metal
+    case system
+
+    var id: String { rawValue }
+    var title: String {
+      switch self {
+      case .automatic: "自动"
+      case .metal: "优先 Metal"
+      case .system: "系统层"
+      }
+    }
+  }
+
+  enum DecodePreference: String, CaseIterable, Identifiable {
+    case automatic
+    case hardware
+    case software
+
+    var id: String { rawValue }
+    var title: String {
+      switch self {
+      case .automatic: "自动"
+      case .hardware: "硬解优先"
+      case .software: "软解"
+      }
+    }
+  }
+
+  enum AdSkipPreference: String, CaseIterable, Identifiable {
+    case off
+    case marked
+    case aggressive
+
+    var id: String { rawValue }
+    var title: String {
+      switch self {
+      case .off: "关闭"
+      case .marked: "跳过片头片尾"
+      case .aggressive: "激进（自动跳）"
+      }
+    }
+  }
+
+  enum BufferPreference: String, CaseIterable, Identifiable {
+    case short
+    case standard
+    case long
+
+    var id: String { rawValue }
+    var title: String {
+      switch self {
+      case .short: "短"
+      case .standard: "标准"
+      case .long: "长"
+      }
+    }
+
+    var seconds: Double {
+      switch self {
+      case .short: 2
+      case .standard: 5
+      case .long: 10
+      }
+    }
+  }
+
+  enum SubtitleFontPreference: String, CaseIterable, Identifiable {
+    case small
+    case medium
+    case large
+
+    var id: String { rawValue }
+    var title: String {
+      switch self {
+      case .small: "小"
+      case .medium: "中"
+      case .large: "大"
+      }
+    }
+  }
+
+  enum SubtitleColorPreference: String, CaseIterable, Identifiable {
+    case white
+    case yellow
+
+    var id: String { rawValue }
+    var title: String {
+      switch self {
+      case .white: "白"
+      case .yellow: "黄"
+      }
+    }
+  }
+
   struct SearchSection: Identifiable {
     let id: String
     let siteName: String
     let result: MediaResult
+  }
+
+  struct SearchFailure: Identifiable, Equatable {
+    let id: String
+    let siteName: String
+    let message: String
   }
 
   struct ConfigurationCandidate: Identifiable, Equatable {
@@ -103,13 +206,59 @@ final class AppModel {
   var currentPage = 1
   var isLoadingMore = false
   var searchSections: [SearchSection] = []
+  var searchFailures: [SearchFailure] = []
   var liveSearchResults: [LiveChannel] = []
   var searchText = ""
   var searchHasRun = false
   var searchHistory: [String] = []
   var searchFailureCount = 0
+  /// Last recoverable action for the global error banner retry button.
+  var lastRecoverableAction: RecoverableAction?
+
+  enum RecoverableAction: Equatable {
+    case reloadHome
+    case search
+    case refreshLive
+    case loadDetail(MediaItem)
+  }
+  var isLoadingHome = false
+  var isLoadingDetail = false
+  var isLoadingSearch = false
+  var isSwitchingConnection = false
+  var isLoadingLive = false
+  var loadMoreFailed = false
+  /// Legacy aggregate flag; prefer granular flags for new UI.
   var isLoading = false
   var errorMessage: String?
+  /// NWPathMonitor: false when no usable route.
+  var isNetworkAvailable = true
+  /// User dismissed the offline banner until connectivity changes.
+  var suppressNetworkBanner = false
+  private var homeLoadGeneration = 0
+  private var searchLoadGeneration = 0
+  var connectionLatencyMS: [String: Int] = [:]
+  var probingConnectionURLs: Set<String> = []
+  var videoOutputPreference: VideoOutputPreference = .automatic
+  var decodePreference: DecodePreference = .automatic
+  var adSkipPreference: AdSkipPreference = .off
+  var backgroundPlaybackEnabled = false
+  var incognitoModeEnabled = false
+  var multiSourceSearchEnabled = false
+  var bufferPreference: BufferPreference = .standard
+  var subtitleFontPreference: SubtitleFontPreference = .medium
+  var subtitleColorPreference: SubtitleColorPreference = .white
+  var subtitleOutlineEnabled = true
+  var skipMarks: [String: SkipMark] = [:]
+  var playbackFlagSelections: [String: String] = [:]
+  var favoriteLiveChannelIDs: Set<String> = []
+  var lastLiveChannelID: String?
+  var lastLiveGroupName: String?
+  var lastLiveURLIndex: Int = 0
+
+  struct SkipMark: Codable, Equatable, Sendable {
+    var introEnd: Double?
+    var outroStart: Double?
+  }
   var history: [HistoryEntry] = []
   var favorites: [FavoriteEntry] = []
   var bridgeHealth: BridgeHealth?
@@ -146,6 +295,7 @@ final class AppModel {
   private var persistence: AppPersistence?
   private var bridgeClient: BridgeClient?
   private let router = SourceRouter()
+  private var pathMonitor: NWPathMonitor?
   private let configurationSession: URLSession = {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -156,6 +306,7 @@ final class AppModel {
   }()
 
   func bootstrap() async {
+    startNetworkMonitoring()
     do {
       library = try LibraryStore()
       downloads = try DownloadManager()
@@ -246,12 +397,104 @@ final class AppModel {
     if let value = persistence?.danmakuSpeed {
       danmakuSpeed = min(2, max(0.5, value))
     }
+    if let raw = persistence?.videoOutputPreference,
+      let value = VideoOutputPreference(rawValue: raw)
+    {
+      videoOutputPreference = value
+    }
+    if let raw = persistence?.decodePreference,
+      let value = DecodePreference(rawValue: raw)
+    {
+      decodePreference = value
+    }
+    if let raw = persistence?.adSkipPreference,
+      let value = AdSkipPreference(rawValue: raw)
+    {
+      adSkipPreference = value
+    }
+    if let value = persistence?.backgroundPlaybackEnabled {
+      backgroundPlaybackEnabled = value
+    }
+    if let value = persistence?.incognitoModeEnabled {
+      incognitoModeEnabled = value
+    }
+    if let value = persistence?.multiSourceSearchEnabled {
+      multiSourceSearchEnabled = value
+    }
+    if let raw = persistence?.bufferPreference,
+      let value = BufferPreference(rawValue: raw)
+    {
+      bufferPreference = value
+    }
+    if let raw = persistence?.subtitleFontPreference,
+      let value = SubtitleFontPreference(rawValue: raw)
+    {
+      subtitleFontPreference = value
+    }
+    if let raw = persistence?.subtitleColorPreference,
+      let value = SubtitleColorPreference(rawValue: raw)
+    {
+      subtitleColorPreference = value
+    }
+    if let value = persistence?.subtitleOutlineEnabled {
+      subtitleOutlineEnabled = value
+    }
+    skipMarks = persistence?.loadSkipMarks() ?? [:]
+    connectionLatencyMS = persistence?.loadConnectionLatencies() ?? [:]
+    playbackFlagSelections = persistence?.loadPlaybackFlagSelections() ?? [:]
+    favoriteLiveChannelIDs = Set(persistence?.loadFavoriteLiveChannelIDs() ?? [])
+    lastLiveChannelID = persistence?.lastLiveChannelID
+    lastLiveGroupName = persistence?.lastLiveGroupName
+    lastLiveURLIndex = persistence?.lastLiveURLIndex ?? 0
     sourceConnections = (try? persistence?.loadSourceConnections()) ?? []
     searchHistory = persistence?.searchHistory ?? []
     if let currentURL = persistence?.currentConnectionURL {
       currentConnection = sourceConnections.first { $0.url == currentURL }
     }
     refreshCacheSize()
+  }
+
+  func toggleLiveFavorite(_ channel: LiveChannel) {
+    if favoriteLiveChannelIDs.contains(channel.id) {
+      favoriteLiveChannelIDs.remove(channel.id)
+    } else {
+      favoriteLiveChannelIDs.insert(channel.id)
+    }
+    persistence?.saveFavoriteLiveChannelIDs(Array(favoriteLiveChannelIDs))
+  }
+
+  func isLiveFavorite(_ channel: LiveChannel) -> Bool {
+    favoriteLiveChannelIDs.contains(channel.id)
+  }
+
+  func rememberLiveChannel(_ channel: LiveChannel, groupName: String?, urlIndex: Int) {
+    lastLiveChannelID = channel.id
+    lastLiveGroupName = groupName
+    lastLiveURLIndex = max(0, urlIndex)
+    persistence?.saveLastLiveChannelID(channel.id)
+    persistence?.saveLastLiveGroupName(groupName)
+    persistence?.saveLastLiveURLIndex(lastLiveURLIndex)
+  }
+
+  func allLiveChannels() -> [LiveChannel] {
+    liveGroups.flatMap(\.channels)
+  }
+
+  func resolveInitialLiveChannel() -> (group: LiveGroup, channel: LiveChannel)? {
+    if let id = lastLiveChannelID,
+      let group = liveGroups.first(where: { $0.channels.contains(where: { $0.id == id }) }),
+      let channel = group.channels.first(where: { $0.id == id })
+    {
+      return (group, channel)
+    }
+    let favorites = allLiveChannels().filter { favoriteLiveChannelIDs.contains($0.id) }
+    if let channel = favorites.first,
+      let group = liveGroups.first(where: { $0.channels.contains(where: { $0.id == channel.id }) })
+    {
+      return (group, channel)
+    }
+    guard let group = liveGroups.first, let channel = group.channels.first else { return nil }
+    return (group, channel)
   }
 
   func loadConnection(_ connection: SourceConnection) async {
@@ -310,6 +553,250 @@ final class AppModel {
     persistence?.savePosterSizePreference(value.rawValue)
   }
 
+  func setVideoOutputPreference(_ value: VideoOutputPreference) {
+    videoOutputPreference = value
+    persistence?.saveVideoOutputPreference(value.rawValue)
+  }
+
+  func setDecodePreference(_ value: DecodePreference) {
+    decodePreference = value
+    persistence?.saveDecodePreference(value.rawValue)
+  }
+
+  func setAdSkipPreference(_ value: AdSkipPreference) {
+    adSkipPreference = value
+    persistence?.saveAdSkipPreference(value.rawValue)
+  }
+
+  func setBackgroundPlaybackEnabled(_ value: Bool) {
+    backgroundPlaybackEnabled = value
+    persistence?.saveBackgroundPlaybackEnabled(value)
+  }
+
+  func setIncognitoModeEnabled(_ value: Bool) {
+    incognitoModeEnabled = value
+    persistence?.saveIncognitoModeEnabled(value)
+  }
+
+  func setMultiSourceSearchEnabled(_ value: Bool) {
+    multiSourceSearchEnabled = value
+    persistence?.saveMultiSourceSearchEnabled(value)
+  }
+
+  func setBufferPreference(_ value: BufferPreference) {
+    bufferPreference = value
+    persistence?.saveBufferPreference(value.rawValue)
+  }
+
+  func setSubtitleFontPreference(_ value: SubtitleFontPreference) {
+    subtitleFontPreference = value
+    persistence?.saveSubtitleFontPreference(value.rawValue)
+  }
+
+  func setSubtitleColorPreference(_ value: SubtitleColorPreference) {
+    subtitleColorPreference = value
+    persistence?.saveSubtitleColorPreference(value.rawValue)
+  }
+
+  func setSubtitleOutlineEnabled(_ value: Bool) {
+    subtitleOutlineEnabled = value
+    persistence?.saveSubtitleOutlineEnabled(value)
+  }
+
+  func clearSkipMarks() {
+    skipMarks = [:]
+    persistence?.saveSkipMarks(skipMarks)
+  }
+
+  func skipMarkKey(sourceKey: String?, vodId: String, flag: String?) -> String {
+    "\(sourceKey ?? "")|\(vodId)|\(flag ?? "")"
+  }
+
+  func skipMark(sourceKey: String?, vodId: String, flag: String?) -> SkipMark? {
+    skipMarks[skipMarkKey(sourceKey: sourceKey, vodId: vodId, flag: flag)]
+  }
+
+  func setSkipMark(
+    sourceKey: String?,
+    vodId: String,
+    flag: String?,
+    introEnd: Double? = nil,
+    outroStart: Double? = nil
+  ) {
+    let key = skipMarkKey(sourceKey: sourceKey, vodId: vodId, flag: flag)
+    var mark = skipMarks[key] ?? SkipMark()
+    if let introEnd { mark.introEnd = introEnd }
+    if let outroStart { mark.outroStart = outroStart }
+    skipMarks[key] = mark
+    persistence?.saveSkipMarks(skipMarks)
+  }
+
+  func clearSkipMark(sourceKey: String?, vodId: String, flag: String?) {
+    skipMarks.removeValue(forKey: skipMarkKey(sourceKey: sourceKey, vodId: vodId, flag: flag))
+    persistence?.saveSkipMarks(skipMarks)
+  }
+
+  func clearAllFavorites() async {
+    for entry in favorites {
+      await removeFavorite(entry)
+    }
+  }
+
+  func clearAllHistory() async {
+    for entry in history {
+      await removeHistory(entry)
+    }
+  }
+
+  func historyProgress(for item: MediaItem) -> Double? {
+    guard let entry = history.first(where: { $0.item.vodId == item.vodId }),
+      entry.duration > 0
+    else { return nil }
+    return min(1, max(0, entry.position / entry.duration))
+  }
+
+  func previewConfiguration(for connection: SourceConnection) async throws -> VodConfiguration {
+    guard let url = URL(string: connection.url) else {
+      throw FirepickError.invalidConfiguration("线路地址无效")
+    }
+    let downloaded = try await downloadConfiguration(from: url)
+    let data = try ConfigurationDecoder.normalize(downloaded.data)
+    switch try ConfigurationDetector.detect(data) {
+    case .vod(let config):
+      return config
+    case .depot(let depot):
+      throw FirepickError.invalidConfiguration(
+        "这是仓库入口，请先选择子线路：\(depot.urls.map(\.name).joined(separator: "、"))"
+      )
+    case .live:
+      throw FirepickError.invalidConfiguration("该地址是直播源，没有点播播放源列表")
+    }
+  }
+
+  func probeConnectionLatency(_ connection: SourceConnection) async {
+    guard let url = URL(string: connection.url) else { return }
+    probingConnectionURLs.insert(connection.url)
+    defer { probingConnectionURLs.remove(connection.url) }
+    let started = Date()
+    var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 8)
+    request.httpMethod = "GET"
+    do {
+      let (_, response) = try await URLSession.shared.data(for: request)
+      let ms = Int(Date().timeIntervalSince(started) * 1000)
+      if let http = response as? HTTPURLResponse, (200..<400).contains(http.statusCode) {
+        connectionLatencyMS[connection.url] = ms
+      } else {
+        connectionLatencyMS[connection.url] = ms
+      }
+      persistence?.saveConnectionLatencies(connectionLatencyMS)
+    } catch {
+      connectionLatencyMS.removeValue(forKey: connection.url)
+    }
+  }
+
+  func probeAllConnectionLatencies() async {
+    let connections = sourceConnections
+    await withTaskGroup(of: Void.self) { group in
+      var index = 0
+      let limit = min(3, connections.count)
+      func enqueue() {
+        guard index < connections.count else { return }
+        let connection = connections[index]
+        index += 1
+        group.addTask { await self.probeConnectionLatency(connection) }
+      }
+      for _ in 0..<limit { enqueue() }
+      for await _ in group {
+        enqueue()
+      }
+    }
+  }
+
+  func probeSiteLatencies(_ sites: [SiteConfiguration]) async -> [String: Int] {
+    var result: [String: Int] = [:]
+    let targets = Array(sites.prefix(12))
+    await withTaskGroup(of: (String, Int?).self) { group in
+      var index = 0
+      let limit = min(3, targets.count)
+      func enqueue() {
+        guard index < targets.count else { return }
+        let site = targets[index]
+        index += 1
+        group.addTask {
+          await self.measureSiteLatency(site)
+        }
+      }
+      for _ in 0..<limit { enqueue() }
+      for await (key, ms) in group {
+        if let ms { result[key] = ms }
+        enqueue()
+      }
+    }
+    return result
+  }
+
+  private func measureSiteLatency(_ site: SiteConfiguration) async -> (String, Int?) {
+    guard let url = URL(string: site.api) else { return (site.key, nil) }
+    let started = Date()
+    var request = URLRequest(
+      url: url,
+      cachePolicy: .reloadIgnoringLocalCacheData,
+      timeoutInterval: 6
+    )
+    request.httpMethod = "HEAD"
+    do {
+      _ = try await URLSession.shared.data(for: request)
+      return (site.key, Int(Date().timeIntervalSince(started) * 1000))
+    } catch {
+      do {
+        let getStarted = Date()
+        var get = URLRequest(
+          url: url,
+          cachePolicy: .reloadIgnoringLocalCacheData,
+          timeoutInterval: 6
+        )
+        get.httpMethod = "GET"
+        _ = try await URLSession.shared.data(for: get)
+        return (site.key, Int(Date().timeIntervalSince(getStarted) * 1000))
+      } catch {
+        return (site.key, nil)
+      }
+    }
+  }
+
+  /// Resume playback from a history entry. Returns false when caller should open detail.
+  @discardableResult
+  func resumeFromHistory(_ entry: HistoryEntry) async -> Bool {
+    await loadDetail(entry.item)
+    let detail = detailResult?.list.first(where: { $0.vodId == entry.item.vodId }) ?? entry.item
+    let lines = EpisodeParser.lines(playFrom: detail.playFrom, playURL: detail.playURL)
+    guard
+      let matched = lines.lazy
+        .compactMap({ line -> (PlaybackLine, Episode)? in
+          guard let episode = line.episodes.first(where: { $0.value == entry.episodeId })
+          else { return nil }
+          return (line, episode)
+        })
+        .first
+    else {
+      return false
+    }
+    do {
+      let request = try await resolvePlayback(
+        item: detail,
+        episode: matched.1,
+        flag: matched.0.name
+      )
+      debugPlaybackItem = detail
+      debugPlaybackEpisode = matched.1
+      debugPlaybackRequest = request
+      return true
+    } catch {
+      errorMessage = error.localizedDescription
+      return false
+    }
+  }
+
   func setDanmakuEnabledByDefault(_ value: Bool) {
     danmakuEnabledByDefault = value
     persistence?.saveDanmakuEnabledByDefault(value)
@@ -356,6 +843,7 @@ final class AppModel {
 
   func clearCache() {
     URLCache.shared.removeAllCachedResponses()
+    RemoteImageCache.clear()
     if let cacheDirectory = FileManager.default.urls(
       for: .cachesDirectory,
       in: .userDomainMask
@@ -369,7 +857,7 @@ final class AppModel {
         try? FileManager.default.removeItem(at: item)
       }
     }
-    cacheStatus = "缓存已清理"
+    cacheStatus = "已清理网络与临时缓存（不含下载与观看记录）"
     cacheSizeText = "0 KB"
   }
 
@@ -414,8 +902,12 @@ final class AppModel {
       errorMessage = "配置地址无效"
       return false
     }
+    isSwitchingConnection = true
     isLoading = true
-    defer { isLoading = false }
+    defer {
+      isSwitchingConnection = false
+      isLoading = false
+    }
     var responseDescription = ""
     do {
       let downloaded = try await downloadConfiguration(from: url)
@@ -619,6 +1111,7 @@ final class AppModel {
     }
     selectedSite = site
     searchSections = []
+    searchFailures = []
     liveSearchResults = []
     searchHasRun = false
     searchFailureCount = 0
@@ -631,25 +1124,101 @@ final class AppModel {
     homeResult = nil
     detailResult = nil
     errorMessage = nil
+    loadMoreFailed = false
+    homeLoadGeneration += 1
+    let generation = homeLoadGeneration
     isLoading = true
-    defer { isLoading = false }
+    isLoadingHome = true
+    defer {
+      isLoading = false
+      if generation == homeLoadGeneration {
+        isLoadingHome = false
+      }
+    }
     do {
       let provider = try await provider(for: site)
       var result = try await provider.homeContent()
+      guard generation == homeLoadGeneration else { return }
       attachSourceKey(site.key, to: &result)
       homeResult = result
       errorMessage = nil
       if let first = homeResult?.classes.first {
-        await loadCategory(first, site: site)
+        selectedCategory = first
+        // Home already returns the 推荐 list; skip a redundant category fetch.
+        if !first.typeId.hasPrefix("bucket|recommend") {
+          await loadCategory(first, site: site)
+        }
       }
     } catch {
+      guard generation == homeLoadGeneration else { return }
       let text = error.localizedDescription
       if text.contains("Bridge") || text.contains("不可达") {
-        errorMessage = "本机无法运行该源。请换用 HTTP/JS 源，或查看自建仓说明。"
+        presentRecoverableError(
+          "本机无法运行该源。请换用 HTTP/JS 源，或查看自建仓说明。",
+          action: .reloadHome
+        )
       } else {
-        errorMessage = text
+        presentRecoverableError(text, action: .reloadHome)
       }
     }
+  }
+
+  func retryLastRecoverableAction() async {
+    errorMessage = nil
+    switch lastRecoverableAction {
+    case .reloadHome, .none:
+      await reloadHome()
+    case .search:
+      await search()
+    case .refreshLive:
+      await refreshLiveSources()
+    case .loadDetail(let item):
+      await loadDetail(item)
+    }
+  }
+
+  func startNetworkMonitoring() {
+    guard pathMonitor == nil else { return }
+    let monitor = NWPathMonitor()
+    pathMonitor = monitor
+    monitor.pathUpdateHandler = { [weak self] path in
+      Task { @MainActor in
+        let online = path.status == .satisfied
+        self?.isNetworkAvailable = online
+        if online {
+          self?.suppressNetworkBanner = false
+        }
+      }
+    }
+    monitor.start(queue: DispatchQueue(label: "firepick.network", qos: .utility))
+  }
+
+  /// Prefer friendlier copy for offline / timeout failures.
+  func presentRecoverableError(_ raw: String, action: RecoverableAction? = nil) {
+    if let action {
+      lastRecoverableAction = action
+    }
+    if !isNetworkAvailable {
+      errorMessage = "网络不可用，请检查连接后重试"
+      return
+    }
+    let lower = raw.lowercased()
+    if lower.contains("timed out")
+      || lower.contains("timeout")
+      || raw.contains("超时")
+      || lower.contains("NSURLErrorDomain Code=-1001".lowercased())
+    {
+      errorMessage = "网络超时，源无响应或网络较慢"
+      return
+    }
+    errorMessage = raw
+  }
+
+  func playLiveFromSearch(_ channel: LiveChannel) {
+    let groupName =
+      liveGroups.first(where: { $0.channels.contains(where: { $0.id == channel.id }) })?.name
+    rememberLiveChannel(channel, groupName: groupName, urlIndex: 0)
+    selectedTab = .live
   }
 
   func loadCategory(_ category: FirepickCore.Category, site: SiteConfiguration? = nil) async {
@@ -666,8 +1235,17 @@ final class AppModel {
         values[filter.key] = filter.initValue ?? filter.value.first?.value ?? ""
       }
     }
+    homeLoadGeneration += 1
+    let generation = homeLoadGeneration
+    loadMoreFailed = false
     isLoading = true
-    defer { isLoading = false }
+    isLoadingHome = true
+    defer {
+      isLoading = false
+      if generation == homeLoadGeneration {
+        isLoadingHome = false
+      }
+    }
     do {
       let provider = try await provider(for: site)
       var result = try await provider.categoryContent(
@@ -676,17 +1254,17 @@ final class AppModel {
         filter: true,
         extend: filterSelections
       )
+      guard generation == homeLoadGeneration else { return }
       if result.classes.isEmpty {
         result.classes = homeResult?.classes ?? []
-      }
-      if result.list.isEmpty, let current = homeResult, !current.list.isEmpty {
-        result.list = current.list
       }
       attachSourceKey(site.key, to: &result)
       homeResult = result
       currentPage = 1
+      errorMessage = nil
     } catch {
-      errorMessage = error.localizedDescription
+      guard generation == homeLoadGeneration else { return }
+      presentRecoverableError(error.localizedDescription, action: .reloadHome)
     }
   }
 
@@ -704,7 +1282,7 @@ final class AppModel {
 
   func loadMore() async {
     guard !isLoadingMore,
-      !isLoading,
+      !isLoadingHome,
       let site = selectedSite,
       let category = selectedCategory,
       let pagecount = homeResult?.pagecount,
@@ -712,7 +1290,9 @@ final class AppModel {
     else {
       return
     }
+    let generation = homeLoadGeneration
     isLoadingMore = true
+    loadMoreFailed = false
     defer { isLoadingMore = false }
     do {
       let nextPage = currentPage + 1
@@ -722,6 +1302,7 @@ final class AppModel {
         filter: true,
         extend: filterSelections
       )
+      guard generation == homeLoadGeneration else { return }
       if result.classes.isEmpty {
         result.classes = homeResult?.classes ?? []
       }
@@ -735,14 +1316,17 @@ final class AppModel {
       homeResult = result
       currentPage = nextPage
     } catch {
+      guard generation == homeLoadGeneration else { return }
+      loadMoreFailed = true
       errorMessage = error.localizedDescription
     }
   }
 
-  func openFolder(_ item: MediaItem) async {
-    guard let site = configuration.sites.first(where: { $0.key == item.sourceKey }) else { return }
-    isLoading = true
-    defer { isLoading = false }
+  /// Load folder contents without replacing the VOD home grid (push pages use this).
+  func loadFolder(_ item: MediaItem) async -> MediaResult? {
+    guard let site = configuration.sites.first(where: { $0.key == item.sourceKey })
+      ?? selectedSite
+    else { return nil }
     do {
       let provider = try await provider(for: site)
       var result = try await provider.categoryContent(
@@ -752,10 +1336,17 @@ final class AppModel {
         extend: [:]
       )
       attachSourceKey(site.key, to: &result)
-      homeResult = result
-      selectedSite = site
+      return result
     } catch {
       errorMessage = error.localizedDescription
+      return nil
+    }
+  }
+
+  @available(*, deprecated, message: "Use loadFolder + FolderBrowseView push instead")
+  func openFolder(_ item: MediaItem) async {
+    if let result = await loadFolder(item) {
+      homeResult = result
     }
   }
 
@@ -782,21 +1373,48 @@ final class AppModel {
     guard !keyword.isEmpty else { return }
     recordSearchHistory(keyword)
     isLoading = true
+    isLoadingSearch = true
     searchHasRun = false
-    defer { isLoading = false }
-    guard let coordinator,
-      var site = selectedSite
-    else {
+    defer {
+      isLoading = false
+      isLoadingSearch = false
+    }
+    guard let coordinator else {
       searchHasRun = true
       searchSections = []
+      searchFailures = []
       liveSearchResults = []
       searchFailureCount = 0
+      lastRecoverableAction = .search
       errorMessage = "请先在设置中选择当前点播源"
       return
     }
-    site.searchable = 1
-    site.quickSearch = 1
-    let results = await coordinator.search(sites: [site], keyword: keyword)
+    var sites: [SiteConfiguration]
+    if multiSourceSearchEnabled {
+      sites = onDeviceSites
+    } else if let selected = selectedSite {
+      sites = [selected]
+    } else {
+      sites = []
+    }
+    sites = sites.map { site in
+      var copy = site
+      copy.searchable = 1
+      copy.quickSearch = 1
+      return copy
+    }
+    guard !sites.isEmpty else {
+      searchHasRun = true
+      searchSections = []
+      searchFailures = []
+      liveSearchResults = []
+      searchFailureCount = 0
+      lastRecoverableAction = .search
+      errorMessage = "请先在设置中选择当前点播源"
+      return
+    }
+    lastRecoverableAction = .search
+    let results = await coordinator.search(sites: sites, keyword: keyword)
     searchFailureCount = results.values.reduce(into: 0) { count, result in
       if case .failure = result {
         count += 1
@@ -810,6 +1428,12 @@ final class AppModel {
       return SearchSection(id: key, siteName: site.name, result: resultMedia)
     }
     .sorted { $0.siteName.localizedCompare($1.siteName) == .orderedAscending }
+    searchFailures = results.compactMap { key, result in
+      guard case .failure(let error) = result else { return nil }
+      let name = configuration.sites.first(where: { $0.key == key })?.name ?? key
+      return SearchFailure(id: key, siteName: name, message: error.localizedDescription)
+    }
+    .sorted { $0.siteName.localizedCompare($1.siteName) == .orderedAscending }
     liveSearchResults =
       liveGroups
       .flatMap(\.channels)
@@ -817,6 +1441,27 @@ final class AppModel {
       .prefix(50)
       .map { $0 }
     searchHasRun = true
+    if searchFailureCount > 0, searchSections.isEmpty, liveSearchResults.isEmpty {
+      presentRecoverableError("搜索失败，请重试", action: .search)
+    } else {
+      errorMessage = nil
+    }
+  }
+
+  func clearSearchHistory() {
+    searchHistory = []
+    persistence?.saveSearchHistory(searchHistory)
+  }
+
+  func preferredPlaybackFlag(sourceKey: String?, vodId: String) -> String? {
+    guard let sourceKey else { return nil }
+    return playbackFlagSelections["\(sourceKey)|\(vodId)"]
+  }
+
+  func setPreferredPlaybackFlag(_ flag: String, sourceKey: String?, vodId: String) {
+    guard let sourceKey else { return }
+    playbackFlagSelections["\(sourceKey)|\(vodId)"] = flag
+    persistence?.savePlaybackFlagSelections(playbackFlagSelections)
   }
 
   func loadDetail(_ item: MediaItem) async {
@@ -824,13 +1469,18 @@ final class AppModel {
       let site = configuration.sites.first(where: { $0.key == sourceKey })
     else { return }
     isLoading = true
-    defer { isLoading = false }
+    isLoadingDetail = true
+    defer {
+      isLoading = false
+      isLoadingDetail = false
+    }
     do {
       let provider = try await provider(for: site)
       var result = try await provider.detailContent(id: item.vodId)
       attachSourceKey(site.key, to: &result)
       detailResult = result
     } catch {
+      lastRecoverableAction = .loadDetail(item)
       errorMessage = error.localizedDescription
     }
   }
@@ -1001,6 +1651,8 @@ final class AppModel {
   }
 
   func refreshLiveSources() async {
+    isLoadingLive = true
+    defer { isLoadingLive = false }
     guard let lives = configuration.lives, !lives.isEmpty else { return }
     isLoading = true
     defer { isLoading = false }
@@ -1124,6 +1776,7 @@ final class AppModel {
   func saveHistory(
     sourceKey: String, item: MediaItem, episode: Episode, position: Double, duration: Double
   ) async {
+    guard !incognitoModeEnabled else { return }
     guard let library else { return }
     do {
       try await library.saveHistory(
@@ -1306,6 +1959,7 @@ final class AppModel {
       selectedSite = nil
       homeResult = nil
       searchSections = []
+      searchFailures = []
       liveSearchResults = []
       searchHasRun = false
       searchFailureCount = 0
@@ -1314,13 +1968,14 @@ final class AppModel {
       loadingEPGSources = []
       epgPrograms = [:]
       epgStatus = nil
-      liveGroups = await loadLiveGroups(decoded.lives ?? [], baseURL: baseURL)
       errorMessage = nil
       let persistedKey = persistence?.selectedSiteKey
       pendingInitialSiteKey = persistedKey
+      async let liveTask = loadLiveGroups(decoded.lives ?? [], baseURL: baseURL)
       if selectInitialSite {
         await selectPendingInitialSite()
       }
+      liveGroups = await liveTask
     case .live(let name, let groups):
       liveGroups = groups
       availableDepots = []
@@ -1445,24 +2100,40 @@ final class AppModel {
   }
 
   private func loadLiveGroups(_ lives: [LiveConfiguration], baseURL: URL?) async -> [LiveGroup] {
-    var output: [LiveGroup] = []
-    for live in lives {
-      let start = output.count
-      if let embedded = live.groups {
-        output.append(contentsOf: LiveParser.groups(from: embedded))
-      }
-      if let text = await loadLiveText(live, baseURL: baseURL),
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      {
-        let groups = parseLiveGroups(text, live: live)
-        output.append(contentsOf: groups)
-      }
-      if let epg = live.epg,
-        let resolved = URL(string: epg, relativeTo: baseURL)?.absoluteURL
-      {
-        for index in start..<output.count where output[index].epg == nil {
-          output[index].epg = resolved.absoluteString
+    guard !lives.isEmpty else { return [] }
+    return await withTaskGroup(of: (Int, [LiveGroup]).self) { group in
+      for (index, live) in lives.enumerated() {
+        group.addTask {
+          let groups = await self.loadLiveGroupEntry(live, baseURL: baseURL)
+          return (index, groups)
         }
+      }
+      var ordered = Array(repeating: [LiveGroup](), count: lives.count)
+      for await (index, groups) in group {
+        ordered[index] = groups
+      }
+      return ordered.flatMap { $0 }
+    }
+  }
+
+  private func loadLiveGroupEntry(
+    _ live: LiveConfiguration,
+    baseURL: URL?
+  ) async -> [LiveGroup] {
+    var output: [LiveGroup] = []
+    if let embedded = live.groups {
+      output.append(contentsOf: LiveParser.groups(from: embedded))
+    }
+    if let text = await loadLiveText(live, baseURL: baseURL),
+      !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    {
+      output.append(contentsOf: parseLiveGroups(text, live: live))
+    }
+    if let epg = live.epg,
+      let resolved = URL(string: epg, relativeTo: baseURL)?.absoluteURL
+    {
+      for i in output.indices where output[i].epg == nil {
+        output[i].epg = resolved.absoluteString
       }
     }
     return output
@@ -1698,6 +2369,7 @@ final class AppModel {
     filterSelections = [:]
     currentPage = 1
     searchSections = []
+    searchFailures = []
     searchHasRun = false
     searchFailureCount = 0
     sourceTestStatus = nil

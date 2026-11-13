@@ -678,70 +678,81 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
       }
       request.httpBody = requestBody
 
+      // Return a pending Promise immediately so JS `Promise.all` can overlap
+      // requests. Completions are hoppped onto this thread's RunLoop, which
+      // `awaitJS` pumps while waiting — never `jsQueue.async` (same-queue deadlock).
+      let runLoop = RunLoop.current
+      let cfRunLoop = runLoop.getCFRunLoop()
       let box = RequestBox()
-      let taskGate = DispatchSemaphore(value: 0)
-      transportSession.dataTask(with: request) { data, response, error in
-        box.data = data
-        box.response = response
-        box.error = error
-        taskGate.signal()
-      }.resume()
-      if taskGate.wait(timeout: .now() + max(1, timeoutMs / 1000) + 5) == .timedOut {
-        box.error = RequestError.timeout
+      let settle: (Data?, URLResponse?, Error?) -> Void = { data, response, error in
+        CFRunLoopPerformBlock(cfRunLoop, CFRunLoopMode.commonModes.rawValue) {
+          guard !box.settled else { return }
+          box.settled = true
+          if let error {
+            NSLog(
+              "Firepick JS net.req failed url=%@ error=%@",
+              requestURL.absoluteString,
+              error.localizedDescription
+            )
+            reject?.call(withArguments: [error.localizedDescription])
+            return
+          }
+          let body = data ?? Data()
+          let http = response as? HTTPURLResponse
+          NSLog(
+            "Firepick JS net.req url=%@ status=%ld bytes=%ld",
+            requestURL.absoluteString,
+            http?.statusCode ?? 0,
+            body.count
+          )
+          var headerMap: [String: String] = [:]
+          http?.allHeaderFields.forEach { key, value in
+            headerMap["\(key)"] = "\(value)"
+          }
+          let payload = JSValue(newObjectIn: context)!
+          payload.setObject(http?.statusCode ?? 0, forKeyedSubscript: "code")
+          payload.setObject(headerMap, forKeyedSubscript: "headers")
+          payload.setObject(
+            http?.url?.absoluteString ?? requestURL.absoluteString,
+            forKeyedSubscript: "url"
+          )
+          switch buffer {
+          case 1:
+            payload.setObject(
+              Array(body).map { NSNumber(value: $0) },
+              forKeyedSubscript: "content"
+            )
+          case 2:
+            payload.setObject(
+              body.base64EncodedString(),
+              forKeyedSubscript: "content"
+            )
+          case 3:
+            let bytes = body.map(String.init).joined(separator: ",")
+            let arrayBuffer = context.evaluateScript(
+              "(function(){ var a = new Uint8Array([\(bytes)]); return a.buffer; })()"
+            )
+            payload.setObject(arrayBuffer, forKeyedSubscript: "content")
+          default:
+            payload.setObject(
+              String(decoding: body, as: UTF8.self),
+              forKeyedSubscript: "content"
+            )
+          }
+          resolve?.call(withArguments: [payload])
+        }
+        CFRunLoopWakeUp(cfRunLoop)
       }
 
-      if let error = box.error {
-        NSLog(
-          "Firepick JS net.req failed url=%@ error=%@",
-          requestURL.absoluteString,
-          error.localizedDescription
-        )
-        reject?.call(withArguments: [error.localizedDescription])
-        return promise
+      transportSession.dataTask(with: request) { data, response, error in
+        settle(data, response, error)
+      }.resume()
+
+      let timeoutSeconds = max(1.0, timeoutMs / 1000) + 5
+      DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeoutSeconds) {
+        settle(nil, nil, RequestError.timeout)
       }
-      let body = box.data ?? Data()
-      let http = box.response as? HTTPURLResponse
-      NSLog(
-        "Firepick JS net.req url=%@ status=%ld bytes=%ld",
-        requestURL.absoluteString,
-        http?.statusCode ?? 0,
-        body.count
-      )
-      var headerMap: [String: String] = [:]
-      http?.allHeaderFields.forEach { key, value in
-        headerMap["\(key)"] = "\(value)"
-      }
-      let payload = JSValue(newObjectIn: context)!
-      payload.setObject(http?.statusCode ?? 0, forKeyedSubscript: "code")
-      payload.setObject(headerMap, forKeyedSubscript: "headers")
-      payload.setObject(
-        http?.url?.absoluteString ?? requestURL.absoluteString,
-        forKeyedSubscript: "url"
-      )
-      switch buffer {
-      case 1:
-        payload.setObject(
-          Array(body).map { NSNumber(value: $0) },
-          forKeyedSubscript: "content"
-        )
-      case 2:
-        payload.setObject(
-          body.base64EncodedString(),
-          forKeyedSubscript: "content"
-        )
-      case 3:
-        let bytes = body.map(String.init).joined(separator: ",")
-        let arrayBuffer = context.evaluateScript(
-          "(function(){ var a = new Uint8Array([\(bytes)]); return a.buffer; })()"
-        )
-        payload.setObject(arrayBuffer, forKeyedSubscript: "content")
-      default:
-        payload.setObject(
-          String(decoding: body, as: UTF8.self),
-          forKeyedSubscript: "content"
-        )
-      }
-      resolve?.call(withArguments: [payload])
+
       return promise
     }
 
@@ -814,6 +825,7 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
     }
 
     private final class RequestBox: @unchecked Sendable {
+      var settled = false
       var data: Data?
       var response: URLResponse?
       var error: Error?

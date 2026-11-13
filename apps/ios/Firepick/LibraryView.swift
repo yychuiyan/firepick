@@ -24,87 +24,25 @@ struct LibraryView: View {
   @State private var selectedItem: MediaItem?
   @State private var selectedOffline: OfflineMedia?
   @State private var showingImporter = false
+  @State private var showingClearConfirmation = false
+  @State private var isClearing = false
+  @State private var resumingID: String?
+
+  private var columns: [GridItem] {
+    [
+      GridItem(
+        .adaptive(minimum: model.posterSizePreference.minimumWidth, maximum: 240),
+        spacing: 14
+      )
+    ]
+  }
 
   var body: some View {
-    List {
-      if mode == .history {
-        if !model.history.isEmpty {
-          ForEach(model.history) { entry in
-            Button {
-              selectedItem = entry.item
-            } label: {
-              VStack(alignment: .leading, spacing: 4) {
-                Text(entry.item.name)
-                Text("\(entry.episodeName) · \(format(entry.position))")
-                  .font(.caption)
-                  .foregroundStyle(.secondary)
-              }
-            }
-            .buttonStyle(.plain)
-            .swipeActions {
-              Button("删除", role: .destructive) {
-                Task { await model.removeHistory(entry) }
-              }
-            }
-          }
-        }
-
-      } else if mode == .favorites {
-        if !model.favorites.isEmpty {
-          ForEach(model.favorites) { entry in
-            Button(entry.item.name) {
-              selectedItem = entry.item
-            }
-            .buttonStyle(.plain)
-            .swipeActions {
-              Button("取消收藏", role: .destructive) {
-                Task { await model.removeFavorite(entry) }
-              }
-            }
-          }
-        }
+    Group {
+      if mode == .downloads {
+        downloadsList
       } else {
-        ForEach(model.downloads?.entries ?? []) { entry in
-          Button {
-            if entry.status == .completed {
-              selectedOffline = entry
-            }
-          } label: {
-            VStack(alignment: .leading, spacing: 5) {
-              Text(entry.title)
-              HStack {
-                Text(entry.episodeName)
-                Spacer()
-                downloadStatus(entry)
-              }
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              if entry.status == .downloading {
-                ProgressView(value: entry.progress)
-              }
-              if let error = entry.error {
-                Text(error)
-                  .font(.caption2)
-                  .foregroundStyle(.red)
-              }
-            }
-          }
-          .buttonStyle(.plain)
-          .swipeActions {
-            Button("删除", role: .destructive) {
-              model.downloads?.remove(id: entry.id)
-            }
-            if entry.status == .downloading {
-              Button("暂停") {
-                model.downloads?.pause(id: entry.id)
-              }
-            } else if entry.status != .completed {
-              Button("重试") {
-                model.downloads?.retry(id: entry.id)
-              }
-            }
-          }
-        }
+        posterGrid
       }
     }
     .overlay {
@@ -130,7 +68,22 @@ struct LibraryView: View {
             Image(systemName: "plus")
           }
         }
+      } else if canClear {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("清空", role: .destructive) {
+            showingClearConfirmation = true
+          }
+          .disabled(isClearing)
+        }
       }
+    }
+    .alert(clearTitle, isPresented: $showingClearConfirmation) {
+      Button("清空", role: .destructive) {
+        Task { await clearAll() }
+      }
+      Button("取消", role: .cancel) {}
+    } message: {
+      Text(clearMessage)
     }
     .fileImporter(
       isPresented: $showingImporter,
@@ -149,8 +102,15 @@ struct LibraryView: View {
         model.errorMessage = error.localizedDescription
       }
     }
-    .sheet(item: $selectedItem) { item in
-      DetailView(item: item)
+    .navigationDestination(
+      isPresented: Binding(
+        get: { selectedItem != nil },
+        set: { if !$0 { selectedItem = nil } }
+      )
+    ) {
+      if let selectedItem {
+        DetailView(item: selectedItem)
+      }
     }
     .fullScreenCover(item: $selectedOffline) { entry in
       if let request = model.downloads?.playbackRequest(for: entry) {
@@ -167,6 +127,146 @@ struct LibraryView: View {
           )
         )
       }
+    }
+  }
+
+  private var posterGrid: some View {
+    ScrollView {
+      LazyVGrid(columns: columns, spacing: 18) {
+        if mode == .history {
+          ForEach(model.history) { entry in
+            Button {
+              Task {
+                resumingID = entry.id
+                defer { resumingID = nil }
+                if await model.resumeFromHistory(entry) {
+                  return
+                }
+                model.detailResult = nil
+                selectedItem = entry.item
+              }
+            } label: {
+              MediaCardView(
+                item: entry.item,
+                progress: entry.duration > 0
+                  ? min(1, max(0, entry.position / entry.duration))
+                  : nil,
+                subtitle: "\(entry.episodeName) · \(format(entry.position))"
+              )
+              .overlay {
+                if resumingID == entry.id {
+                  ZStack {
+                    Color.black.opacity(0.25)
+                    ProgressView().tint(.white)
+                  }
+                  .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+              }
+            }
+            .buttonStyle(.plain)
+            .disabled(resumingID != nil)
+            .contextMenu {
+              Button("打开详情") {
+                model.detailResult = nil
+                selectedItem = entry.item
+              }
+              Button("删除", role: .destructive) {
+                Task { await model.removeHistory(entry) }
+              }
+            }
+          }
+        } else {
+          ForEach(model.favorites) { entry in
+            Button {
+              model.detailResult = nil
+              selectedItem = entry.item
+            } label: {
+              MediaCardView(item: entry.item)
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+              Button("取消收藏", role: .destructive) {
+                Task { await model.removeFavorite(entry) }
+              }
+            }
+          }
+        }
+      }
+      .padding()
+    }
+  }
+
+  private var downloadsList: some View {
+    List {
+      ForEach(model.downloads?.entries ?? []) { entry in
+        Button {
+          if entry.status == .completed {
+            selectedOffline = entry
+          }
+        } label: {
+          VStack(alignment: .leading, spacing: 5) {
+            Text(entry.title)
+            HStack {
+              Text(entry.episodeName)
+              Spacer()
+              downloadStatus(entry)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            if entry.status == .downloading {
+              ProgressView(value: entry.progress)
+            }
+            if let error = entry.error {
+              Text(error)
+                .font(.caption2)
+                .foregroundStyle(.red)
+            }
+          }
+        }
+        .buttonStyle(.plain)
+        .swipeActions {
+          Button("删除", role: .destructive) {
+            model.downloads?.remove(id: entry.id)
+          }
+          if entry.status == .downloading {
+            Button("暂停") {
+              model.downloads?.pause(id: entry.id)
+            }
+          } else if entry.status != .completed {
+            Button("重试") {
+              model.downloads?.retry(id: entry.id)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private var canClear: Bool {
+    switch mode {
+    case .favorites: !model.favorites.isEmpty
+    case .history: !model.history.isEmpty
+    case .downloads: false
+    }
+  }
+
+  private var clearTitle: String {
+    mode == .favorites ? "清空收藏？" : "清空观看记录？"
+  }
+
+  private var clearMessage: String {
+    mode == .favorites
+      ? "将移除全部本机收藏，此操作不可撤销。"
+      : "将清除全部本机观看记录，此操作不可撤销。"
+  }
+
+  private func clearAll() async {
+    isClearing = true
+    defer { isClearing = false }
+    if mode == .favorites {
+      await model.clearAllFavorites()
+    } else if mode == .history {
+      await model.clearAllHistory()
     }
   }
 
@@ -204,7 +304,7 @@ struct LibraryView: View {
 
   private var emptyDescription: String {
     switch mode {
-    case .favorites: "点播页中的内容会显示在这里。"
+    case .favorites: "在详情页点收藏后会出现在这里。"
     case .history: "播放过的内容会显示在这里。"
     case .downloads: "在播放器中下载，或从“文件”导入本地视频。"
     }

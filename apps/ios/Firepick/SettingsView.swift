@@ -1,228 +1,57 @@
 import SwiftUI
+import UIKit
+
+enum SettingsDestination: Hashable {
+  case lines
+  case connectionDetail(String)
+  case addConnection
+  case sources
+  case downloads
+  case playback
+}
 
 struct SettingsView: View {
   @Environment(AppModel.self) private var model
   @Environment(\.scenePhase) private var scenePhase
-  @FocusState private var focusedField: FocusedField?
-  @State private var showingSourceMenu = false
-  @State private var emptySourceURL = ""
+  @State private var path = NavigationPath()
   @State private var showingClearCacheConfirmation = false
 
-  private enum FocusedField: Hashable {
-    case emptySourceURL
-  }
-
   var body: some View {
-    NavigationStack {
+    NavigationStack(path: $path) {
       Form {
-        Section {
-          Button {
-            focusedField = nil
-            withAnimation(.easeInOut(duration: 0.18)) {
-              showingSourceMenu.toggle()
-            }
-          } label: {
-            HStack {
-              VStack(alignment: .leading, spacing: 4) {
-                Text("当前线路")
-                  .font(.caption)
-                  .foregroundStyle(.secondary)
-                Text(model.currentConnection?.displayAddress ?? "尚未选择")
-                  .foregroundStyle(.primary)
-                  .lineLimit(1)
-              }
-              Spacer()
-              Image(systemName: "chevron.down")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .rotationEffect(.degrees(showingSourceMenu ? 180 : 0))
-            }
-          }
-          .buttonStyle(.plain)
-          .contentShape(Rectangle())
-          .disabled(model.sourceConnections.isEmpty)
-
-          if showingSourceMenu {
-            ScrollView {
-              LazyVStack(spacing: 0) {
-                ForEach(model.sourceConnections) { connection in
-                  HStack(spacing: 12) {
-                    Button {
-                      showingSourceMenu = false
-                      Task { await model.loadConnection(connection) }
-                    } label: {
-                      VStack(alignment: .leading, spacing: 3) {
-                        Text(connection.name)
-                          .foregroundStyle(.primary)
-                          .lineLimit(1)
-                        Text(connection.displayAddress)
-                          .font(.caption)
-                          .foregroundStyle(.secondary)
-                          .lineLimit(1)
-                      }
-                      Spacer()
-                      if model.currentConnection?.id == connection.id {
-                        Image(systemName: "checkmark.circle.fill")
-                          .foregroundStyle(.orange)
-                      }
-                    }
-                    .buttonStyle(.plain)
-                    Button(role: .destructive) {
-                      model.removeConnection(connection)
-                    } label: {
-                      Image(systemName: "trash")
-                    }
-                    .buttonStyle(.borderless)
-                  }
-                  .padding(.vertical, 9)
-                  if connection.id != model.sourceConnections.last?.id {
-                    Divider()
-                  }
-                }
-              }
-            }
-            .frame(maxHeight: 280)
-          }
-
-          NavigationLink {
-            ConfigurationManagementView()
-          } label: {
-            LabeledContent(
-              "已添加的线路",
-              value: "\(model.sourceConnections.count) 个"
-            )
-          }
-
-          TextField("输入线路地址", text: $emptySourceURL)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .keyboardType(.URL)
-            .submitLabel(.go)
-            .focused($focusedField, equals: .emptySourceURL)
-            .onSubmit(addSourceFromURL)
-          Button(action: addSourceFromURL) {
-            HStack(spacing: 8) {
-              if model.isLoading {
-                ProgressView()
-              }
-              Text(model.isLoading ? "正在添加源…" : "添加源地址")
-                .frame(maxWidth: .infinity)
-            }
-          }
-          .disabled(
-            emptySourceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-              || model.isLoading
-          )
-          if !model.availableDepots.isEmpty {
-            Text("仓库线路")
-              .font(.footnote.weight(.semibold))
-              .foregroundStyle(.secondary)
-            ForEach(model.availableDepots, id: \.url) { depot in
-              Button(depot.name.isEmpty ? depot.url : depot.name) {
-                Task { await model.loadDepot(depot) }
-              }
-            }
-          }
-        }
-
-        Section {
-          NavigationLink {
-            LibraryView(mode: .favorites)
-          } label: {
-            Label("收藏", systemImage: "heart")
-          }
-          NavigationLink {
-            LibraryView(mode: .history)
-          } label: {
-            Label("最近观看", systemImage: "clock.arrow.circlepath")
-          }
-        }
-
-        if !model.configurationCandidates.isEmpty {
-          Section("检测到的配置入口") {
-            ForEach(model.configurationCandidates) { candidate in
-              Button {
-                Task {
-                  _ = await model.applyConfiguration(
-                    urlString: candidate.url.absoluteString
-                  )
-                }
-              } label: {
-                Text(candidate.url.absoluteString)
-                  .font(.caption.monospaced())
-                  .frame(maxWidth: .infinity, alignment: .leading)
-              }
-            }
-          }
-          .font(.footnote)
-        }
-
-        Section {
-          Picker(
-            "播放引擎",
-            selection: Binding(
-              get: { model.playbackPreference },
-              set: { model.setPlaybackPreference($0) }
-            )
-          ) {
-            ForEach(AppModel.PlaybackPreference.allCases) { value in
-              Text(value.title).tag(value)
-            }
-          }
-          Picker(
-            "海报尺寸",
-            selection: Binding(
-              get: { model.posterSizePreference },
-              set: { model.setPosterSizePreference($0) }
-            )
-          ) {
-            ForEach(AppModel.PosterSizePreference.allCases) { value in
-              Text(value.title).tag(value)
-            }
-          }
-          Button {
-            showingClearCacheConfirmation = true
-          } label: {
-            HStack {
-              Text("清理缓存")
-                .foregroundStyle(.red)
-              Spacer()
-              Text(model.cacheSizeText)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-            }
-          }
-          .buttonStyle(.plain)
-          .contentShape(Rectangle())
-          if let status = model.cacheStatus {
-            Text(status)
-              .font(.footnote)
-              .foregroundStyle(.secondary)
-          }
-        }
-
-        Section {
-          NavigationLink {
-            DanmakuSettingsView()
-          } label: {
-            LabeledContent(
-              "默认显示弹幕",
-              value: model.danmakuEnabledByDefault ? "已开启" : "已关闭"
-            )
-          }
-        }
-
+        linesSection
+        downloadsSection
+        playbackSection
+        storageSection
         ProvisioningExpirySection()
       }
       .contentMargins(.top, 8, for: .scrollContent)
-      .scrollDismissesKeyboard(.interactively)
-      .dismissKeyboardOnBackgroundTap()
-      .toolbar {
-        ToolbarItemGroup(placement: .keyboard) {
-          Spacer()
-          Button("收起") {
-            focusedField = nil
+      .navigationTitle("设置")
+      .navigationBarTitleDisplayMode(.inline)
+      .navigationDestination(for: SettingsDestination.self) { destination in
+        switch destination {
+        case .lines:
+          ConfigurationManagementView()
+        case .connectionDetail(let url):
+          if let connection = model.sourceConnections.first(where: { $0.url == url }) {
+            ConnectionDetailView(connection: connection) {
+              path = NavigationPath()
+            }
+          } else {
+            ContentUnavailableView(
+              "线路已删除",
+              systemImage: "link.badge.plus",
+              description: Text("返回线路列表重试。")
+            )
           }
+        case .addConnection:
+          AddConnectionView()
+        case .sources:
+          SourceManagementView()
+        case .downloads:
+          LibraryView(mode: .downloads)
+        case .playback:
+          PlaybackSettingsView()
         }
       }
       .alert(
@@ -244,18 +73,197 @@ struct SettingsView: View {
           model.refreshCacheSize()
         }
       }
-      .toolbar(.hidden, for: .navigationBar)
     }
   }
 
-  private func addSourceFromURL() {
-    let value = emptySourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !value.isEmpty else { return }
-    focusedField = nil
-    Task {
-      if await model.applyConfiguration(urlString: value) {
-        emptySourceURL = ""
+  @ViewBuilder
+  private var linesSection: some View {
+    Section {
+      HStack(alignment: .center, spacing: 12) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("当前线路")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Text(currentLineTitle)
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+          if let connection = model.currentConnection {
+            MiddleTruncatingText(
+              text: connection.displayAddress,
+              font: .preferredFont(forTextStyle: .caption1).monospaced(),
+              textColor: .secondaryLabel
+            )
+            .frame(height: 16)
+          } else {
+            Text("尚未选择")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
+        Spacer(minLength: 8)
+        if let connection = model.currentConnection,
+          let ms = model.connectionLatencyMS[connection.url]
+        {
+          Text("\(ms)ms")
+            .font(.caption.monospacedDigit().weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.secondary.opacity(0.12), in: Capsule())
+        }
+      }
+      .accessibilityElement(children: .combine)
+
+      if model.isSwitchingConnection {
+        HStack(spacing: 8) {
+          ProgressView()
+          Text("正在切换线路…")
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      NavigationLink(value: SettingsDestination.lines) {
+        LabeledContent(
+          "已添加的线路",
+          value: "\(model.sourceConnections.count) 个"
+        )
+      }
+
+      NavigationLink(value: SettingsDestination.addConnection) {
+        Label("添加线路", systemImage: "plus.circle")
+      }
+
+      if !model.availableDepots.isEmpty {
+        ForEach(model.availableDepots, id: \.url) { depot in
+          Button {
+            Task { await model.loadDepot(depot) }
+          } label: {
+            Label(
+              depot.name.isEmpty ? depot.url : depot.name,
+              systemImage: "shippingbox"
+            )
+          }
+        }
+      }
+
+      NavigationLink(value: SettingsDestination.sources) {
+        LabeledContent(
+          "点播源管理",
+          value: model.currentConnection == nil
+            ? "—"
+            : "\(model.configuration.sites.count)"
+        )
+      }
+      .disabled(model.currentConnection == nil)
+
+      if !model.configurationCandidates.isEmpty {
+        ForEach(model.configurationCandidates) { candidate in
+          Button {
+            Task {
+              _ = await model.applyConfiguration(
+                urlString: candidate.url.absoluteString
+              )
+            }
+          } label: {
+            VStack(alignment: .leading, spacing: 2) {
+              Text("检测到的配置")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+              Text(candidate.url.absoluteString)
+                .font(.caption.monospaced())
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+            }
+          }
+        }
+      }
+    } header: {
+      Text("线路与源")
+    } footer: {
+      if let notice = model.configuration.notice?
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+        !notice.isEmpty
+      {
+        Text(notice)
       }
     }
+  }
+
+  private var downloadsSection: some View {
+    Section("本机") {
+      NavigationLink(value: SettingsDestination.downloads) {
+        LabeledContent(
+          "本机下载",
+          value: "\(model.downloads?.entries.count ?? 0)"
+        )
+      }
+    }
+  }
+
+  private var playbackSection: some View {
+    Section("播放") {
+      NavigationLink(value: SettingsDestination.playback) {
+        LabeledContent(
+          "播放设置",
+          value: model.playbackPreference.title
+        )
+      }
+      NavigationLink {
+        DanmakuSettingsView()
+      } label: {
+        LabeledContent(
+          "弹幕设置",
+          value: model.danmakuEnabledByDefault ? "默认开" : "默认关"
+        )
+      }
+    }
+  }
+
+  private var storageSection: some View {
+    Section("存储与关于") {
+      Button {
+        showingClearCacheConfirmation = true
+      } label: {
+        HStack {
+          Text("清理缓存")
+            .foregroundStyle(.red)
+          Spacer()
+          Text(model.cacheSizeText)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+        }
+      }
+      .buttonStyle(.plain)
+      .contentShape(Rectangle())
+      if let status = model.cacheStatus {
+        Text(status)
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+      }
+    }
+  }
+
+  private var currentLineTitle: String {
+    if let site = model.selectedSite {
+      let name = site.name.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !name.isEmpty { return name }
+    }
+    if let notice = model.configuration.notice?
+      .trimmingCharacters(in: .whitespacesAndNewlines),
+      !notice.isEmpty
+    {
+      return notice
+    }
+    if let connection = model.currentConnection {
+      let name = connection.name.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !name.isEmpty { return name }
+    }
+    return "尚未选择"
+  }
+}
+
+private extension UIFont {
+  func monospaced() -> UIFont {
+    UIFont.monospacedSystemFont(ofSize: pointSize, weight: .regular)
   }
 }

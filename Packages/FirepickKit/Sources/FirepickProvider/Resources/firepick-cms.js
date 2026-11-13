@@ -28,6 +28,14 @@ const DEFAULT_PROVIDERS = [
   },
 ];
 
+const MENU = [
+  { id: 'recommend', name: '推荐' },
+  { id: 'tv', name: '电视剧' },
+  { id: 'movie', name: '电影' },
+  { id: 'variety', name: '综艺' },
+  { id: 'anime', name: '动漫' },
+];
+
 function encode(value) {
   return encodeURIComponent(String(value == null ? '' : value));
 }
@@ -79,6 +87,15 @@ function mediaItem(provider, item) {
   return item;
 }
 
+function classifyTypeName(name) {
+  const n = String(name || '');
+  if (/动漫|动画|卡通|番剧|国漫|日漫/.test(n)) return 'anime';
+  if (/综艺|晚会|真人|脱口秀|娱乐|选秀/.test(n)) return 'variety';
+  if (/电影|影片|院线/.test(n)) return 'movie';
+  if (/剧|电视|连续|剧集|美剧|韩剧|日剧|港剧|台剧|泰剧|短剧/.test(n)) return 'tv';
+  return null;
+}
+
 function directPlayableScore(group) {
   const episodes = String(group || '').split('#');
   let score = 0;
@@ -115,9 +132,24 @@ function preferDirectPlaybackLines(item) {
   return item;
 }
 
+function emptyBucketMap() {
+  return { tv: [], movie: [], variety: [], anime: [] };
+}
+
+function menuClasses() {
+  return MENU.map(function (entry) {
+    return {
+      type_id: 'bucket|' + entry.id,
+      type_name: entry.name,
+    };
+  });
+}
+
 export default class extends Spider {
   async init(ext) {
     this.providers = DEFAULT_PROVIDERS;
+    this.typeIdsByBucket = emptyBucketMap();
+    this.typeNameByProviderType = {};
     if (typeof ext !== 'string' || !ext.trim()) return;
     try {
       const config = JSON.parse(ext);
@@ -137,6 +169,33 @@ export default class extends Spider {
     } catch (error) {}
   }
 
+  rememberCatalog(provider, catalog) {
+    const categories = catalog && Array.isArray(catalog.class) ? catalog.class : [];
+    if (!this.typeIdsByBucket) this.typeIdsByBucket = emptyBucketMap();
+    if (!this.typeNameByProviderType) this.typeNameByProviderType = {};
+    for (let j = 0; j < categories.length; j++) {
+      const category = categories[j];
+      if (!category || category.type_id === undefined) continue;
+      const typeName = category.type_name || '';
+      const bucket = classifyTypeName(typeName);
+      this.typeNameByProviderType[provider.key + '|' + category.type_id] = typeName;
+      if (bucket && this.typeIdsByBucket[bucket]) {
+        this.typeIdsByBucket[bucket].push({
+          provider: provider,
+          typeId: category.type_id,
+        });
+      }
+    }
+  }
+
+  classifyItem(provider, item) {
+    if (!item) return null;
+    const byName = classifyTypeName(item.type_name) || classifyTypeName(item.vod_class);
+    if (byName) return byName;
+    const key = provider.key + '|' + item.type_id;
+    return classifyTypeName(this.typeNameByProviderType && this.typeNameByProviderType[key]);
+  }
+
   async providerData(provider) {
     const [catalog, latest] = await Promise.all([
       requestJSON(provider.api, { ac: 'list' }),
@@ -145,38 +204,53 @@ export default class extends Spider {
     return { provider: provider, catalog: catalog, latest: latest };
   }
 
-  async homeContent(filter) {
-    const providers = this.providers || DEFAULT_PROVIDERS;
-    const self = this;
-    const results = await Promise.all(providers.map(function (provider) {
-      return self.providerData(provider);
-    }));
-    const classes = [];
-    const list = [];
+  buildRecommendList(results) {
+    const buckets = { tv: [], movie: [], variety: [], other: [] };
     for (let index = 0; index < results.length; index++) {
       const result = results[index];
       const provider = result.provider;
-      const categories = result.catalog && Array.isArray(result.catalog.class)
-        ? result.catalog.class
-        : [];
-      for (let j = 0; j < categories.length; j++) {
-        const category = categories[j];
-        if (category && category.type_id !== undefined) {
-          classes.push({
-            type_id: provider.key + '|' + category.type_id,
-            type_name: provider.name + ' · ' + (category.type_name || '未命名'),
-          });
-        }
-      }
       const items = result.latest && Array.isArray(result.latest.list)
         ? result.latest.list
         : [];
       for (let k = 0; k < items.length; k++) {
-        const item = mediaItem(provider, items[k]);
-        if (item) list.push(item);
+        const item = mediaItem(provider, Object.assign({}, items[k]));
+        if (!item) continue;
+        const bucket = this.classifyItem(provider, items[k]);
+        if (bucket === 'tv' || bucket === 'movie' || bucket === 'variety') {
+          buckets[bucket].push(item);
+        } else if (bucket !== 'anime') {
+          buckets.other.push(item);
+        }
       }
     }
-    return { class: classes, list: list };
+    const list = [];
+    const max = Math.max(buckets.tv.length, buckets.movie.length, buckets.variety.length);
+    for (let i = 0; i < max; i++) {
+      if (buckets.tv[i]) list.push(buckets.tv[i]);
+      if (buckets.movie[i]) list.push(buckets.movie[i]);
+      if (buckets.variety[i]) list.push(buckets.variety[i]);
+    }
+    for (let o = 0; o < buckets.other.length && list.length < 60; o++) {
+      list.push(buckets.other[o]);
+    }
+    return list.slice(0, 60);
+  }
+
+  async homeContent(filter) {
+    const providers = this.providers || DEFAULT_PROVIDERS;
+    this.typeIdsByBucket = emptyBucketMap();
+    this.typeNameByProviderType = {};
+    const self = this;
+    const results = await Promise.all(providers.map(function (provider) {
+      return self.providerData(provider);
+    }));
+    for (let index = 0; index < results.length; index++) {
+      this.rememberCatalog(results[index].provider, results[index].catalog);
+    }
+    return {
+      class: menuClasses(),
+      list: this.buildRecommendList(results),
+    };
   }
 
   async homeVideoContent() {
@@ -184,9 +258,92 @@ export default class extends Spider {
     return { list: result.list };
   }
 
+  async bucketContent(bucket, pg) {
+    const providers = this.providers || DEFAULT_PROVIDERS;
+    const page = String(pg || 1);
+
+    if (bucket === 'recommend') {
+      const self = this;
+      const results = await Promise.all(providers.map(async function (provider) {
+        const latest = await requestJSON(provider.api, {
+          ac: 'videolist',
+          pg: page,
+        });
+        return { provider: provider, latest: latest };
+      }));
+      const list = this.buildRecommendList(results);
+      return {
+        page: Number(page) || 1,
+        pagecount: list.length ? Number(page) + 1 : Number(page) || 1,
+        limit: list.length,
+        total: list.length,
+        list: list,
+      };
+    }
+
+    let targets = (this.typeIdsByBucket && this.typeIdsByBucket[bucket]) || [];
+    if (!targets.length) {
+      // Cold path: catalogs not warm yet (e.g. direct category open).
+      const self = this;
+      const catalogs = await Promise.all(providers.map(async function (provider) {
+        const catalog = await requestJSON(provider.api, { ac: 'list' });
+        return { provider: provider, catalog: catalog };
+      }));
+      this.typeIdsByBucket = emptyBucketMap();
+      this.typeNameByProviderType = {};
+      for (let i = 0; i < catalogs.length; i++) {
+        this.rememberCatalog(catalogs[i].provider, catalogs[i].catalog);
+      }
+      targets = this.typeIdsByBucket[bucket] || [];
+    }
+
+    if (!targets.length) {
+      return { page: Number(page) || 1, pagecount: 1, limit: 0, total: 0, list: [] };
+    }
+
+    const results = await Promise.all(targets.map(async function (target) {
+      const data = await requestJSON(target.provider.api, {
+        ac: 'videolist',
+        t: target.typeId,
+        pg: page,
+      });
+      return { provider: target.provider, data: data };
+    }));
+
+    const list = [];
+    let pagecount = 1;
+    let total = 0;
+    for (let index = 0; index < results.length; index++) {
+      const result = results[index];
+      const items = result.data && Array.isArray(result.data.list) ? result.data.list : [];
+      if (result.data && result.data.pagecount) {
+        pagecount = Math.max(pagecount, Number(result.data.pagecount) || 1);
+      }
+      if (result.data && result.data.total) {
+        total += Number(result.data.total) || 0;
+      }
+      for (let j = 0; j < items.length; j++) {
+        const item = mediaItem(result.provider, Object.assign({}, items[j]));
+        if (item) list.push(item);
+      }
+    }
+    return {
+      page: Number(page) || 1,
+      pagecount: pagecount,
+      limit: list.length,
+      total: total || list.length,
+      list: list,
+    };
+  }
+
   async categoryContent(tid, pg, filter, extend) {
     const value = splitID(tid);
     if (!value) return { list: [] };
+
+    if (value.provider === 'bucket') {
+      return this.bucketContent(value.id, pg);
+    }
+
     const provider = this.providers.find(function (item) {
       return item.key === value.provider;
     });
@@ -203,7 +360,7 @@ export default class extends Spider {
       limit: data && data.limit ? data.limit : list.length,
       total: data && data.total ? data.total : list.length,
       list: list.map(function (item) {
-        return mediaItem(provider, item);
+        return mediaItem(provider, Object.assign({}, item));
       }).filter(Boolean),
     };
   }
@@ -225,7 +382,7 @@ export default class extends Spider {
         ? result.data.list
         : [];
       for (let j = 0; j < items.length; j++) {
-        const item = mediaItem(result.provider, items[j]);
+        const item = mediaItem(result.provider, Object.assign({}, items[j]));
         if (item) list.push(item);
       }
     }
