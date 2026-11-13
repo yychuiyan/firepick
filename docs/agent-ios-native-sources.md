@@ -95,7 +95,7 @@ https://dl.yychuiyan.com/firepick/ios-sources.json
 Its JavaScript aggregator is:
 
 ```text
-https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=6
+https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=7
 ```
 
 Full acceptance probe:
@@ -106,9 +106,11 @@ swift run --package-path Packages/FirepickKit firepick-source-probe \
   'https://dl.yychuiyan.com/firepick/ios-sources.json'
 ```
 
-Expected current shape: one on-device JS site, five AppleCMS providers,
-155 categories, 100 home items, non-zero search results, a direct playback
-URL, and three parsed live playlists.
+Expected current shape: one on-device JS site (`拾萤精选`) aggregating ~20+
+AppleCMS providers (see `sources/providers.whitelist.json`), synthetic menu
+buckets, non-zero search results for probe keywords, a direct playback URL,
+and three parsed live playlists. Re-probe with
+`node scripts/probe-cms-providers.mjs` when sources go stale.
 
 ## Acceptance
 

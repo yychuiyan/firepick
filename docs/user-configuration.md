@@ -77,9 +77,12 @@ https://raw.githubusercontent.com/gaotianliuyun/gao/master/js.json
 https://dl.yychuiyan.com/firepick/ios-sources.json
 ```
 
-该地址提供一个聚合点播线路和三组电视源，可直接验证首页、分类、搜索、
-详情、选集、HLS 播放与频道直播。上游采集接口和直播频道可能临时失效，
-不承诺长期固定内容；失效时应更换配置地址，而不是反复重装 App。
+该地址提供一个聚合点播站「拾萤精选」（背后扇出多路 AppleCMS 采集接口）
+和三组电视源，可直接验证首页、分类、搜索、详情、选集、HLS 播放与频道直播。
+显示名里的「爱奇艺 / 量子」等是采集库名称，不是正版平台官方接口。
+上游采集接口和直播频道可能临时失效，不承诺长期固定内容；维护时可重跑
+`node scripts/probe-cms-providers.mjs` 更新白名单并 bump `firepick-cms.js?v=`，
+不必反复重装 App。
 
 ### 手动添加单个源
 

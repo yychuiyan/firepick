@@ -1,31 +1,30 @@
 import { Spider, net } from 'catvod';
 
+// Curated from LunaTV jin18 + local probe (scripts/probe-cms-providers.mjs).
+// Re-run the probe periodically; dead hosts drag search latency.
 const DEFAULT_PROVIDERS = [
-  {
-    key: 'jisu',
-    name: '极速资源',
-    api: 'https://jszyapi.com/api.php/provide/vod/at/json',
-  },
-  {
-    key: 'movie',
-    name: '影视资源',
-    api: 'https://dy.7772888.xyz/api.php/tvbox',
-  },
-  {
-    key: 'dytt',
-    name: '天堂资源',
-    api: 'https://caiji.dyttzyapi.com/api.php/provide/vod/from/dyttm3u8/at/m3u8/',
-  },
-  {
-    key: 'ffzy',
-    name: '非凡资源',
-    api: 'https://cj.ffzyapi.com/api.php/provide/vod/',
-  },
-  {
-    key: 'lzi',
-    name: '量子资源',
-    api: 'https://cj.lziapi.com/api.php/provide/vod/',
-  },
+  { key: 'iqiyi', name: '爱奇艺资源', api: 'https://iqiyizyapi.com/api.php/provide/vod' },
+  { key: 'dytt', name: '电影天堂', api: 'https://caiji.dyttzyapi.com/api.php/provide/vod' },
+  { key: 'maoyan', name: '猫眼资源', api: 'https://api.maoyanapi.top/api.php/provide/vod' },
+  { key: 'lzcaiji', name: '量子资源', api: 'https://cj.lzcaiji.com/api.php/provide/vod' },
+  { key: 'lzi', name: '量子影视', api: 'https://cj.lziapi.com/api.php/provide/vod' },
+  { key: 'zy360', name: '360资源', api: 'https://360zyzz.com/api.php/provide/vod' },
+  { key: 'jisu', name: '极速资源', api: 'https://jszyapi.com/api.php/provide/vod' },
+  { key: 'ffzy', name: '非凡资源', api: 'https://api.ffzyapi.com/api.php/provide/vod' },
+  { key: 'bfzy', name: '暴风资源', api: 'https://bfzyapi.com/api.php/provide/vod' },
+  { key: 'zuid', name: '最大资源', api: 'https://api.zuidapi.com/api.php/provide/vod' },
+  { key: 'xinlang', name: '新浪资源', api: 'https://api.xinlangapi.com/xinlangapi.php/provide/vod' },
+  { key: 'subo', name: '速播资源', api: 'https://subocaiji.com/api.php/provide/vod' },
+  { key: 'jinying', name: '金鹰点播', api: 'https://jyzyapi.com/provide/vod/from/jinyingyun/at/json' },
+  { key: 'uku', name: 'U酷影视', api: 'https://api.ukuapi88.com/api.php/provide/vod' },
+  { key: 'guangsu', name: '光速资源', api: 'https://api.guangsuapi.com/api.php/provide/vod' },
+  { key: 'hongniu', name: '红牛资源', api: 'https://www.hongniuzy2.com/api.php/provide/vod' },
+  { key: 'moduanime', name: '魔都动漫', api: 'https://caiji.moduapi.cc/api.php/provide/vod' },
+  { key: 'haohua', name: '豪华资源', api: 'https://hhzyapi.com/api.php/provide/vod' },
+  { key: 'yzzy', name: '优质资源', api: 'https://api.yzzy-api.com/inc/apijson.php' },
+  { key: 'huya', name: '虎牙资源', api: 'https://www.huyaapi.com/api.php/provide/vod' },
+  { key: 'ffzy_cj', name: '非凡采集', api: 'https://cj.ffzyapi.com/api.php/provide/vod' },
+  { key: 'movie_legacy', name: '影视资源', api: 'https://dy.7772888.xyz/api.php/tvbox' },
 ];
 
 const MENU = [
@@ -35,6 +34,10 @@ const MENU = [
   { id: 'variety', name: '综艺' },
   { id: 'anime', name: '动漫' },
 ];
+
+const BATCH_SIZE = 8;
+const REQUEST_TIMEOUT_MS = 8000;
+const ADULT_PATTERN = /伦理|福利|里番|无码|有码|SWAG|色情|成人|黄游|性爱|口交|三级片/i;
 
 function encode(value) {
   return encodeURIComponent(String(value == null ? '' : value));
@@ -55,7 +58,7 @@ function buildURL(api, params) {
 async function requestJSON(api, params) {
   try {
     const response = await net.req(buildURL(api, params), {
-      timeout: 12000,
+      timeout: REQUEST_TIMEOUT_MS,
       headers: {
         'User-Agent': 'okhttp/4.1.0',
         Accept: 'application/json,text/plain,*/*',
@@ -66,6 +69,16 @@ async function requestJSON(api, params) {
   } catch (error) {
     return null;
   }
+}
+
+async function mapInBatches(items, batchSize, mapper) {
+  const out = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const chunk = items.slice(i, i + batchSize);
+    const part = await Promise.all(chunk.map(mapper));
+    for (let j = 0; j < part.length; j++) out.push(part[j]);
+  }
+  return out;
 }
 
 function providerID(provider, id) {
@@ -79,12 +92,62 @@ function splitID(value) {
   return { provider: text.slice(0, index), id: text.slice(index + 1) };
 }
 
+function normalizeTitle(name) {
+  return String(name || '')
+    .replace(/\s+/g, '')
+    .replace(/[　]/g, '')
+    .toLowerCase();
+}
+
+function looksAdult(item) {
+  if (!item) return true;
+  const blob = [
+    item.vod_name,
+    item.type_name,
+    item.vod_class,
+    item.vod_tag,
+    item.vod_remarks,
+    item.vod_note,
+  ].join(' ');
+  return ADULT_PATTERN.test(blob);
+}
+
 function mediaItem(provider, item) {
   if (!item || item.vod_id === undefined || !item.vod_name) return null;
+  if (looksAdult(item)) return null;
   item.vod_id = providerID(provider, item.vod_id);
   if (!item.vod_pic && item.vod_pic_thumb) item.vod_pic = item.vod_pic_thumb;
   if (!item.vod_remarks && item.vod_note) item.vod_remarks = item.vod_note;
   return item;
+}
+
+function itemScore(item) {
+  let score = 0;
+  if (item.vod_pic) score += 2;
+  if (item.vod_remarks || item.vod_note) score += 1;
+  return score;
+}
+
+function dedupeByTitle(list) {
+  const best = new Map();
+  const order = [];
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i];
+    const key = normalizeTitle(item.vod_name);
+    if (!key) continue;
+    const prev = best.get(key);
+    if (!prev) {
+      best.set(key, item);
+      order.push(key);
+      continue;
+    }
+    if (itemScore(item) > itemScore(prev)) {
+      best.set(key, item);
+    }
+  }
+  return order.map(function (key) {
+    return best.get(key);
+  });
 }
 
 function classifyTypeName(name) {
@@ -212,7 +275,9 @@ export default class extends Spider {
       const items = result.latest && Array.isArray(result.latest.list)
         ? result.latest.list
         : [];
-      for (let k = 0; k < items.length; k++) {
+      // Cap per provider so home stays snappy with 20+ backends.
+      const limit = Math.min(items.length, 8);
+      for (let k = 0; k < limit; k++) {
         const item = mediaItem(provider, Object.assign({}, items[k]));
         if (!item) continue;
         const bucket = this.classifyItem(provider, items[k]);
@@ -233,7 +298,7 @@ export default class extends Spider {
     for (let o = 0; o < buckets.other.length && list.length < 60; o++) {
       list.push(buckets.other[o]);
     }
-    return list.slice(0, 60);
+    return dedupeByTitle(list).slice(0, 60);
   }
 
   async homeContent(filter) {
@@ -241,9 +306,9 @@ export default class extends Spider {
     this.typeIdsByBucket = emptyBucketMap();
     this.typeNameByProviderType = {};
     const self = this;
-    const results = await Promise.all(providers.map(function (provider) {
+    const results = await mapInBatches(providers, BATCH_SIZE, function (provider) {
       return self.providerData(provider);
-    }));
+    });
     for (let index = 0; index < results.length; index++) {
       this.rememberCatalog(results[index].provider, results[index].catalog);
     }
@@ -263,14 +328,13 @@ export default class extends Spider {
     const page = String(pg || 1);
 
     if (bucket === 'recommend') {
-      const self = this;
-      const results = await Promise.all(providers.map(async function (provider) {
+      const results = await mapInBatches(providers, BATCH_SIZE, async function (provider) {
         const latest = await requestJSON(provider.api, {
           ac: 'videolist',
           pg: page,
         });
         return { provider: provider, latest: latest };
-      }));
+      });
       const list = this.buildRecommendList(results);
       return {
         page: Number(page) || 1,
@@ -283,12 +347,10 @@ export default class extends Spider {
 
     let targets = (this.typeIdsByBucket && this.typeIdsByBucket[bucket]) || [];
     if (!targets.length) {
-      // Cold path: catalogs not warm yet (e.g. direct category open).
-      const self = this;
-      const catalogs = await Promise.all(providers.map(async function (provider) {
+      const catalogs = await mapInBatches(providers, BATCH_SIZE, async function (provider) {
         const catalog = await requestJSON(provider.api, { ac: 'list' });
         return { provider: provider, catalog: catalog };
-      }));
+      });
       this.typeIdsByBucket = emptyBucketMap();
       this.typeNameByProviderType = {};
       for (let i = 0; i < catalogs.length; i++) {
@@ -301,14 +363,24 @@ export default class extends Spider {
       return { page: Number(page) || 1, pagecount: 1, limit: 0, total: 0, list: [] };
     }
 
-    const results = await Promise.all(targets.map(async function (target) {
+    // Cap fan-out for category pages: first matching type per provider is enough.
+    const byProvider = new Map();
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i];
+      if (!byProvider.has(target.provider.key)) {
+        byProvider.set(target.provider.key, target);
+      }
+    }
+    const uniqueTargets = Array.from(byProvider.values());
+
+    const results = await mapInBatches(uniqueTargets, BATCH_SIZE, async function (target) {
       const data = await requestJSON(target.provider.api, {
         ac: 'videolist',
         t: target.typeId,
         pg: page,
       });
       return { provider: target.provider, data: data };
-    }));
+    });
 
     const list = [];
     let pagecount = 1;
@@ -327,12 +399,13 @@ export default class extends Spider {
         if (item) list.push(item);
       }
     }
+    const deduped = dedupeByTitle(list);
     return {
       page: Number(page) || 1,
       pagecount: pagecount,
-      limit: list.length,
-      total: total || list.length,
-      list: list,
+      limit: deduped.length,
+      total: total || deduped.length,
+      list: deduped,
     };
   }
 
@@ -367,14 +440,14 @@ export default class extends Spider {
 
   async searchContent(key, quick, pg) {
     const providers = this.providers || DEFAULT_PROVIDERS;
-    const results = await Promise.all(providers.map(async function (provider) {
+    const results = await mapInBatches(providers, BATCH_SIZE, async function (provider) {
       const data = await requestJSON(provider.api, {
         ac: 'videolist',
         wd: key,
         pg: String(pg || 1),
       });
       return { provider: provider, data: data };
-    }));
+    });
     const list = [];
     for (let index = 0; index < results.length; index++) {
       const result = results[index];
@@ -386,7 +459,7 @@ export default class extends Spider {
         if (item) list.push(item);
       }
     }
-    return { list: list };
+    return { list: dedupeByTitle(list) };
   }
 
   async detailContent(ids) {

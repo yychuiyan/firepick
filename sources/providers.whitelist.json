@@ -1,0 +1,123 @@
+{
+  "providers": [
+    {
+      "key": "iqiyi",
+      "name": "爱奇艺资源",
+      "api": "https://iqiyizyapi.com/api.php/provide/vod"
+    },
+    {
+      "key": "dytt",
+      "name": "电影天堂",
+      "api": "https://caiji.dyttzyapi.com/api.php/provide/vod"
+    },
+    {
+      "key": "maoyan",
+      "name": "猫眼资源",
+      "api": "https://api.maoyanapi.top/api.php/provide/vod"
+    },
+    {
+      "key": "lzcaiji",
+      "name": "量子资源",
+      "api": "https://cj.lzcaiji.com/api.php/provide/vod"
+    },
+    {
+      "key": "lzi",
+      "name": "量子影视",
+      "api": "https://cj.lziapi.com/api.php/provide/vod"
+    },
+    {
+      "key": "zy360",
+      "name": "360资源",
+      "api": "https://360zyzz.com/api.php/provide/vod"
+    },
+    {
+      "key": "jisu",
+      "name": "极速资源",
+      "api": "https://jszyapi.com/api.php/provide/vod"
+    },
+    {
+      "key": "ffzy",
+      "name": "非凡资源",
+      "api": "https://api.ffzyapi.com/api.php/provide/vod"
+    },
+    {
+      "key": "bfzy",
+      "name": "暴风资源",
+      "api": "https://bfzyapi.com/api.php/provide/vod"
+    },
+    {
+      "key": "zuid",
+      "name": "最大资源",
+      "api": "https://api.zuidapi.com/api.php/provide/vod"
+    },
+    {
+      "key": "xinlang",
+      "name": "新浪资源",
+      "api": "https://api.xinlangapi.com/xinlangapi.php/provide/vod"
+    },
+    {
+      "key": "subo",
+      "name": "速播资源",
+      "api": "https://subocaiji.com/api.php/provide/vod"
+    },
+    {
+      "key": "jinying",
+      "name": "金鹰点播",
+      "api": "https://jyzyapi.com/provide/vod/from/jinyingyun/at/json"
+    },
+    {
+      "key": "uku",
+      "name": "U酷影视",
+      "api": "https://api.ukuapi88.com/api.php/provide/vod"
+    },
+    {
+      "key": "guangsu",
+      "name": "光速资源",
+      "api": "https://api.guangsuapi.com/api.php/provide/vod"
+    },
+    {
+      "key": "hongniu",
+      "name": "红牛资源",
+      "api": "https://www.hongniuzy2.com/api.php/provide/vod"
+    },
+    {
+      "key": "moduanime",
+      "name": "魔都动漫",
+      "api": "https://caiji.moduapi.cc/api.php/provide/vod"
+    },
+    {
+      "key": "haohua",
+      "name": "豪华资源",
+      "api": "https://hhzyapi.com/api.php/provide/vod"
+    },
+    {
+      "key": "yzzy",
+      "name": "优质资源",
+      "api": "https://api.yzzy-api.com/inc/apijson.php"
+    },
+    {
+      "key": "huya",
+      "name": "虎牙资源",
+      "api": "https://www.huyaapi.com/api.php/provide/vod"
+    },
+    {
+      "key": "ffzy_cj",
+      "name": "非凡采集",
+      "api": "https://cj.ffzyapi.com/api.php/provide/vod"
+    },
+    {
+      "key": "movie_legacy",
+      "name": "影视资源",
+      "api": "https://dy.7772888.xyz/api.php/tvbox"
+    }
+  ],
+  "meta": {
+    "probedAt": "2026-11-13T06:43:01.798Z",
+    "keywords": [
+      "庆余年",
+      "三体",
+      "进击的巨人",
+      "绝命毒师"
+    ]
+  }
+}
