@@ -264,12 +264,25 @@ final class AppModel {
   }
 
   func removeConnection(_ connection: SourceConnection) {
+    let removedCurrent = currentConnection?.id == connection.id
     sourceConnections.removeAll { $0.id == connection.id }
-    if currentConnection?.id == connection.id {
+    try? persistence?.saveSourceConnections(sourceConnections)
+    if removedCurrent || sourceConnections.isEmpty {
       currentConnection = nil
       persistence?.saveCurrentConnectionURL(nil)
+      unloadConfiguration()
     }
-    try? persistence?.saveSourceConnections(sourceConnections)
+  }
+
+  /// Drop in-memory + persisted VOD config when no warehouse address is selected.
+  private func unloadConfiguration() {
+    persistence?.clearConfiguration()
+    persistence?.saveCurrentConnectionURL(nil)
+    configurationBaseURL = nil
+    availableDepots = []
+    configurationCandidates = []
+    liveGroups = []
+    loadEmptyConfiguration()
   }
 
   private func recordConnection(url: URL, displayURL: String? = nil) {
@@ -1323,6 +1336,16 @@ final class AppModel {
       loadEmptyConfiguration()
       return
     }
+
+    if let currentURL = persistence.currentConnectionURL {
+      currentConnection = sourceConnections.first { $0.url == currentURL }
+    }
+    if currentConnection == nil {
+      // No selected warehouse → never keep orphaned sites (e.g. leftover 虎牙).
+      unloadConfiguration()
+      return
+    }
+
     if let data = persistence.configurationData {
       do {
         try await applyConfiguration(
@@ -1332,42 +1355,30 @@ final class AppModel {
         )
       } catch {
         errorMessage = error.localizedDescription
-        persistence.clearConfiguration()
-        loadEmptyConfiguration()
+        unloadConfiguration()
+        return
       }
     } else {
-      loadEmptyConfiguration()
-      return
+      // Connection exists but config file missing — reload from its URL.
+      _ = await applyConfiguration(
+        urlString: currentConnection!.url,
+        selectInitialSite: false,
+        displayURL: currentConnection?.displayAddress
+      )
     }
 
-    if let currentURL = persistence.currentConnectionURL {
-      currentConnection = sourceConnections.first {
-        $0.url == currentURL
-      }
-    }
-    if currentConnection == nil, let baseURL = persistence.configurationBaseURL {
-      currentConnection = sourceConnections.first {
-        $0.url == baseURL.absoluteString
-      }
-      if currentConnection == nil {
-        recordConnection(url: baseURL)
-      }
-    }
-
-    if let credentials = try? persistence.loadBridgeCredentials() {
-      await configureBridge(credentials: credentials)
-    }
     await selectPendingInitialSite()
   }
 
   /// Ensures the VOD home has a selected site and loaded content after a
   /// configuration address is applied — including when the user is still on Settings.
   func ensureHomeContentLoaded() async {
-    guard selectedSite == nil else { return }
+    guard currentConnection != nil, selectedSite == nil else { return }
     await selectPendingInitialSite()
   }
 
   func reloadHome() async {
+    guard currentConnection != nil else { return }
     if let site = selectedSite {
       await selectSite(site)
     } else {
@@ -1397,7 +1408,7 @@ final class AppModel {
   }
 
   private func selectPendingInitialSite() async {
-    guard selectedSite == nil, !configuration.sites.isEmpty else {
+    guard currentConnection != nil, selectedSite == nil, !onDeviceSites.isEmpty else {
       return
     }
     let persisted = pendingInitialSiteKey.flatMap { key in

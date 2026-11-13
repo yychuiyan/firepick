@@ -6,12 +6,8 @@ struct SourcePickerView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var query = ""
 
-  private var onDeviceSources: [SiteConfiguration] {
+  private var sources: [SiteConfiguration] {
     filtered(model.onDeviceSites)
-  }
-
-  private var bridgeOnlySources: [SiteConfiguration] {
-    filtered(model.bridgeOnlySites)
   }
 
   private func filtered(_ sites: [SiteConfiguration]) -> [SiteConfiguration] {
@@ -26,40 +22,24 @@ struct SourcePickerView: View {
   var body: some View {
     NavigationStack {
       List {
-        if onDeviceSources.isEmpty, bridgeOnlySources.isEmpty {
+        if sources.isEmpty {
           ContentUnavailableView(
-            "没有匹配的点播源",
-            systemImage: "magnifyingglass",
-            description: Text("换一个名称、标识或地址关键词。")
+            query.isEmpty ? "还没有本机点播源" : "没有匹配的点播源",
+            systemImage: query.isEmpty ? "sparkles" : "magnifyingglass",
+            description: Text(
+              query.isEmpty
+                ? "请先在设置中添加配置地址；仅 HTTP/JS 源可在本机使用。"
+                : "换一个名称、标识或地址关键词。"
+            )
           )
           .listRowBackground(Color.clear)
         } else {
-          if !onDeviceSources.isEmpty {
-            Section("本机可用") {
-              ForEach(onDeviceSources) { site in
-                siteButton(site, enabled: true)
-              }
-            }
-          }
-
-          if !bridgeOnlySources.isEmpty {
-            Section {
-              ForEach(bridgeOnlySources) { site in
-                siteButton(site, enabled: false)
-              }
-            } header: {
-              Text("需安卓运行时")
-            } footer: {
-              Text("这些 Java/Python 等源当前不可用。请改用本机 HTTP/JS，或自建 iOS 配置仓。")
-            }
-          }
-
           Section {
-            EmptyView()
+            ForEach(sources) { site in
+              siteButton(site)
+            }
           } footer: {
-            Text(
-              "本机 \(model.onDeviceSites.count) · 需安卓 \(model.bridgeOnlySites.count) · 合计 \(model.configuration.sites.count)"
-            )
+            Text("本机可用 \(sources.count) 个")
           }
         }
       }
@@ -75,7 +55,7 @@ struct SourcePickerView: View {
   }
 
   @ViewBuilder
-  private func siteButton(_ site: SiteConfiguration, enabled: Bool) -> some View {
+  private func siteButton(_ site: SiteConfiguration) -> some View {
     Button {
       Task {
         await model.selectSite(site)
@@ -88,16 +68,11 @@ struct SourcePickerView: View {
         VStack(alignment: .leading, spacing: 5) {
           HStack(spacing: 6) {
             Text(site.name)
-              .foregroundStyle(enabled ? .primary : .secondary)
+              .foregroundStyle(.primary)
             if site.isHidden {
               Text("已隐藏")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            }
-            if !enabled {
-              Text("不可用")
-                .font(.caption2)
-                .foregroundStyle(.orange)
             }
           }
           Text(model.routeLabel(for: site))
@@ -117,7 +92,7 @@ struct SourcePickerView: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .disabled(!enabled || site.isHidden)
-    .opacity((!enabled || site.isHidden) ? 0.55 : 1)
+    .disabled(site.isHidden)
+    .opacity(site.isHidden ? 0.55 : 1)
   }
 }

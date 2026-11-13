@@ -9,6 +9,8 @@ struct SourceProbe {
     var urls = Array(CommandLine.arguments.dropFirst())
     let invoke = urls.contains("--invoke")
     urls.removeAll { $0 == "--invoke" }
+    let includeLive = urls.contains("--live")
+    urls.removeAll { $0 == "--live" }
     let searchKeyword: String?
     if let index = urls.firstIndex(of: "--search"), index + 1 < urls.count {
       searchKeyword = urls[index + 1]
@@ -25,7 +27,7 @@ struct SourceProbe {
     }
     guard !urls.isEmpty else {
       print(
-        "Usage: firepick-source-probe [--invoke] [--search <keyword>] [--site <key>] <config-url> [...]"
+        "Usage: firepick-source-probe [--invoke] [--live] [--search <keyword>] [--site <key>] <config-url> [...]"
       )
       exit(2)
     }
@@ -34,6 +36,7 @@ struct SourceProbe {
       await probe(
         rawURL,
         invoke: invoke,
+        includeLive: includeLive,
         searchKeyword: searchKeyword,
         siteKey: siteKey
       )
@@ -43,6 +46,7 @@ struct SourceProbe {
   private static func probe(
     _ rawURL: String,
     invoke: Bool,
+    includeLive: Bool,
     searchKeyword: String?,
     siteKey: String?
   ) async {
@@ -102,9 +106,53 @@ struct SourceProbe {
             siteKey: siteKey
           )
         }
+        if includeLive {
+          await probeLive(
+            configuration: configuration,
+            baseURL: url
+          )
+        }
       }
     } catch {
       print("  RESULT error \(String(reflecting: error))")
+    }
+  }
+
+  private static func probeLive(
+    configuration: VodConfiguration,
+    baseURL: URL
+  ) async {
+    for live in configuration.lives ?? [] {
+      guard let rawURL = live.url,
+        let url = URL(string: rawURL, relativeTo: baseURL)?.absoluteURL
+      else {
+        print("  LIVE \(live.name) skipped; missing URL")
+        continue
+      }
+      do {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse,
+          !(200..<300).contains(http.statusCode)
+        {
+          throw FirepickError.network("HTTP \(http.statusCode)")
+        }
+        let text = String(decoding: data, as: UTF8.self)
+        let groups =
+          text.contains("#EXTM3U")
+          ? LiveParser.groups(m3u: text)
+          : LiveParser.groups(txt: text)
+        let channels = groups.reduce(0) { $0 + $1.channels.count }
+        print(
+          "  LIVE \(live.name) groups=\(groups.count) channels=\(channels) bytes=\(data.count)"
+        )
+        for group in groups.prefix(5) {
+          print("    \(group.name): \(group.channels.count)")
+        }
+      } catch {
+        print("  LIVE \(live.name) error \(String(reflecting: error))")
+      }
     }
   }
 
@@ -159,32 +207,51 @@ struct SourceProbe {
     print("  INVOKE \(resolved.name) home classes=\(home.classes.count) items=\(home.list.count)")
     guard site.isSearchable || searchKeyword != nil else {
       print("  INVOKE search skipped")
-      if let provider = provider as? HTTPProvider {
-        try await invokePlayback(provider: provider, home: home)
+      if let item = home.list.first {
+        try await invokePlayback(provider: provider, item: item, fallback: home)
+      } else {
+        print("  PLAYBACK skipped; home has no item")
       }
       return
     }
     let keyword = searchKeyword ?? home.list.first?.name ?? "测试"
     let search = try await provider.searchContent(keyword: keyword, quick: false, page: 1)
     print("  INVOKE search keyword=\(keyword) items=\(search.list.count)")
-    if let provider = provider as? HTTPProvider {
-      try await invokePlayback(provider: provider, home: home)
+    guard let item = search.list.first ?? home.list.first else {
+      print("  PLAYBACK skipped; search and home have no item")
+      return
     }
+    try await invokePlayback(
+      provider: provider,
+      item: item,
+      fallback: home
+    )
   }
 
   private static func invokePlayback(
-    provider: HTTPProvider,
-    home: MediaResult
+    provider: any SourceProvider,
+    item: MediaItem,
+    fallback: MediaResult
   ) async throws {
-    guard let item = home.list.first else {
-      print("  PLAYBACK skipped; home has no item")
-      return
-    }
     let detail = try await provider.detailContent(id: item.vodId)
     guard let vod = detail.list.first else {
+      if let fallbackItem = fallback.list.first, fallbackItem.vodId != item.vodId {
+        let alternate = try await provider.detailContent(id: fallbackItem.vodId)
+        if let value = alternate.list.first {
+          try await play(provider: provider, vod: value)
+          return
+        }
+      }
       print("  PLAYBACK skipped; detail has no item")
       return
     }
+    try await play(provider: provider, vod: vod)
+  }
+
+  private static func play(
+    provider: any SourceProvider,
+    vod: MediaItem
+  ) async throws {
     let lines = EpisodeParser.lines(playFrom: vod.playFrom, playURL: vod.playURL)
     guard let line = lines.first, let episode = line.episodes.first else {
       print("  PLAYBACK skipped; detail has no episode")

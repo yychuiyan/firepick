@@ -7,9 +7,9 @@ struct ConfigurationManagementView: View {
     List {
       if model.sourceConnections.isEmpty {
         ContentUnavailableView(
-          "还没有配置地址",
+          "还没有线路",
           systemImage: "link.badge.plus",
-          description: Text("返回设置页，在输入框中添加 TVBox 配置地址。")
+          description: Text("返回设置页，在输入框中添加线路地址。")
         )
         .listRowBackground(Color.clear)
       } else {
@@ -50,11 +50,11 @@ struct ConfigurationManagementView: View {
             }
           }
         } footer: {
-          Text("这里只管理整套配置地址。具体点播源请进入“点播”页面切换。")
+          Text("这里只管理整套线路地址。具体点播源请进入“点播”页面切换。")
         }
       }
     }
-    .navigationTitle("配置地址")
+    .navigationTitle("线路")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.visible, for: .navigationBar)
   }

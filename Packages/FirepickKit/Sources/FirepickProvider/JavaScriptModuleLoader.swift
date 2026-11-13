@@ -521,6 +521,18 @@ final class JavaScriptModuleLoader: @unchecked Sendable {
 
     var request = URLRequest(url: url)
     request.timeoutInterval = 20
+    request.assumesHTTP3Capable = false
+    request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+    request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+    request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+    request.setValue(
+      "\"firepick-module-\(UUID().uuidString)\"",
+      forHTTPHeaderField: "If-None-Match"
+    )
+    request.setValue(
+      "Thu, 01 Jan 1970 00:00:00 GMT",
+      forHTTPHeaderField: "If-Modified-Since"
+    )
     request.setValue(
       "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
       forHTTPHeaderField: "User-Agent"
@@ -548,7 +560,10 @@ final class JavaScriptModuleLoader: @unchecked Sendable {
   }
 
   private func moduleGlobalName(for url: URL) -> String {
-    let name = url.deletingPathExtension().lastPathComponent
+    var name = url.deletingPathExtension().lastPathComponent
+    if name.hasSuffix(".min") {
+      name.removeLast(".min".count)
+    }
     if name == "crypto-js" {
       return "CryptoJS"
     }

@@ -68,6 +68,16 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 https://raw.githubusercontent.com/gaotianliuyun/gao/master/js.json
 ```
 
+拾萤自建的聚合配置地址：
+
+```text
+https://dl.yychuiyan.com/firepick/ios-sources.json
+```
+
+该地址提供一个聚合点播线路和三组电视源，可直接验证首页、分类、搜索、
+详情、选集、HLS 播放与频道直播。上游采集接口和直播频道可能临时失效，
+不承诺长期固定内容；失效时应更换配置地址，而不是反复重装 App。
+
 ### 手动添加单个源
 
 填写：
@@ -147,6 +157,10 @@ https://raw.githubusercontent.com/gaotianliuyun/gao/master/js.json
 ```text
 https://live.zbds.top/tv/iptv4.m3u
 ```
+
+使用上面的拾萤聚合配置时，会同时载入“综合电视”“IPv4 电视”和
+“电视备用线路”。不同线路覆盖的央视频道、卫视频道、4K、电影和少儿频道
+可能不同，可在电视页直接切换。
 
 ## 8. Android Bridge（已下线设置入口）
 

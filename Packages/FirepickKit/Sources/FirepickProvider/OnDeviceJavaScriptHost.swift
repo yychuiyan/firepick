@@ -16,6 +16,7 @@ import Foundation
 /// in-app WebView, WebAssembly, and Node-compat APIs. Those remain Bridge-only.
 public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
   private let session: URLSession
+  private let transportSession: URLSession
   private let defaults: UserDefaults
   private let baseURL: URL?
   private let jsQueue = DispatchQueue(label: "app.firepick.javascript-host")
@@ -25,17 +26,29 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
   private var preparedSources: [String: String] = [:]
   private var preparationTasks: [String: Task<String, Error>] = [:]
   #if canImport(JavaScriptCore)
+    private final class JavaScriptExceptionState {
+      var value: JSValue?
+    }
+
     private final class JavaScriptSession {
       let api: String
       let scriptURL: URL
       let context: JSContext
       let target: JSValue
+      let exceptions: JavaScriptExceptionState
 
-      init(api: String, scriptURL: URL, context: JSContext, target: JSValue) {
+      init(
+        api: String,
+        scriptURL: URL,
+        context: JSContext,
+        target: JSValue,
+        exceptions: JavaScriptExceptionState
+      ) {
         self.api = api
         self.scriptURL = scriptURL
         self.context = context
         self.target = target
+        self.exceptions = exceptions
       }
     }
 
@@ -48,6 +61,22 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
     baseURL: URL? = nil
   ) {
     self.session = session
+    // Prefer a copy so tests can inject URLProtocol; otherwise use a clean
+    // ephemeral session that never shares URLCache with URLSession.shared.
+    let configuration: URLSessionConfiguration
+    if session.configuration.protocolClasses?.isEmpty == false {
+      configuration =
+        (session.configuration.copy() as? URLSessionConfiguration)
+        ?? URLSessionConfiguration.ephemeral
+    } else {
+      configuration = URLSessionConfiguration.ephemeral
+    }
+    configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+    configuration.urlCache = nil
+    configuration.httpCookieStorage = nil
+    configuration.httpShouldSetCookies = false
+    configuration.waitsForConnectivity = false
+    self.transportSession = URLSession(configuration: configuration)
     self.defaults = defaults
     self.baseURL = baseURL
   }
@@ -61,7 +90,17 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
     #if canImport(JavaScriptCore)
       let scriptURL = try Self.url(from: api)
       let source = try await downloadScript(from: scriptURL)
+      NSLog(
+        "Firepick JS prepare begin api=%@ bytes=%ld",
+        scriptURL.absoluteString,
+        source.utf8.count
+      )
       let prepared = try await prepare(source: source, scriptURL: scriptURL)
+      NSLog(
+        "Firepick JS prepare done api=%@ preparedBytes=%ld",
+        scriptURL.absoluteString,
+        prepared.utf8.count
+      )
       return try await runOnJSQueue {
         let jsSession = try self.session(
           api: api,
@@ -69,11 +108,23 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
           scriptURL: scriptURL,
           ext: ext
         )
-        return try self.invoke(
+        NSLog(
+          "Firepick JS spider ready api=%@ method=%@",
+          api,
+          method.rawValue
+        )
+        let result = try self.invoke(
           session: jsSession,
           method: method,
           arguments: arguments
         )
+        NSLog(
+          "Firepick JS %@ classes=%ld list=%ld",
+          method.rawValue,
+          result.classes.count,
+          result.list.count
+        )
+        return result
       }
     #else
       throw FirepickError.unsupported("当前平台没有 JavaScriptCore")
@@ -96,19 +147,140 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
   }
 
   private func downloadScript(from url: URL) async throws -> String {
-    var request = URLRequest(url: url)
+    do {
+      let remote = try await fetchRemoteScript(from: url)
+      NSLog(
+        "Firepick JS download ok url=%@ bytes=%ld",
+        url.absoluteString,
+        remote.utf8.count
+      )
+      return remote
+    } catch {
+      if let bundled = Self.bundledScript(for: url) {
+        NSLog(
+          "Firepick JS download fallback bundled url=%@ error=%@ bytes=%ld",
+          url.absoluteString,
+          error.localizedDescription,
+          bundled.utf8.count
+        )
+        return bundled
+      }
+      NSLog(
+        "Firepick JS download failed url=%@ error=%@",
+        url.absoluteString,
+        error.localizedDescription
+      )
+      throw error
+    }
+  }
+
+  private func fetchRemoteScript(from url: URL) async throws -> String {
+    var request = URLRequest(
+      url: url,
+      cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
+      timeoutInterval: 20
+    )
+    request.assumesHTTP3Capable = false
+    request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+    request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+    request.setValue(
+      "\"firepick-source-\(UUID().uuidString)\"",
+      forHTTPHeaderField: "If-None-Match"
+    )
+    request.setValue(
+      "Thu, 01 Jan 1970 00:00:00 GMT",
+      forHTTPHeaderField: "If-Modified-Since"
+    )
     request.setValue(
       "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
       forHTTPHeaderField: "User-Agent"
     )
-    let (data, response) = try await session.data(for: request)
-    if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+
+    var (data, response) = try await transportSession.data(for: request)
+    var status = (response as? HTTPURLResponse)?.statusCode ?? -1
+    NSLog(
+      "Firepick JS download response url=%@ status=%ld bytes=%ld empty=%@",
+      url.absoluteString,
+      status,
+      data.count,
+      data.isEmpty ? "yes" : "no"
+    )
+
+    // Simulator proxy/QUIC often yields empty 304 bodies. Retry once with a
+    // cache-buster, then fall through to the bundled copy if still empty.
+    if status == 304 || data.isEmpty {
+      request.url = Self.retryURL(for: url)
+      (data, response) = try await transportSession.data(for: request)
+      status = (response as? HTTPURLResponse)?.statusCode ?? -1
+      NSLog(
+        "Firepick JS download retry url=%@ status=%ld bytes=%ld empty=%@",
+        request.url?.absoluteString ?? url.absoluteString,
+        status,
+        data.count,
+        data.isEmpty ? "yes" : "no"
+      )
+    }
+
+    if let http = response as? HTTPURLResponse,
+      !(200..<300).contains(http.statusCode)
+    {
       throw FirepickError.network("JS 源 HTTP \(http.statusCode)")
     }
-    guard let text = String(data: data, encoding: .utf8), !text.isEmpty else {
-      throw FirepickError.provider("JS 源不是有效 UTF-8 文本")
+    guard !data.isEmpty,
+      let text = String(data: data, encoding: .utf8),
+      !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+      throw FirepickError.provider(
+        "JS 源响应为空（status=\(status)）。Simulator 代理/缓存可能导致空 304。"
+      )
     }
     return text
+  }
+
+  private static func bundledScript(for url: URL) -> String? {
+    let filename = url.deletingPathExtension().lastPathComponent
+    // Strip query-only clones: firepick-cms.js?v=4 → firepick-cms
+    let resourceName =
+      URLComponents(url: url, resolvingAgainstBaseURL: false)?
+      .path
+      .split(separator: "/")
+      .last
+      .map { ($0 as NSString).deletingPathExtension }
+      ?? filename
+    let ext =
+      URLComponents(url: url, resolvingAgainstBaseURL: false)?
+      .path
+      .split(separator: "/")
+      .last
+      .map { ($0 as NSString).pathExtension }
+      ?? url.pathExtension
+    guard !resourceName.isEmpty,
+      let resource = Bundle.module.url(
+        forResource: resourceName,
+        withExtension: ext.isEmpty ? "js" : ext
+      ),
+      let text = try? String(contentsOf: resource, encoding: .utf8),
+      !text.isEmpty
+    else {
+      return nil
+    }
+    return text
+  }
+
+  private static func retryURL(for url: URL) -> URL {
+    guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+      return url
+    }
+    var query = components.queryItems ?? []
+    query.removeAll { $0.name == "_firepick_retry" }
+    query.append(
+      URLQueryItem(
+        name: "_firepick_retry",
+        value: String(Int(Date().timeIntervalSince1970))
+      )
+    )
+    components.queryItems = query
+    return components.url ?? url
   }
 
   private func prepare(source: String, scriptURL: URL) async throws -> String {
@@ -122,7 +294,7 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
     if let task = existing.1 {
       return try await task.value
     }
-    let loader = JavaScriptModuleLoader(session: session, baseURL: baseURL)
+    let loader = JavaScriptModuleLoader(session: transportSession, baseURL: baseURL)
     let task = Task {
       try await loader.prepare(source: source, scriptURL: scriptURL)
     }
@@ -179,16 +351,16 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
       guard let context = JSContext() else {
         throw FirepickError.unsupported("无法创建 JSContext")
       }
-      var lastException: JSValue?
+      let exceptions = JavaScriptExceptionState()
       context.exceptionHandler = { _, exception in
-        lastException = exception
+        exceptions.value = exception
       }
 
       installRuntime(into: context)
       context.evaluateScript(Self.catvodModuleSource, withSourceURL: URL(string: "catvod.js"))
       context.evaluateScript(Self.wrapSpiderSource(source), withSourceURL: scriptURL)
-      if let lastException {
-        throw FirepickError.provider("JS 加载失败：\(lastException)")
+      if let exception = exceptions.value {
+        throw FirepickError.provider("JS 加载失败：\(exception)")
       }
 
       guard let target = context.objectForKeyedSubscript("__firepickSpider"),
@@ -198,11 +370,11 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
       }
 
       if target.hasProperty("init") {
-        lastException = nil
+        exceptions.value = nil
         let extArg = Self.jsValue(from: ext ?? .string(""), in: context)
         _ = try awaitJS(target.invokeMethod("init", withArguments: [extArg]), in: context)
-        if let lastException {
-          throw FirepickError.provider("JS init 失败：\(lastException)")
+        if let exception = exceptions.value {
+          throw FirepickError.provider("JS init 失败：\(exception)")
         }
       }
 
@@ -210,7 +382,8 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
         api: api,
         scriptURL: scriptURL,
         context: context,
-        target: target
+        target: target,
+        exceptions: exceptions
       )
       currentSession = result
       return result
@@ -232,11 +405,18 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
         methodName: methodName,
         in: context
       )
+      session.exceptions.value = nil
       let raw = session.target.invokeMethod(methodName, withArguments: jsArgs)
+      if let exception = session.exceptions.value {
+        throw FirepickError.provider("JS \(method.rawValue) 失败：\(exception)")
+      }
       guard let raw else {
         throw FirepickError.provider("JS 未实现 \(method.rawValue)")
       }
       let resolved = try awaitJS(raw, in: context)
+      if let exception = session.exceptions.value {
+        throw FirepickError.provider("JS \(method.rawValue) 失败：\(exception)")
+      }
       if method == .liveContent {
         var result = MediaResult()
         result.rawContent = rawString(from: resolved, in: context)
@@ -486,8 +666,12 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
 
       var request = URLRequest(
         url: requestURL,
+        cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
         timeoutInterval: max(1, timeoutMs / 1000)
       )
+      request.assumesHTTP3Capable = false
+      request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+      request.setValue("no-cache", forHTTPHeaderField: "Pragma")
       request.httpMethod = method
       for (key, value) in headers {
         request.setValue("\(value)", forHTTPHeaderField: key)
@@ -496,7 +680,7 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
 
       let box = RequestBox()
       let taskGate = DispatchSemaphore(value: 0)
-      session.dataTask(with: request) { data, response, error in
+      transportSession.dataTask(with: request) { data, response, error in
         box.data = data
         box.response = response
         box.error = error
@@ -507,11 +691,22 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
       }
 
       if let error = box.error {
+        NSLog(
+          "Firepick JS net.req failed url=%@ error=%@",
+          requestURL.absoluteString,
+          error.localizedDescription
+        )
         reject?.call(withArguments: [error.localizedDescription])
         return promise
       }
       let body = box.data ?? Data()
       let http = box.response as? HTTPURLResponse
+      NSLog(
+        "Firepick JS net.req url=%@ status=%ld bytes=%ld",
+        requestURL.absoluteString,
+        http?.statusCode ?? 0,
+        body.count
+      )
       var headerMap: [String: String] = [:]
       http?.allHeaderFields.forEach { key, value in
         headerMap["\(key)"] = "\(value)"

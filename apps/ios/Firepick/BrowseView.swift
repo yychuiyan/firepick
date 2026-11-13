@@ -17,68 +17,76 @@ struct BrowseView: View {
     ]
   }
 
+  private var hasActiveWarehouse: Bool {
+    model.currentConnection != nil && !model.onDeviceSites.isEmpty
+  }
+
   var body: some View {
     NavigationStack {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 20) {
           pageHeader
 
-          if let categories = model.homeResult?.classes, !categories.isEmpty {
-            ScrollView(.horizontal) {
-              HStack {
-                ForEach(categories) { category in
-                  Button(category.typeName) {
-                    Task { await model.loadCategory(category) }
+          if hasActiveWarehouse {
+            if let categories = model.homeResult?.classes, !categories.isEmpty {
+              ScrollView(.horizontal) {
+                HStack {
+                  ForEach(categories) { category in
+                    Button(category.typeName) {
+                      Task { await model.loadCategory(category) }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.secondary)
                   }
-                  .buttonStyle(.bordered)
-                  .tint(.secondary)
                 }
+                .padding(.horizontal)
               }
-              .padding(.horizontal)
+              .scrollIndicators(.hidden)
             }
-            .scrollIndicators(.hidden)
-          }
 
-          if !model.categoryFilters.isEmpty {
-            ScrollView(.horizontal) {
-              HStack(spacing: 8) {
-                ForEach(model.categoryFilters, id: \.key) { filter in
-                  Menu {
-                    ForEach(
-                      Array(filter.value.enumerated()),
-                      id: \.offset
-                    ) { entry in
-                      let value = entry.element
-                      Button {
-                        Task {
-                          await model.selectFilter(filter, value: value)
-                        }
-                      } label: {
-                        if model.filterSelections[filter.key] == value.value {
-                          Label(value.name, systemImage: "checkmark")
-                        } else {
-                          Text(value.name)
+            if !model.categoryFilters.isEmpty {
+              ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                  ForEach(model.categoryFilters, id: \.key) { filter in
+                    Menu {
+                      ForEach(
+                        Array(filter.value.enumerated()),
+                        id: \.offset
+                      ) { entry in
+                        let value = entry.element
+                        Button {
+                          Task {
+                            await model.selectFilter(filter, value: value)
+                          }
+                        } label: {
+                          if model.filterSelections[filter.key] == value.value {
+                            Label(value.name, systemImage: "checkmark")
+                          } else {
+                            Text(value.name)
+                          }
                         }
                       }
+                    } label: {
+                      Label(
+                        "\(filter.name)：\(model.selectedFilterName(filter))",
+                        systemImage: "line.3.horizontal.decrease.circle"
+                      )
+                      .font(.subheadline)
+                      .padding(.horizontal, 12)
+                      .padding(.vertical, 8)
+                      .background(.secondary.opacity(0.1), in: Capsule())
                     }
-                  } label: {
-                    Label(
-                      "\(filter.name)：\(model.selectedFilterName(filter))",
-                      systemImage: "line.3.horizontal.decrease.circle"
-                    )
-                    .font(.subheadline)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.secondary.opacity(0.1), in: Capsule())
                   }
                 }
+                .padding(.horizontal)
               }
-              .padding(.horizontal)
+              .scrollIndicators(.hidden)
             }
-            .scrollIndicators(.hidden)
           }
 
-          if model.isLoading {
+          if !hasActiveWarehouse {
+            emptyContent
+          } else if model.isLoading {
             ProgressView("正在读取数据源…")
               .frame(maxWidth: .infinity)
               .padding(.vertical, 48)
@@ -123,9 +131,11 @@ struct BrowseView: View {
         .padding(.vertical)
       }
       .refreshable {
+        guard hasActiveWarehouse else { return }
         await model.reloadHome()
       }
       .task(id: homeLoadToken) {
+        guard hasActiveWarehouse else { return }
         await model.ensureHomeContentLoaded()
       }
       .toolbar(.hidden, for: .navigationBar)
@@ -147,24 +157,28 @@ struct BrowseView: View {
 
   @ViewBuilder
   private var emptyContent: some View {
-    if model.configuration.sites.isEmpty {
+    if model.currentConnection == nil || model.configuration.sites.isEmpty {
       ContentUnavailableView(
         "还没有内容",
         systemImage: "sparkles",
-        description: Text("请在设置中添加本机可用的配置地址（HTTP/JS 仓），首页会自动加载。")
+        description: Text(Self.defaultWarehouseDescription)
       )
     } else if model.onDeviceSites.isEmpty {
       ContentUnavailableView(
         "当前配置没有本机可播源",
         systemImage: "iphone.slash",
-        description: Text(
-          "该配置主要是 Java 等需安卓运行时的站点。请换用自建 iOS 配置仓（仅 HTTP/JS），或在点播源列表里查看说明。"
-        )
+        description: Text("该配置没有可用的 HTTP/JS 源。请换用自建 iOS 配置仓后重试。")
       )
     } else if model.selectedSite == nil {
       ProgressView("正在加载本机源…")
         .frame(maxWidth: .infinity)
         .padding(.vertical, 48)
+    } else if let error = model.errorMessage, !error.isEmpty {
+      ContentUnavailableView(
+        "这个源暂时无法加载",
+        systemImage: "exclamationmark.triangle",
+        description: Text(error)
+      )
     } else {
       ContentUnavailableView(
         "这个源暂时没有内容",
@@ -180,23 +194,30 @@ struct BrowseView: View {
         Text(headerTitle)
           .font(.system(size: 28, weight: .bold))
           .lineLimit(1)
-        Button {
-          showingSourcePicker = true
-        } label: {
-          HStack(spacing: 5) {
-            if let description = headerDescription {
-              Text(description)
+        if hasActiveWarehouse {
+          Button {
+            showingSourcePicker = true
+          } label: {
+            HStack(spacing: 5) {
+              Text(sourceSwitcherLabel)
+              Image(systemName: "chevron.down")
+                .font(.caption2.weight(.semibold))
             }
-            Text(model.selectedSite == nil ? "选择点播源" : "切换点播源")
-            Image(systemName: "chevron.down")
-              .font(.caption2.weight(.semibold))
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .lineLimit(1)
           }
+          .buttonStyle(.plain)
+        } else {
+          Text(
+            model.currentConnection == nil
+              ? Self.defaultWarehouseDescription
+              : "当前线路没有本机可播源"
+          )
           .font(.caption)
-          .foregroundStyle(.orange)
-          .lineLimit(1)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
         }
-        .buttonStyle(.plain)
-        .disabled(model.configuration.sites.isEmpty)
       }
       Spacer(minLength: 8)
       HStack(spacing: 8) {
@@ -229,26 +250,34 @@ struct BrowseView: View {
     .padding(.top, 8)
   }
 
+  /// Warehouse / brand title — never keep a leftover site name when no config is selected.
   private var headerTitle: String {
-    if let site = model.selectedSite {
-      return site.name
+    if let notice = model.configuration.notice?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !notice.isEmpty,
+      model.currentConnection != nil
+    {
+      return notice
     }
     if let connection = model.currentConnection {
-      return connection.name
+      let name = connection.name.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !name.isEmpty { return name }
+      return connection.displayAddress
     }
     return "拾萤"
   }
 
-  private var headerDescription: String? {
+  private var sourceSwitcherLabel: String {
     if let site = model.selectedSite {
       let route = model.routeLabel(for: site)
-      if let address = model.currentConnection?.displayAddress, !address.isEmpty {
-        return "\(address) · \(route)"
-      }
-      return route
+      return "\(site.name) · \(route)"
     }
-    return model.currentConnection?.displayAddress
+    if model.currentConnection != nil {
+      return model.onDeviceSites.isEmpty ? "无可切换源" : "选择点播源"
+    }
+    return Self.defaultWarehouseDescription
   }
+
+  private static let defaultWarehouseDescription = "在设置中添加配置地址后，点播内容会出现在这里"
 }
 
 private struct MediaCard: View {

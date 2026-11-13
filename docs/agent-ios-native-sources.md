@@ -12,7 +12,8 @@ Firepick iOS runs **HTTP + CatVod JS spiders on-device**. Android Bridge is opti
 | --- | --- | --- |
 | 1. HTTP-first UX / no Bridge false alarms | Done | `AppModel` only auto-selects on-device sites; picker splits 本机 / 需安卓 |
 | 2. Full on-device CatVod JS host | Done (JSC) | Reused JSContext, ES imports, `assets://` helpers, lifecycle and `net.req` buffers |
-| 3. Example warehouse + COS notes | Done | `docs/examples/ios-sources.example.json` |
+| 3. Curated warehouse + COS notes | Done | `sources/ios-sources.json` + `sources/firepick-cms.js` |
+| 4. drpy helper compatibility modules | Done | JSON5, URI, node-rsa, pako, gbk, jinja, jsoup, mJSEncrypt |
 | Bridge Settings UI | Done | Pairing entry removed from iOS Settings |
 
 ## Architecture
@@ -54,6 +55,8 @@ Config URL (COS / any HTTPS JSON)
 - Static ES imports, `assets://` modules, built-in cheerio/crypto-js, anonymous default classes
 - `action`, `liveContent`, `destroy` wired through QuickJSProvider
 - CatVod `buffer` modes 0/1/2/3, params, string/byte/JSON/form bodies
+- Bundled drpy helper modules: JSON5, URI.js, node-rsa, pako, GBK, jinja,
+  jsoup-style helper, template catalog, JSEncrypt
 
 ## Host gaps (do not claim done)
 
@@ -83,6 +86,30 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/ios-sources.ex
 It intentionally uses `example.com` and is not a usable VOD catalog. Replace it
 with authorized endpoints before uploading a real `ios-sources.json`.
 
+The current curated configuration is:
+
+```text
+https://dl.yychuiyan.com/firepick/ios-sources.json
+```
+
+Its JavaScript aggregator is:
+
+```text
+https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=4
+```
+
+Full acceptance probe:
+
+```bash
+swift run --package-path Packages/FirepickKit firepick-source-probe \
+  --invoke --live --search '庆余年' --site firepick_cms \
+  'https://dl.yychuiyan.com/firepick/ios-sources.json'
+```
+
+Expected current shape: one on-device JS site, five AppleCMS providers,
+155 categories, 100 home items, non-zero search results, a direct playback
+URL, and three parsed live playlists.
+
 ## Acceptance
 
 - [ ] No Android paired: HTTP site shows home grid
@@ -104,5 +131,17 @@ See `vendor/upstream.lock` (`quickjs_revision`, `catvod_spider_revision`). JS AP
 ## Next suggested work
 
 1. Grow `CatVodHTMLQuery` against failing real `.js` spiders
-2. Optional: link QuickJS-NG C for closer FongMi parity
-3. Optionally strip remaining Bridge modules / env-only test hooks if product permanently drops Android
+2. Add a compatibility wrapper for drpy2 rule-only sites; do not claim arbitrary
+   drpy2 rules work until they have an end-to-end probe
+3. Add generic AppleCMS `/share/...` page-to-HLS resolution only when a stable,
+   tested URL pattern is known
+4. Optional: link QuickJS-NG C for closer FongMi parity
+5. Optionally strip remaining Bridge modules / env-only test hooks if product permanently drops Android
+
+## Source reuse policy
+
+Publicly visible code is not automatically licensed for copying. Directly reuse
+code only when its license is compatible with this GPL-3.0-only repository and
+record the upstream commit in `NOTICE.md`. For repositories without a license,
+use them only as behavioral references and implement independently unless the
+author grants permission. AGPL-only code must not be merged into this project.

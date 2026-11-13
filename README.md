@@ -19,9 +19,9 @@
 当前公开发布版本：
 
 ```text
-Version: 0.1.19
-Build:   20
-SHA-256: 75d692b8db12f49cd0f9065faca939d305dce09f3aa2d9a656e7e3dd2d4e0d2a
+Version: 0.1.20
+Build:   21
+SHA-256: 0a45374767b4cdff29d40d21cfcd077c1f58ebc9691cf04477731afd9eea6b52
 ```
 
 SideStore 更新源：
@@ -33,14 +33,14 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 当前 IPA 下载地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/Firepick-0.1.19.ipa
+https://dl.yychuiyan.com/firepick/Firepick-0.1.20.ipa
 ```
 
 ## 功能概览
 
 | 模块      | 当前能力                                                                             |
 | --------- | ------------------------------------------------------------------------------------ |
-| 点播      | CatVod/TVBox 配置、分类、筛选、详情、剧集、搜索、换源                                |
+| 点播      | CatVod/TVBox 配置、HTTP/XML/JSON/JS、分类、筛选、详情、剧集、搜索、换源              |
 | 源管理    | 设置页只管理配置地址；点播页选择配置内部的点播源                                     |
 | 直播/电视 | JSON、M3U、TXT 直播源，频道分组、频道头、XMLTV EPG                                   |
 | 播放      | AVPlayer；MPVKit-GPL 支持 MKV、ISO、M2TS、字幕和续播                                 |
@@ -81,6 +81,16 @@ artifacts/                         IPA、发布清单，不提交
 | Firepick 点播源  | 提供影视分类、详情、剧集和搜索 | 拾萤 → 设置 → 点播源 |
 
 SideStore Source 是应用更新清单；Firepick 点播源是 CatVod/TVBox 配置。
+
+拾萤自建聚合配置可直接在 `设置 → 当前线路` 中添加：
+
+```text
+https://dl.yychuiyan.com/firepick/ios-sources.json
+```
+
+它当前聚合五组点播采集接口和三组电视源，覆盖首页、分类、搜索、详情、
+选集、HLS 播放与直播频道。第三方上游接口可能调整或失效，因此不把其内容
+视为永久内置资源。
 
 ---
 
@@ -360,7 +370,7 @@ FIREPICK_CURL_DOH_URL="https://223.5.5.5/dns-query" \
 
 版本规则：
 
-- 后续补丁版本依次使用 `0.1.10`、`0.1.11`、`0.1.12`、`0.1.13`、 `0.1.14`、`0.1.15`、`0.1.16`、`0.1.17`、`0.1.18`、`0.1.19`，不跳到 `0.2.0`。
+- 后续补丁版本依次使用 `0.1.10`、`0.1.11`、`0.1.12`、`0.1.13`、`0.1.14`、`0.1.15`、`0.1.16`、`0.1.17`、`0.1.18`、`0.1.19`、`0.1.20`，不跳到 `0.2.0`。
 - 每次发布增加 `MARKETING_VERSION`。
 - 同一版本重新构建时仍应增加 `CURRENT_PROJECT_VERSION`。
 - 不复用旧版本号发布不同代码。

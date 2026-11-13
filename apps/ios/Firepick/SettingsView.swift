@@ -24,7 +24,7 @@ struct SettingsView: View {
           } label: {
             HStack {
               VStack(alignment: .leading, spacing: 4) {
-                Text("配置地址")
+                Text("当前线路")
                   .font(.caption)
                   .foregroundStyle(.secondary)
                 Text(model.currentConnection?.displayAddress ?? "尚未选择")
@@ -88,12 +88,12 @@ struct SettingsView: View {
             ConfigurationManagementView()
           } label: {
             LabeledContent(
-              "已添加的配置地址",
+              "已添加的线路",
               value: "\(model.sourceConnections.count) 个"
             )
           }
 
-          TextField("输入配置地址", text: $emptySourceURL)
+          TextField("输入线路地址", text: $emptySourceURL)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .keyboardType(.URL)
@@ -114,7 +114,7 @@ struct SettingsView: View {
               || model.isLoading
           )
           if !model.availableDepots.isEmpty {
-            Text("配置仓库线路")
+            Text("仓库线路")
               .font(.footnote.weight(.semibold))
               .foregroundStyle(.secondary)
             ForEach(model.availableDepots, id: \.url) { depot in

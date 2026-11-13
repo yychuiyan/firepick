@@ -120,14 +120,13 @@ struct SourceManagementView: View {
             .font(.footnote)
             .foregroundStyle(.secondary)
         }
-        if !model.sourceRouteCounts.isEmpty,
-          model.sourceRouteCounts.contains(where: {
-            $0.runtime != .http && $0.runtime != .quickJS
-          })
+        if model.currentConnection != nil,
+          !model.onDeviceSites.isEmpty,
+          model.bridgeOnlySites.count > 0
         {
-          Text("Java、Python、Node.js 等源当前无法在本机运行，请改用 HTTP/JS 或自建 iOS 配置仓。")
+          Text("配置中有 \(model.bridgeOnlySites.count) 个非本机源，已自动忽略。")
             .font(.footnote)
-            .foregroundStyle(.orange)
+            .foregroundStyle(.secondary)
         }
       }
 

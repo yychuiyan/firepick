@@ -1,0 +1,37 @@
+{
+  "sites": [
+    {
+      "key": "firepick_cms",
+      "name": "拾萤精选",
+      "type": 3,
+      "api": "https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "changeable": 0,
+      "style": {
+        "type": "rect",
+        "ratio": 1.5
+      }
+    }
+  ],
+  "lives": [
+    {
+      "name": "综合电视",
+      "type": 0,
+      "url": "https://down.nigx.cn/raw.githubusercontent.com/Kimentanm/aptv/master/m3u/iptv.m3u",
+      "playerType": 2
+    },
+    {
+      "name": "IPv4 电视",
+      "type": 0,
+      "url": "https://live.zbds.top/tv/iptv4.m3u",
+      "playerType": 2
+    },
+    {
+      "name": "电视备用线路",
+      "type": 0,
+      "url": "https://raw.githubusercontent.com/suxuang/myIPTV/refs/heads/main/ipv4.m3u",
+      "playerType": 2
+    }
+  ]
+}
