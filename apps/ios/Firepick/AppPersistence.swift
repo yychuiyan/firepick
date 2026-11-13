@@ -32,6 +32,7 @@ final class AppPersistence {
     static let playbackFlagSelections = "playbackFlagSelections"
     static let favoriteLiveChannelIDs = "favoriteLiveChannelIDs"
     static let lastLiveChannelID = "lastLiveChannelID"
+    static let lastLiveChannelName = "lastLiveChannelName"
     static let lastLiveGroupName = "lastLiveGroupName"
     static let lastLiveURLIndex = "lastLiveURLIndex"
   }
@@ -292,6 +293,7 @@ final class AppPersistence {
   }
 
   var lastLiveChannelID: String? { defaults.string(forKey: Key.lastLiveChannelID) }
+  var lastLiveChannelName: String? { defaults.string(forKey: Key.lastLiveChannelName) }
   var lastLiveGroupName: String? { defaults.string(forKey: Key.lastLiveGroupName) }
   var lastLiveURLIndex: Int? {
     guard defaults.object(forKey: Key.lastLiveURLIndex) != nil else { return nil }
@@ -300,6 +302,10 @@ final class AppPersistence {
 
   func saveLastLiveChannelID(_ value: String?) {
     defaults.set(value, forKey: Key.lastLiveChannelID)
+  }
+
+  func saveLastLiveChannelName(_ value: String?) {
+    defaults.set(value, forKey: Key.lastLiveChannelName)
   }
 
   func saveLastLiveGroupName(_ value: String?) {

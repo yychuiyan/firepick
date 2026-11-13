@@ -5,6 +5,11 @@ import MediaPlayer
 import SwiftUI
 import UIKit
 
+private enum PlayPauseGlyph: Equatable {
+  case play
+  case pause
+}
+
 enum PlayerChrome: Equatable {
   case immersive
   case inline
@@ -26,6 +31,7 @@ struct PlayerView: View {
   var chrome: PlayerChrome = .immersive
   var onExpand: (() -> Void)? = nil
   var onCollapse: (() -> Void)? = nil
+  var onPlayEpisode: ((Episode, String) -> Void)? = nil
 
   @State private var avEngine = AVPlayerEngine()
   @State private var mpvEngine = MPVPlayerEngine()
@@ -38,12 +44,17 @@ struct PlayerView: View {
   @State private var activeLineEpisodes: [Episode] = []
   @State private var danmakuComments: [DanmakuComment] = []
   @State private var danmakuEnabled = true
-  @State private var showingCast = false
   @State private var showingEpisodes = false
   @State private var showingLines = false
   @State private var showingDanmakuSettings = false
   @State private var showControls = true
   @State private var hideTask: Task<Void, Never>?
+  @State private var failingOver = false
+  @State private var triedURLs: [URL] = []
+  @State private var retriedWithAV = false
+  @State private var playPauseGlyph: PlayPauseGlyph?
+  @State private var singleTapTask: Task<Void, Never>?
+  @State private var glyphHideTask: Task<Void, Never>?
   @State private var toast: String?
   @State private var gestureHint: String?
   @State private var brightnessBar: Double?
@@ -64,6 +75,7 @@ struct PlayerView: View {
   @State private var dragStartVolume: Float = 0
   @State private var dragStartTime: Double = 0
   @State private var remoteCommandsConfigured = false
+  @State private var remoteCommandTargets: [(command: MPRemoteCommand, target: Any)] = []
   @State private var showingRatePicker = false
   @State private var orientationLocked = false
 
@@ -82,7 +94,8 @@ struct PlayerView: View {
     playbackLines: [PlaybackLine] = [],
     chrome: PlayerChrome = .immersive,
     onExpand: (() -> Void)? = nil,
-    onCollapse: (() -> Void)? = nil
+    onCollapse: (() -> Void)? = nil,
+    onPlayEpisode: ((Episode, String) -> Void)? = nil
   ) {
     self.request = request
     self.item = item
@@ -94,6 +107,7 @@ struct PlayerView: View {
     self.chrome = chrome
     self.onExpand = onExpand
     self.onCollapse = onCollapse
+    self.onPlayEpisode = onPlayEpisode
     let kind =
       (try? PlayerSelector().select(
         request,
@@ -107,6 +121,15 @@ struct PlayerView: View {
         ? (playbackLines.first(where: { $0.name == flag })?.episodes ?? [])
         : lineEpisodes
     )
+  }
+
+  private var previousEpisode: Episode? {
+    let episodes = currentLineEpisodes
+    guard let current = activeEpisode ?? episode,
+      let index = episodes.firstIndex(where: { $0.value == current.value }),
+      index > 0
+    else { return nil }
+    return episodes[index - 1]
   }
 
   private var nextEpisode: Episode? {
@@ -150,28 +173,198 @@ struct PlayerView: View {
     }
   }
 
+  /// Read the concrete engine so SwiftUI observes time ticks.
+  /// `any PlaybackEngine` does not publish `@Observable` changes.
+  private var observedTime: Double {
+    engineKind == .mpv ? mpvEngine.currentTime : avEngine.currentTime
+  }
+
+  private var observedDuration: Double {
+    engineKind == .mpv ? mpvEngine.duration : avEngine.duration
+  }
+
+  /// `any PlaybackEngine` does not publish `@Observable` changes to SwiftUI.
+  private var observedState: PlaybackState {
+    engineKind == .mpv ? mpvEngine.state : avEngine.state
+  }
+
+  private var isPlaying: Bool {
+    if engineKind == .mpv {
+      return mpvEngine.state == .playing
+    }
+    // Prefer the real AVPlayer clock so icons match what the user hears/sees.
+    return avEngine.isActivelyPlaying
+  }
+
   private var currentTime: Double {
-    PlaybackTimeline.position(
-      scrubPreview ?? playbackEngine.currentTime,
-      duration: playbackEngine.duration
-    )
+    let raw = scrubPreview ?? observedTime
+    guard raw.isFinite, raw >= 0 else { return 0 }
+    if duration > 0 { return min(raw, duration) }
+    return raw
   }
 
   private var duration: Double {
-    PlaybackTimeline.duration(playbackEngine.duration)
+    PlaybackTimeline.duration(observedDuration)
   }
 
   var body: some View {
+    playerSurface
+    .background {
+      if chrome == .immersive {
+        Color.black.ignoresSafeArea()
+      }
+    }
+    .statusBarHidden(chrome != .inline)
+    .persistentSystemOverlays(chrome == .inline ? .automatic : .hidden)
+    .sheet(isPresented: $showingEpisodes) {
+      episodePickerSheet
+        .presentationDetents([.medium, .large])
+    }
+    .sheet(isPresented: $showingLines) {
+      linePickerSheet
+        .presentationDetents([.medium])
+    }
+    .confirmationDialog("倍速", isPresented: $showingRatePicker, titleVisibility: .visible) {
+      ForEach([0.75, 1, 1.25, 1.5, 2], id: \.self) { rate in
+        Button(rate == 1 ? "1×" : "\(rate.formatted())×") {
+          playbackRate = Float(rate)
+          playbackEngine.setPlaybackRate(Float(rate))
+          scheduleHideControls()
+        }
+      }
+    }
+    .sheet(isPresented: $showingDanmakuSettings) {
+      NavigationStack {
+        DanmakuSettingsView(
+          sessionEnabled: $danmakuEnabled,
+          hasComments: !danmakuComments.isEmpty
+        )
+        .toolbar {
+          ToolbarItem(placement: .cancellationAction) {
+            Button("完成") { showingDanmakuSettings = false }
+          }
+        }
+      }
+    }
+    .background(VolumeProxyHost(proxy: volumeProxy).frame(width: 0, height: 0))
+    .task {
+      applyPlaybackPreferences()
+      configureAudioSession()
+      configureRemoteCommandsIfNeeded()
+      UIApplication.shared.isIdleTimerDisabled = true
+      await loadAvailableSource()
+      updateNowPlaying()
+      maybeShowResumeToast()
+      scheduleHideControls()
+    }
+    .task(id: request.danmaku.first?.id) {
+      await loadDanmaku()
+    }
+    .onChange(of: avEngine.currentTime) { _, time in
+      handleAutoSkip(at: time)
+      updateNowPlaying()
+    }
+    .onChange(of: mpvEngine.currentTime) { _, time in
+      handleAutoSkip(at: time)
+      updateNowPlaying()
+    }
+    .onChange(of: selectedSubtitleIndex) { _, index in
+      applySubtitleSelection(index)
+    }
+    .onChange(of: avEngine.state) { _, state in
+      handlePlaybackEnded(state)
+      if case .failed(let message) = state {
+        Task { await recover(from: message) }
+      }
+      if state == .playing { scheduleHideControls() }
+    }
+    .onChange(of: mpvEngine.state) { _, state in
+      handlePlaybackEnded(state)
+      if case .failed(let message) = state {
+        Task { await recover(from: message) }
+      }
+      if state == .playing { scheduleHideControls() }
+    }
+    .alert("播放下一集？", isPresented: $showingNextEpisode) {
+      Button("下一集") {
+        Task { await playNextEpisode(auto: false) }
+      }
+      Button("关闭", role: .cancel) {
+        showingNextEpisode = false
+      }
+    } message: {
+      if let next = nextEpisode {
+        Text(next.name)
+      }
+    }
+    .onChange(of: scenePhase) { _, phase in
+      if phase != .active, !model.backgroundPlaybackEnabled {
+        playbackEngine.pause()
+      }
+    }
+    .onReceive(
+      NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
+    ) { note in
+      handleInterruption(note)
+    }
+    .onDisappear {
+      hideTask?.cancel()
+      UIApplication.shared.isIdleTimerDisabled = false
+      if !incognitoThisSession, let sourceKey {
+        let historyEpisode =
+          activeEpisode
+          ?? episode
+          ?? Episode(
+            name: item.name,
+            value: (activeRequest ?? request).url.absoluteString
+          )
+        Task {
+          await model.saveHistory(
+            sourceKey: sourceKey,
+            item: item,
+            episode: historyEpisode,
+            position: observedTime,
+            duration: observedDuration
+          )
+        }
+      }
+      clearNowPlaying()
+      playbackEngine.stop()
+      removeRemoteCommands()
+      if orientationLocked {
+        orientationLocked = false
+        OrientationBridge.unlock()
+      }
+      model.releasePlaybackCache()
+    }
+  }
+
+  /// Inline playback stays 16:9. A root `GeometryReader` otherwise takes the
+  /// leftover screen height and crops the picture to fill it.
+  private var playerSurface: some View {
+    Group {
+      if chrome == .inline {
+        Color.black
+          .aspectRatio(16.0 / 9.0, contentMode: .fit)
+          .overlay { playerStage }
+          .clipped()
+      } else {
+        playerStage
+      }
+    }
+  }
+
+  private var playerStage: some View {
     GeometryReader { geo in
       ZStack {
-        Color.black.ignoresSafeArea()
+        Color.black
         videoLayer
-          .contentShape(Rectangle())
-          .gesture(playerDrag(in: geo.size))
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .allowsHitTesting(false)
         DanmakuOverlay(
           comments: danmakuComments,
-          currentTime: playbackEngine.currentTime,
-          isPlaying: playbackEngine.state == .playing,
+          currentTime: observedTime,
+          isPlaying: isPlaying,
           isEnabled: danmakuEnabled,
           opacity: model.danmakuOpacity,
           fontScale: model.danmakuFontScale,
@@ -180,7 +373,7 @@ struct PlayerView: View {
         if !overlayCues.isEmpty {
           SubtitleOverlay(
             cues: overlayCues,
-            currentTime: playbackEngine.currentTime,
+            currentTime: observedTime,
             fontSize: subtitleFontSize,
             color: subtitleColor,
             outlined: model.subtitleOutlineEnabled
@@ -224,133 +417,33 @@ struct PlayerView: View {
         if let displayFailure {
           failureOverlay(displayFailure)
         }
-        if playbackEngine.state == .loading || isResolvingNext {
+        if observedState == .loading || isResolvingNext {
           ProgressView()
             .tint(.white)
             .scaleEffect(1.2)
         }
+        if let playPauseGlyph {
+          playPauseFlash(playPauseGlyph)
+            .allowsHitTesting(false)
+        }
       }
       .contentShape(Rectangle())
+      .simultaneousGesture(playerDrag(in: geo.size))
       .onTapGesture(count: 2) {
-        togglePlayPause()
+        singleTapTask?.cancel()
+        flashPlayPause()
       }
       .onTapGesture(count: 1) {
-        withAnimation(.easeInOut(duration: 0.18)) {
-          showControls.toggle()
-        }
-        if showControls { scheduleHideControls() }
-      }
-    }
-    .statusBarHidden(true)
-    .persistentSystemOverlays(.hidden)
-    .preferredColorScheme(.dark)
-    .sheet(isPresented: $showingCast) {
-      DLNACastView(request: activeRequest ?? request, title: item.name)
-    }
-    .sheet(isPresented: $showingEpisodes) {
-      episodePickerSheet
-        .presentationDetents([.medium, .large])
-    }
-    .sheet(isPresented: $showingLines) {
-      linePickerSheet
-        .presentationDetents([.medium])
-    }
-    .confirmationDialog("倍速", isPresented: $showingRatePicker, titleVisibility: .visible) {
-      ForEach([0.75, 1, 1.25, 1.5, 2], id: \.self) { rate in
-        Button(rate == 1 ? "1×" : "\(rate.formatted())×") {
-          playbackRate = Float(rate)
-          playbackEngine.setPlaybackRate(Float(rate))
-          scheduleHideControls()
-        }
-      }
-    }
-    .sheet(isPresented: $showingDanmakuSettings) {
-      NavigationStack {
-        DanmakuSettingsView()
-          .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-              Button("完成") { showingDanmakuSettings = false }
-            }
+        singleTapTask?.cancel()
+        singleTapTask = Task {
+          try? await Task.sleep(for: .milliseconds(280))
+          guard !Task.isCancelled else { return }
+          withAnimation(.easeInOut(duration: 0.18)) {
+            showControls.toggle()
           }
-      }
-    }
-    .background(VolumeProxyHost(proxy: volumeProxy).frame(width: 0, height: 0))
-    .task {
-      applyPlaybackPreferences()
-      configureAudioSession()
-      configureRemoteCommandsIfNeeded()
-      UIApplication.shared.isIdleTimerDisabled = true
-      await loadAvailableSource()
-      updateNowPlaying()
-      maybeShowResumeToast()
-      scheduleHideControls()
-    }
-    .task(id: request.danmaku.first?.id) {
-      await loadDanmaku()
-    }
-    .onChange(of: playbackEngine.currentTime) { _, time in
-      handleAutoSkip(at: time)
-      updateNowPlaying()
-    }
-    .onChange(of: selectedSubtitleIndex) { _, index in
-      applySubtitleSelection(index)
-    }
-    .onChange(of: avEngine.state) { _, state in
-      handlePlaybackEnded(state)
-    }
-    .onChange(of: mpvEngine.state) { _, state in
-      handlePlaybackEnded(state)
-    }
-    .alert("播放下一集？", isPresented: $showingNextEpisode) {
-      Button("下一集") {
-        Task { await playNextEpisode(auto: false) }
-      }
-      Button("关闭", role: .cancel) {
-        showingNextEpisode = false
-      }
-    } message: {
-      if let next = nextEpisode {
-        Text(next.name)
-      }
-    }
-    .onChange(of: scenePhase) { _, phase in
-      if phase != .active, !model.backgroundPlaybackEnabled {
-        playbackEngine.pause()
-      }
-    }
-    .onReceive(
-      NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
-    ) { note in
-      handleInterruption(note)
-    }
-    .onDisappear {
-      hideTask?.cancel()
-      UIApplication.shared.isIdleTimerDisabled = false
-      if !incognitoThisSession, let sourceKey {
-        let historyEpisode =
-          activeEpisode
-          ?? episode
-          ?? Episode(
-            name: item.name,
-            value: (activeRequest ?? request).url.absoluteString
-          )
-        Task {
-          await model.saveHistory(
-            sourceKey: sourceKey,
-            item: item,
-            episode: historyEpisode,
-            position: playbackEngine.currentTime,
-            duration: playbackEngine.duration
-          )
+          if showControls { scheduleHideControls() }
         }
       }
-      clearNowPlaying()
-      playbackEngine.stop()
-      if orientationLocked {
-        orientationLocked = false
-        OrientationBridge.unlock()
-      }
-      model.releasePlaybackCache()
     }
   }
 
@@ -444,164 +537,247 @@ struct PlayerView: View {
   private var videoLayer: some View {
     if engineKind == .mpv {
       MPVVideoView(engine: mpvEngine)
-        .ignoresSafeArea()
     } else {
-      SystemPlayerView(player: avEngine.player, showsControls: false)
-        .ignoresSafeArea()
+      SystemPlayerView(
+        player: avEngine.player,
+        showsControls: false,
+        fillsFrame: false
+      )
     }
   }
 
   private var controlsOverlay: some View {
-    VStack(spacing: 0) {
-      HStack {
-        Button {
-          if chrome == .inline {
-            onExpand?()
-          } else if let onCollapse {
-            onCollapse()
-          } else {
-            playbackEngine.stop()
-            dismiss()
-          }
-        } label: {
-          Image(
-            systemName: chrome == .inline
-              ? "arrow.up.left.and.arrow.down.right" : "xmark"
-          )
-          .font(.body.weight(.semibold))
-          .frame(width: 36, height: 36)
-          .background(.black.opacity(0.35), in: Circle())
+    ZStack {
+      VStack(spacing: 0) {
+        topControls
+        Spacer()
+        if chrome != .inline {
+          skipButtons
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
         }
-        if chrome == .inline {
-          Spacer()
-        } else {
-          VStack(alignment: .leading, spacing: 2) {
-            Text(item.name)
-              .font(.headline)
-              .lineLimit(1)
-            if let activeEpisode {
-              Text(activeEpisode.name)
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.8))
-            }
-          }
-          Spacer()
-          Button {
-            orientationLocked.toggle()
-            if orientationLocked {
-              OrientationBridge.lockCurrent()
-              showToast("已锁定方向")
-            } else {
-              OrientationBridge.unlock()
-              showToast("已解除方向锁定")
-            }
-          } label: {
-            HStack(spacing: 4) {
-              Image(
-                systemName: orientationLocked
-                  ? "lock.fill" : "rectangle.landscape.rotate"
+        progressBar
+          .padding(.horizontal, chrome == .inline ? 8 : 16)
+          .padding(.bottom, chrome == .inline ? 4 : 10)
+          .background(alignment: .bottom) {
+            if chrome == .inline {
+              LinearGradient(
+                colors: [.clear, .black.opacity(0.55)],
+                startPoint: .top,
+                endPoint: .bottom
               )
-              Text("方向")
+              .frame(height: 54)
+              .allowsHitTesting(false)
             }
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(.black.opacity(0.35), in: Capsule())
           }
-          .accessibilityLabel(orientationLocked ? "已锁定方向" : "锁定方向")
-          menuButton
+        if chrome != .inline {
+          bottomControls
         }
       }
-      .foregroundStyle(.white)
-      .padding(.horizontal, 16)
-      .padding(.top, 12)
+      centerPlayButton
+    }
+  }
 
-      Spacer()
-
-      if chrome != .inline {
-        skipButtons
-          .padding(.horizontal, 16)
-          .padding(.bottom, 8)
-      }
-
-      progressBar
-        .padding(.horizontal, 16)
-        .padding(.bottom, 10)
-
-      HStack(spacing: 16) {
+  @ViewBuilder
+  private var centerPlayButton: some View {
+    // Flash glyph already covers the center — never stack a second play/pause.
+    if playPauseGlyph != nil {
+      Color.clear.frame(width: 1, height: 1)
+    } else if chrome == .inline {
+      HStack(spacing: 36) {
+        Button {
+          seek(by: -10)
+        } label: {
+          Image(systemName: "gobackward.10")
+            .font(.title2)
+        }
+        .accessibilityLabel("快退")
         Button {
           togglePlayPause()
         } label: {
-          if playbackEngine.state == .loading || isResolvingNext {
+          if observedState == .loading || isResolvingNext {
+            ProgressView()
+              .tint(.white)
+              .frame(width: 36, height: 36)
+          } else {
+            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+              .font(.system(size: 34, weight: .regular))
+          }
+        }
+        .disabled(observedState == .loading || isResolvingNext)
+        Button {
+          seek(by: 10)
+        } label: {
+          Image(systemName: "goforward.10")
+            .font(.title2)
+        }
+        .accessibilityLabel("快进")
+      }
+      .buttonStyle(.plain)
+      .foregroundStyle(.white)
+    } else {
+      Button {
+        togglePlayPause()
+      } label: {
+        ZStack {
+          Circle()
+            .fill(.black.opacity(0.45))
+            .frame(width: 64, height: 64)
+          if observedState == .loading || isResolvingNext {
             ProgressView()
               .tint(.white)
           } else {
-            Image(
-              systemName: playbackEngine.state == .playing ? "pause.fill" : "play.fill"
-            )
-            .font(.title2)
-          }
-        }
-        .disabled(playbackEngine.state == .loading || isResolvingNext)
-        Text(
-          "\(format(currentTime)) / \(duration > 0 ? format(duration) : "--:--")"
-        )
-        .font(.caption.monospacedDigit())
-        Spacer(minLength: 8)
-        if chrome != .inline {
-          if !currentLineEpisodes.isEmpty {
-            Button("选集") {
-              showingEpisodes = true
-            }
-            .font(.subheadline.weight(.semibold))
-          }
-          if playbackLines.count > 1 {
-            Button("线路") {
-              showingLines = true
-            }
-            .font(.subheadline.weight(.semibold))
-          }
-          Button {
-            showingRatePicker = true
-          } label: {
-            Text("\(Double(playbackRate).formatted())×")
-              .font(.caption.weight(.semibold))
+            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+              .font(.title)
+              .foregroundStyle(.white)
+              .offset(x: isPlaying ? 0 : 2)
           }
         }
       }
-      .foregroundStyle(.white)
-      .padding(.horizontal, 16)
-      .padding(.bottom, chrome == .inline ? 10 : 18)
-      .padding(.top, 8)
+      .buttonStyle(.plain)
+      .disabled(observedState == .loading || isResolvingNext)
     }
+  }
+
+  private var inlineTitle: String {
+    if failingOver || observedState == .loading { return headlineTitle }
+    if let failure, !failure.isEmpty { return failure }
+    if case .failed(let message) = observedState, !message.isEmpty {
+      return message
+    }
+    return headlineTitle
+  }
+
+  /// TV / series: "剧名 第01集". Movies stay as the title alone.
+  private var headlineTitle: String {
+    let base = item.name
+    guard showsEpisodeInTitle,
+      let episodeName = (activeEpisode ?? episode)?.name.trimmingCharacters(in: .whitespacesAndNewlines),
+      !episodeName.isEmpty,
+      episodeName != base
+    else { return base }
+    return "\(base) \(episodeName)"
+  }
+
+  private var showsEpisodeInTitle: Bool {
+    let type = item.typeName ?? ""
+    if type.contains("电影") { return false }
+    if currentLineEpisodes.count > 1 { return true }
+    if let episodeName = (activeEpisode ?? episode)?.name,
+      !episodeName.isEmpty,
+      episodeName != item.name
+    {
+      return true
+    }
+    return false
+  }
+
+  private var topControls: some View {
+    Group {
+      if chrome == .inline {
+        ZStack {
+          PlayerTitleLabel(
+            text: inlineTitle,
+            font: .subheadline.weight(.semibold),
+            maxWidth: 200
+          )
+          HStack(spacing: 0) {
+            Button {
+              playbackEngine.stop()
+              dismiss()
+            } label: {
+              Image(systemName: "chevron.left")
+                .font(.body.weight(.semibold))
+                .frame(width: 40, height: 40)
+            }
+            .accessibilityLabel("返回")
+            Spacer(minLength: 0)
+            Button {
+              guard let sourceKey else { return }
+              Task { await model.toggleFavorite(sourceKey: sourceKey, item: item) }
+            } label: {
+              Image(
+                systemName: model.isFavorite(sourceKey: sourceKey ?? "", item: item)
+                  ? "star.fill" : "star"
+              )
+              .font(.body.weight(.semibold))
+              .frame(width: 36, height: 36)
+            }
+            .accessibilityLabel("收藏")
+            menuButton
+          }
+        }
+      } else {
+        HStack(spacing: 10) {
+          Button {
+            if let onCollapse {
+              onCollapse()
+            } else {
+              playbackEngine.stop()
+              dismiss()
+            }
+          } label: {
+            Image(systemName: "xmark")
+              .font(.body.weight(.semibold))
+              .frame(width: 36, height: 36)
+              .background(.black.opacity(0.35), in: Circle())
+          }
+          PlayerTitleLabel(text: headlineTitle, font: .headline, maxWidth: 260)
+          Spacer(minLength: 0)
+          menuButton
+        }
+      }
+    }
+    .foregroundStyle(.white)
+    .padding(.horizontal, 8)
+    .padding(.top, 6)
+  }
+
+  private var bottomControls: some View {
+    HStack(spacing: 16) {
+      Text(
+        "\(format(currentTime)) / \(duration > 0 ? format(duration) : "--:--")"
+      )
+      .font(.caption.monospacedDigit())
+      Spacer(minLength: 8)
+      if chrome != .inline {
+        if !currentLineEpisodes.isEmpty {
+          Button("选集") {
+            showingEpisodes = true
+          }
+          .font(.subheadline.weight(.semibold))
+        }
+        if playbackLines.count > 1 {
+          Button("线路") {
+            showingLines = true
+          }
+          .font(.subheadline.weight(.semibold))
+        }
+        Button {
+          showingRatePicker = true
+        } label: {
+          Text("\(Double(playbackRate).formatted())×")
+            .font(.caption.weight(.semibold))
+        }
+      }
+    }
+    .foregroundStyle(.white)
+    .padding(.horizontal, 16)
+    .padding(.bottom, chrome == .inline ? 10 : 18)
+    .padding(.top, 8)
   }
 
   private var menuButton: some View {
     Menu {
-      Button {
-        showingCast = true
-      } label: {
-        Label("投屏到 DLNA", systemImage: "airplayvideo")
-      }
-
-      Button {
-        if danmakuComments.isEmpty {
-          showToast("暂无弹幕")
-        } else {
-          danmakuEnabled.toggle()
+      if chrome == .inline, onExpand != nil {
+        Button {
+          onExpand?()
+        } label: {
+          Label("全屏", systemImage: "arrow.up.left.and.arrow.down.right")
         }
-      } label: {
-        Label(
-          danmakuEnabled ? "关闭弹幕" : "打开弹幕",
-          systemImage: "text.bubble"
-        )
       }
       Button("弹幕设置") {
         showingDanmakuSettings = true
-      }
-
-      Toggle(isOn: $incognitoThisSession) {
-        Label("本次无痕", systemImage: "eye.slash")
       }
 
       if !(activeRequest ?? request).subtitles.isEmpty {
@@ -628,13 +804,6 @@ struct PlayerView: View {
         }
       }
 
-      Menu("播放引擎") {
-        Button("AVPlayer") { Task { await switchEngine(.avPlayer) } }
-        if MPVPlaybackSupport.isAvailable {
-          Button("MPV") { Task { await switchEngine(.mpv) } }
-        }
-      }
-
       Menu("倍速") {
         ForEach([0.75, 1, 1.25, 1.5, 2], id: \.self) { rate in
           Button {
@@ -651,42 +820,57 @@ struct PlayerView: View {
         }
       }
 
-      if model.adSkipPreference != .off {
-        Button("标记为片头结束") {
-          model.setSkipMark(
+      Button {
+        let time = playbackEngine.currentTime
+        model.setSkipMark(
+          sourceKey: sourceKey,
+          vodId: item.vodId,
+          flag: activeFlag ?? flag,
+          introEnd: time
+        )
+        didAutoSkipIntro = false
+        showToast("已设片头 \(format(time))，下次从此后起播")
+      } label: {
+        if let intro = skipMark?.introEnd {
+          Label("片头 \(format(intro))", systemImage: "forward.end")
+        } else {
+          Label("片头", systemImage: "forward.end")
+        }
+      }
+
+      Button {
+        let time = playbackEngine.currentTime
+        model.setSkipMark(
+          sourceKey: sourceKey,
+          vodId: item.vodId,
+          flag: activeFlag ?? flag,
+          outroStart: time
+        )
+        showToast("已设片尾 \(format(time))，到达后自动下一集")
+      } label: {
+        if let outro = skipMark?.outroStart {
+          Label("片尾 \(format(outro))", systemImage: "backward.end")
+        } else {
+          Label("片尾", systemImage: "backward.end")
+        }
+      }
+
+      if skipMark != nil {
+        Button("清除本片片头片尾", role: .destructive) {
+          model.clearSkipMark(
             sourceKey: sourceKey,
             vodId: item.vodId,
-            flag: activeFlag ?? flag,
-            introEnd: playbackEngine.currentTime
+            flag: activeFlag ?? flag
           )
-          showToast("已标记片头结束 \(format(playbackEngine.currentTime))")
-        }
-        Button("标记为片尾开始") {
-          model.setSkipMark(
-            sourceKey: sourceKey,
-            vodId: item.vodId,
-            flag: activeFlag ?? flag,
-            outroStart: playbackEngine.currentTime
-          )
-          showToast("已标记片尾开始 \(format(playbackEngine.currentTime))")
-        }
-        if skipMark != nil {
-          Button("清除本片标记", role: .destructive) {
-            model.clearSkipMark(
-              sourceKey: sourceKey,
-              vodId: item.vodId,
-              flag: activeFlag ?? flag
-            )
-            didAutoSkipIntro = false
-            showToast("已清除本片标记")
-          }
+          didAutoSkipIntro = false
+          showToast("已清除本片标记")
         }
       }
     } label: {
-      Image(systemName: "ellipsis.circle")
-        .font(.title3)
+      Image(systemName: chrome == .inline ? "gearshape" : "ellipsis.circle")
+        .font(chrome == .inline ? .body.weight(.semibold) : .title3)
         .frame(width: 36, height: 36)
-        .background(.black.opacity(0.35), in: Circle())
+        .background(chrome == .inline ? Color.clear : Color.black.opacity(0.35), in: Circle())
     }
   }
 
@@ -735,11 +919,39 @@ struct PlayerView: View {
     }
   }
 
+  private var showsNextEpisodeControl: Bool {
+    guard nextEpisode != nil else { return false }
+    let type = item.typeName ?? ""
+    return !type.contains("电影")
+  }
+
   private var progressBar: some View {
-    VStack(spacing: 6) {
-      Slider(
+    HStack(spacing: 8) {
+      if chrome == .inline {
+        if showsNextEpisodeControl {
+          Button {
+            Task { await playNextEpisode(auto: false) }
+          } label: {
+            Image(systemName: "forward.end.fill")
+              .font(.body.weight(.semibold))
+              .frame(width: 28, height: 28)
+          }
+          .disabled(isResolvingNext)
+          .buttonStyle(.plain)
+          .foregroundStyle(.white)
+          .accessibilityLabel("下一集")
+        }
+        Text(format(currentTime))
+          .font(.caption2.monospacedDigit())
+          .foregroundStyle(.white)
+          .frame(width: 44, alignment: .leading)
+      }
+      CompactSeekBar(
         value: Binding(
-          get: { currentTime },
+          get: {
+            let upper = duration > 0 ? duration : 0.1
+            return min(max(0, currentTime), upper)
+          },
           set: {
             scrubPreview = PlaybackTimeline.position(
               $0,
@@ -747,7 +959,9 @@ struct PlayerView: View {
             )
           }
         ),
-        in: PlaybackTimeline.progressRange(duration: duration),
+        range: PlaybackTimeline.progressRange(duration: duration),
+        tint: chrome == .inline ? .white : .orange,
+        enabled: duration > 0,
         onEditingChanged: { editing in
           isScrubbing = editing
           if !editing, let scrubPreview {
@@ -759,8 +973,13 @@ struct PlayerView: View {
           scheduleHideControls()
         }
       )
-      .tint(.orange)
-      .disabled(duration <= 0)
+      .frame(height: 28)
+      if chrome == .inline {
+        Text(duration > 0 ? format(duration) : "00:00")
+          .font(.caption2.monospacedDigit())
+          .foregroundStyle(.white)
+          .frame(width: 44, alignment: .trailing)
+      }
     }
   }
 
@@ -791,8 +1010,8 @@ struct PlayerView: View {
           Task { await loadAvailableSource() }
         }
         .buttonStyle(.borderedProminent)
+        .buttonBorderShape(.capsule)
         .tint(.orange)
-        .disabled(duration <= 0)
         if !alternateURLs.isEmpty {
           Button("换线路") {
             Task { await retryNextAlternate() }
@@ -878,6 +1097,7 @@ struct PlayerView: View {
   }
 
   private var displayFailure: String? {
+    if failingOver || playbackEngine.state == .loading { return nil }
     if let failure { return failure }
     switch playbackEngine.state {
     case .failed(let message):
@@ -887,11 +1107,32 @@ struct PlayerView: View {
     }
   }
 
+  private func engine(for url: URL) -> PlaybackEngineKind {
+    if let forced = model.playbackPreference.engine { return forced }
+    let text = url.absoluteString.lowercased()
+    if text.contains(".mkv") || text.contains(".iso") || text.contains(".rmvb") {
+      return MPVPlaybackSupport.isAvailable ? .mpv : .avPlayer
+    }
+    return .avPlayer
+  }
+
   private func loadAvailableSource() async {
-    var lastError: Error?
-    var urls = [request.url]
-    urls.append(contentsOf: alternateURLs.filter { !urls.contains($0) })
-    for url in urls {
+    triedURLs = []
+    retriedWithAV = false
+    failure = nil
+    await playCandidates([request.url] + alternateURLs)
+  }
+
+  private func playCandidates(_ urls: [URL]) async {
+    failingOver = true
+    defer { failingOver = false }
+    var last = "媒体不可播放"
+    for url in urls where !triedURLs.contains(url) {
+      triedURLs.append(url)
+      let kind = engine(for: url)
+      if kind != engineKind {
+        engineKind = kind
+      }
       var candidate = request
       candidate.url = url
       do {
@@ -903,10 +1144,39 @@ struct PlayerView: View {
         playbackEngine.play()
         return
       } catch {
-        lastError = error
+        last = error.localizedDescription
       }
     }
-    failure = lastError?.localizedDescription ?? "媒体不可播放"
+    failure = last
+  }
+
+  private func recover(from message: String) async {
+    guard !failingOver else { return }
+    let pending = ([request.url] + alternateURLs).filter { !triedURLs.contains($0) }
+    if !pending.isEmpty {
+      await playCandidates(pending)
+      return
+    }
+    if engineKind == .mpv, !retriedWithAV, let url = activeRequest?.url ?? Optional(request.url) {
+      retriedWithAV = true
+      failingOver = true
+      defer { failingOver = false }
+      engineKind = .avPlayer
+      var candidate = request
+      candidate.url = url
+      do {
+        playbackEngine.applyOptions(playbackEngineOptions)
+        try await playbackEngine.load(candidate)
+        activeRequest = candidate
+        failure = nil
+        playbackEngine.play()
+        return
+      } catch {
+        failure = error.localizedDescription
+        return
+      }
+    }
+    failure = message
   }
 
   private var playbackEngineOptions: PlaybackEngineOptions {
@@ -995,14 +1265,72 @@ struct PlayerView: View {
     }
   }
 
+  private func seek(by delta: Double) {
+    let upper = duration > 0 ? duration : .greatestFiniteMagnitude
+    let target = min(max(0, currentTime + delta), upper)
+    Task { await playbackEngine.seek(to: target) }
+    scheduleHideControls()
+  }
+
   private func togglePlayPause() {
-    if playbackEngine.state == .playing {
+    let wasPlaying = isPlaying
+    if wasPlaying {
       playbackEngine.pause()
     } else {
       playbackEngine.play()
     }
+    // Inline chrome already has the center button; only flash on double-tap.
+    if chrome != .inline {
+      revealPlayPauseGlyph(wasPlaying ? .pause : .play)
+    }
     showControls = true
     scheduleHideControls()
+  }
+
+  /// Double-tap the picture. Inline only toggles — no flash over the center buttons.
+  private func flashPlayPause() {
+    guard observedState != .loading, !isResolvingNext else { return }
+    let willPause = isPlaying
+    if willPause {
+      playbackEngine.pause()
+    } else {
+      playbackEngine.play()
+    }
+    if chrome == .inline {
+      showControls = true
+      scheduleHideControls()
+      return
+    }
+    revealPlayPauseGlyph(willPause ? .pause : .play)
+  }
+
+  private func revealPlayPauseGlyph(_ glyph: PlayPauseGlyph) {
+    // Instant swap so the center button and flash never crossfade together.
+    var hideCenter = Transaction()
+    hideCenter.disablesAnimations = true
+    withTransaction(hideCenter) {
+      playPauseGlyph = glyph
+    }
+    glyphHideTask?.cancel()
+    glyphHideTask = Task {
+      try? await Task.sleep(for: .seconds(1.0))
+      guard !Task.isCancelled else { return }
+      var clear = Transaction()
+      clear.disablesAnimations = true
+      withTransaction(clear) {
+        playPauseGlyph = nil
+      }
+    }
+  }
+
+  private func playPauseFlash(_ glyph: PlayPauseGlyph) -> some View {
+    Image(systemName: glyph == .pause ? "pause.fill" : "play.fill")
+      .font(.system(size: 34, weight: .bold))
+      .foregroundStyle(.white)
+      .offset(x: glyph == .play ? 2 : 0)
+      .frame(width: 76, height: 76)
+      .background(.black.opacity(0.5), in: Circle())
+      .accessibilityLabel(glyph == .pause ? "已暂停" : "正在播放")
   }
 
   private func maybeShowResumeToast() {
@@ -1012,9 +1340,10 @@ struct PlayerView: View {
   }
 
   private func handleAutoSkip(at time: Double) {
-    if model.adSkipPreference == .aggressive,
-      !didAutoSkipIntro,
+    // Per-title marks: always apply when set (长征 ≠ 嫁金钗).
+    if !didAutoSkipIntro,
       let intro = skipMark?.introEnd,
+      intro > 0,
       time + 0.3 < intro,
       time < 1.5
     {
@@ -1022,8 +1351,8 @@ struct PlayerView: View {
       Task { await playbackEngine.seek(to: intro) }
       showToast("已跳过片头")
     }
-    if model.adSkipPreference == .aggressive,
-      let outro = skipMark?.outroStart,
+    if let outro = skipMark?.outroStart,
+      outro > 0,
       duration > 0,
       time >= outro,
       nextEpisode != nil,
@@ -1049,12 +1378,25 @@ struct PlayerView: View {
     }
   }
 
+  private func playPreviousEpisode() async {
+    guard let previous = previousEpisode else {
+      showToast("已经是第一集")
+      return
+    }
+    await playEpisode(previous, flag: activeFlag ?? flag ?? "")
+  }
+
   private func playNextEpisode(auto: Bool) async {
     guard let next = nextEpisode else {
       showToast("已经是最后一集")
       return
     }
-    await playEpisode(next, flag: activeFlag ?? flag ?? "", autoToast: auto)
+    let line = activeFlag ?? flag ?? ""
+    if let onPlayEpisode {
+      onPlayEpisode(next, line)
+      return
+    }
+    await playEpisode(next, flag: line, autoToast: auto)
   }
 
   private func playEpisode(_ episode: Episode, flag: String, autoToast: Bool = false) async {
@@ -1154,21 +1496,21 @@ struct PlayerView: View {
     center.togglePlayPauseCommand.isEnabled = true
     let av = avEngine
     let mpv = mpvEngine
-    center.playCommand.addTarget { _ in
+    let playTarget = center.playCommand.addTarget { _ in
       Task { @MainActor in
         av.play()
         mpv.play()
       }
       return .success
     }
-    center.pauseCommand.addTarget { _ in
+    let pauseTarget = center.pauseCommand.addTarget { _ in
       Task { @MainActor in
         av.pause()
         mpv.pause()
       }
       return .success
     }
-    center.togglePlayPauseCommand.addTarget { _ in
+    let toggleTarget = center.togglePlayPauseCommand.addTarget { _ in
       Task { @MainActor in
         if av.state == .playing || mpv.state == .playing {
           av.pause()
@@ -1180,6 +1522,19 @@ struct PlayerView: View {
       }
       return .success
     }
+    remoteCommandTargets = [
+      (center.playCommand, playTarget),
+      (center.pauseCommand, pauseTarget),
+      (center.togglePlayPauseCommand, toggleTarget),
+    ]
+  }
+
+  private func removeRemoteCommands() {
+    for registration in remoteCommandTargets {
+      registration.command.removeTarget(registration.target)
+    }
+    remoteCommandTargets = []
+    remoteCommandsConfigured = false
   }
 
   private func updateNowPlaying() {
@@ -1213,10 +1568,15 @@ struct PlayerView: View {
 
   private func scheduleHideControls() {
     hideTask?.cancel()
+    // Paused: keep chrome so play is one tap away. Playing: auto-hide like hover.
+    guard isPlaying else {
+      showControls = true
+      return
+    }
     hideTask = Task {
-      try? await Task.sleep(for: .seconds(4))
+      try? await Task.sleep(for: .seconds(3))
       guard !Task.isCancelled, !isScrubbing else { return }
-      withAnimation { showControls = false }
+      withAnimation(.easeInOut(duration: 0.2)) { showControls = false }
     }
   }
 
@@ -1243,14 +1603,73 @@ struct PlayerView: View {
   }
 }
 
+/// Thin seek bar with a small thumb — SwiftUI `Slider` thumbs are oversized in the player chrome.
+private struct CompactSeekBar: View {
+  @Binding var value: Double
+  var range: ClosedRange<Double>
+  var tint: Color
+  var enabled: Bool
+  var onEditingChanged: (Bool) -> Void
+
+  @State private var isDragging = false
+
+  private let trackHeight: CGFloat = 3
+  private let thumbSize: CGFloat = 10
+
+  var body: some View {
+    GeometryReader { geo in
+      let span = max(range.upperBound - range.lowerBound, 0.0001)
+      let progress = min(1, max(0, (value - range.lowerBound) / span))
+      let usable = max(geo.size.width - thumbSize, 1)
+      ZStack(alignment: .leading) {
+        Capsule()
+          .fill(Color.white.opacity(0.28))
+          .frame(height: trackHeight)
+        Capsule()
+          .fill(tint)
+          .frame(width: thumbSize / 2 + usable * progress, height: trackHeight)
+        Circle()
+          .fill(tint)
+          .frame(width: thumbSize, height: thumbSize)
+          .shadow(color: .black.opacity(0.35), radius: 1, y: 0.5)
+          .offset(x: usable * progress)
+      }
+      .frame(maxHeight: .infinity, alignment: .center)
+      .contentShape(Rectangle())
+      .gesture(
+        DragGesture(minimumDistance: 0)
+          .onChanged { drag in
+            guard enabled else { return }
+            if !isDragging {
+              isDragging = true
+              onEditingChanged(true)
+            }
+            let x = min(max(0, drag.location.x - thumbSize / 2), usable)
+            value = range.lowerBound + (x / usable) * span
+          }
+          .onEnded { _ in
+            guard enabled else { return }
+            isDragging = false
+            onEditingChanged(false)
+          }
+      )
+      .opacity(enabled ? 1 : 0.45)
+      .allowsHitTesting(enabled)
+    }
+  }
+}
+
 private struct SystemPlayerView: UIViewControllerRepresentable {
   let player: AVPlayer
   var showsControls = false
+  var fillsFrame = false
 
   func makeUIViewController(context: Context) -> AVPlayerViewController {
     let controller = AVPlayerViewController()
     controller.player = player
     controller.showsPlaybackControls = showsControls
+    controller.videoGravity = fillsFrame ? .resizeAspectFill : .resizeAspect
+    controller.view.backgroundColor = .black
     controller.allowsPictureInPicturePlayback = true
     controller.canStartPictureInPictureAutomaticallyFromInline = true
     return controller
@@ -1261,6 +1680,8 @@ private struct SystemPlayerView: UIViewControllerRepresentable {
       controller.player = player
     }
     controller.showsPlaybackControls = showsControls
+    controller.videoGravity = fillsFrame ? .resizeAspectFill : .resizeAspect
+    controller.view.backgroundColor = .black
   }
 }
 

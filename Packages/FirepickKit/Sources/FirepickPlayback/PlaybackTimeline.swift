@@ -8,10 +8,10 @@ public enum PlaybackTimeline {
   }
 
   public static func position(_ value: Double, duration: Double) -> Double {
-    guard value.isFinite else { return 0 }
+    guard value.isFinite, value >= 0 else { return 0 }
     let safeDuration = self.duration(duration)
-    guard safeDuration > 0 else { return 0 }
-    return min(max(0, value), safeDuration)
+    guard safeDuration > 0 else { return value }
+    return min(value, safeDuration)
   }
 
   public static func progressRange(duration: Double) -> ClosedRange<Double> {

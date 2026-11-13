@@ -3,30 +3,7 @@ import { Spider, net } from 'catvod';
 // Curated from LunaTV jin18 + local probe (scripts/probe-cms-providers.mjs).
 // Re-run the probe periodically; dead hosts drag search latency.
 const DEFAULT_PROVIDERS = [
-  { key: 'iqiyi', name: '爱奇艺资源', api: 'https://iqiyizyapi.com/api.php/provide/vod' },
-  { key: 'dytt', name: '电影天堂', api: 'https://caiji.dyttzyapi.com/api.php/provide/vod' },
-  { key: 'maoyan', name: '猫眼资源', api: 'https://api.maoyanapi.top/api.php/provide/vod' },
-  { key: 'lzcaiji', name: '量子资源', api: 'https://cj.lzcaiji.com/api.php/provide/vod' },
-  { key: 'lzi', name: '量子影视', api: 'https://cj.lziapi.com/api.php/provide/vod' },
-  { key: 'zy360', name: '360资源', api: 'https://360zyzz.com/api.php/provide/vod' },
-  { key: 'jisu', name: '极速资源', api: 'https://jszyapi.com/api.php/provide/vod' },
-  { key: 'modu', name: '魔都资源', api: 'https://www.mdzyapi.com/api.php/provide/vod' },
-  { key: 'ffzy', name: '非凡资源', api: 'https://api.ffzyapi.com/api.php/provide/vod' },
-  { key: 'bfzy', name: '暴风资源', api: 'https://bfzyapi.com/api.php/provide/vod' },
-  { key: 'zuid', name: '最大资源', api: 'https://api.zuidapi.com/api.php/provide/vod' },
-  { key: 'xinlang', name: '新浪资源', api: 'https://api.xinlangapi.com/xinlangapi.php/provide/vod' },
-  { key: 'subo', name: '速播资源', api: 'https://subocaiji.com/api.php/provide/vod' },
-  { key: 'jinying', name: '金鹰点播', api: 'https://jyzyapi.com/provide/vod/from/jinyingyun/at/json' },
-  { key: 'uku', name: 'U酷影视', api: 'https://api.ukuapi88.com/api.php/provide/vod' },
-  { key: 'guangsu', name: '光速资源', api: 'https://api.guangsuapi.com/api.php/provide/vod' },
-  { key: 'hongniu', name: '红牛资源', api: 'https://www.hongniuzy2.com/api.php/provide/vod' },
-  { key: 'moduanime', name: '魔都动漫', api: 'https://caiji.moduapi.cc/api.php/provide/vod' },
-  { key: 'ruyi', name: '如意资源', api: 'https://cj.rycjapi.com/api.php/provide/vod' },
-  { key: 'haohua', name: '豪华资源', api: 'https://hhzyapi.com/api.php/provide/vod' },
-  { key: 'yzzy', name: '优质资源', api: 'https://api.yzzy-api.com/inc/apijson.php' },
-  { key: 'huya', name: '虎牙资源', api: 'https://www.huyaapi.com/api.php/provide/vod' },
-  { key: 'ffzy_cj', name: '非凡采集', api: 'https://cj.ffzyapi.com/api.php/provide/vod' },
-  { key: 'movie_legacy', name: '影视资源', api: 'https://dy.7772888.xyz/api.php/tvbox' },
+  { key: 'iqiyi', name: '爱奇艺', api: 'https://iqiyizyapi.com/api.php/provide/vod' },
 ];
 
 const MENU = [
@@ -35,6 +12,13 @@ const MENU = [
   { id: 'movie', name: '电影' },
   { id: 'variety', name: '综艺' },
   { id: 'anime', name: '动漫' },
+];
+
+const ANIME_CLASS = [
+  { n: '全部', v: '' },
+  { n: '国漫', v: '国漫' },
+  { n: '日漫', v: '日漫' },
+  { n: '欧美', v: '欧美' },
 ];
 
 const FILTER_CLASS = [
@@ -79,33 +63,124 @@ const FILTER_YEAR = [
 ];
 
 const FILTER_SORT = [
-  { n: '综合', v: '' },
-  { n: '最新', v: 'year' },
+  { n: '热门', v: '' },
+  { n: '最新', v: 'time' },
+  { n: '最热', v: 'hits' },
   { n: '豆瓣评分', v: 'douban' },
 ];
 
-function bucketFilters() {
-  return [
-    { key: 'class', name: '类型', value: FILTER_CLASS },
-    { key: 'area', name: '地区', value: FILTER_AREA },
-    { key: 'year', name: '年份', value: FILTER_YEAR },
-    { key: 'by', name: '排序', value: FILTER_SORT },
-  ];
+function sourceFilter(providers) {
+  if (providers.length < 2) return null;
+  return {
+    key: 'source',
+    name: '源站',
+    init: providers[0].key,
+    value: providers.map(function (provider) {
+      return { n: provider.name, v: provider.key };
+    }),
+  };
 }
 
-function menuFilters() {
+function bucketFilters(bucket, providers) {
+  const anime = bucket === 'anime';
+  const filters = [];
+  const source = sourceFilter(providers);
+  if (source) filters.push(source);
+  filters.push({
+    key: 'class',
+    name: '类型',
+    init: '',
+    value: anime ? ANIME_CLASS : FILTER_CLASS,
+  });
+  if (!anime) {
+    filters.push({ key: 'area', name: '地区', value: FILTER_AREA });
+  }
+  filters.push({ key: 'year', name: '年份', value: FILTER_YEAR });
+  filters.push({ key: 'by', name: '排序', value: FILTER_SORT });
+  return filters;
+}
+
+function menuFilters(providers) {
   const filters = {};
   for (let i = 0; i < MENU.length; i++) {
     const entry = MENU[i];
     if (entry.id === 'recommend') continue;
-    filters['bucket|' + entry.id] = bucketFilters();
+    filters['bucket|' + entry.id] = bucketFilters(entry.id, providers);
   }
   return filters;
+}
+
+// One line, one source site at a time. An empty choice stays on the first site.
+function activeProviders(providers, extend) {
+  const all =
+    Array.isArray(providers) && providers.length ? providers : DEFAULT_PROVIDERS;
+  const key = extend && String(extend.source || '');
+  if (key) {
+    const found = all.filter(function (provider) {
+      return provider.key === key;
+    });
+    if (found.length) return found;
+  }
+  return all.slice(0, 1);
+}
+
+function animeLeafKind(name) {
+  const n = String(name || '');
+  if (/里番|伦理|福利|色情/.test(n)) return null;
+  // iqiyi: 国产动漫 / 港台动漫 / 日韩动漫 / 欧美动漫
+  if (/国产|国漫|大陆|中国|港台|香港|台湾/.test(n)) return '国漫';
+  if (/日韩|日本|日漫|韩国/.test(n)) return '日漫';
+  if (/欧美|美国|英国|海外/.test(n)) return '欧美';
+  return null;
+}
+
+function matchesAnimeClass(item, classKey) {
+  if (!classKey) return true;
+  // 国漫/日漫/欧美 are synthetic; CMS uses 国产动漫 etc.
+  if (classKey === '国漫' || classKey === '日漫' || classKey === '欧美') {
+    const kind = animeLeafKind(
+      [item && item.type_name, item && item.vod_class, item && item.vod_tag].join(' ')
+    );
+    return kind === classKey;
+  }
+  const blob = [item && item.type_name, item && item.vod_class, item && item.vod_tag, item && item.vod_name].join(' ');
+  return blob.indexOf(classKey) >= 0;
 }
 
 function parseScore(value) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function recency(item) {
+  const raw = String((item && (item.vod_time || item.vod_time_add)) || '').trim();
+  const time = Date.parse(raw.replace(' ', 'T'));
+  const year = Number(String((item && item.vod_year) || '').slice(0, 4));
+  const timeScore = Number.isFinite(time) ? time : 0;
+  const yearScore = Number.isFinite(year) ? year : 0;
+  return timeScore * 10000 + yearScore;
+}
+
+function sortByRecency(list) {
+  return list.slice().sort(function (a, b) {
+    return recency(b) - recency(a);
+  });
+}
+
+function sortByHotRecent(list) {
+  const current = new Date().getFullYear();
+  return list.slice().sort(function (a, b) {
+    return hotRecentScore(b, current) - hotRecentScore(a, current);
+  });
+}
+
+function hotRecentScore(item, current) {
+  const year = Number(String((item && item.vod_year) || '').slice(0, 4));
+  let yearRank = 0;
+  if (Number.isFinite(year) && year >= current) yearRank = 3;
+  else if (Number.isFinite(year) && year >= current - 1) yearRank = 2;
+  else if (Number.isFinite(year) && year >= current - 2) yearRank = 1;
+  return yearRank * 1e12 + parseScore(item && item.vod_hits) * 1000 + recency(item) / 1e8;
 }
 
 function applyExtend(list, extend) {
@@ -117,8 +192,7 @@ function applyExtend(list, extend) {
   let out = list.slice();
   if (classKey) {
     out = out.filter(function (item) {
-      const blob = [item.type_name, item.vod_class, item.vod_tag, item.vod_name].join(' ');
-      return blob.indexOf(classKey) >= 0;
+      return matchesAnimeClass(item, classKey);
     });
   }
   if (areaKey) {
@@ -141,23 +215,28 @@ function applyExtend(list, extend) {
       return year.indexOf(yearKey) >= 0;
     });
   }
-  if (sortKey === 'year') {
+  if (sortKey === 'hits') {
     out.sort(function (a, b) {
-      return String(b.vod_year || '').localeCompare(String(a.vod_year || ''));
+      return parseScore(b.vod_hits) - parseScore(a.vod_hits);
     });
   } else if (sortKey === 'douban') {
     out.sort(function (a, b) {
       const left = parseScore(a.vod_douban_score) || parseScore(a.vod_score);
       const right = parseScore(b.vod_douban_score) || parseScore(b.vod_score);
       if (right !== left) return right - left;
-      return 0;
+      return recency(b) - recency(a);
     });
+  } else if (sortKey === 'time') {
+    out = sortByRecency(out);
+  } else {
+    out = sortByHotRecent(out);
   }
   return out;
 }
 
 const BATCH_SIZE = 8;
-const REQUEST_TIMEOUT_MS = 8000;
+const REQUEST_TIMEOUT_MS = 4000;
+const FIRST_SCREEN = 36;
 const ADULT_PATTERN = /伦理|福利|里番|无码|有码|SWAG|色情|成人|黄游|性爱|口交|三级片/i;
 
 function encode(value) {
@@ -192,10 +271,10 @@ function buildURL(api, params) {
     .join('&');
 }
 
-async function requestJSON(api, params) {
+async function requestJSON(api, params, timeout) {
   try {
     const response = await net.req(buildURL(api, params), {
-      timeout: REQUEST_TIMEOUT_MS,
+      timeout: timeout || REQUEST_TIMEOUT_MS,
       headers: {
         'User-Agent': 'okhttp/4.1.0',
         Accept: 'application/json,text/plain,*/*',
@@ -206,6 +285,76 @@ async function requestJSON(api, params) {
   } catch (error) {
     return null;
   }
+}
+
+// Fill one screen from the fastest sites. Slow or dead hosts must not hold the page.
+async function collectProviderLists(providers, page, limit, extra, accept, pageSpan) {
+  const list = [];
+  let cursor = 0;
+  let stopped = false;
+  const span = pageSpan || (providers.length <= 2 ? 4 : 1);
+  const start = (Math.max(1, Number(page) || 1) - 1) * span + 1;
+  const concurrency = Math.min(10, providers.length);
+  function take() {
+    if (stopped || list.length >= limit || cursor >= providers.length) return null;
+    const provider = providers[cursor];
+    cursor += 1;
+    return provider;
+  }
+  async function worker() {
+    while (!stopped && list.length < limit) {
+      const provider = take();
+      if (!provider) return;
+      for (let offset = 0; offset < span && !stopped && list.length < limit; offset++) {
+        const params = { ac: 'videolist', pg: String(start + offset) };
+        if (extra) {
+          const keys = Object.keys(extra);
+          for (let i = 0; i < keys.length; i++) params[keys[i]] = extra[keys[i]];
+        }
+        const data = await requestJSON(provider.api, params);
+        if (stopped || list.length >= limit) return;
+        const items = data && Array.isArray(data.list) ? data.list : [];
+        for (let i = 0; i < items.length && list.length < limit; i++) {
+          const item = accept(provider, items[i]);
+          if (item) list.push(item);
+        }
+        if (list.length >= limit) stopped = true;
+      }
+    }
+  }
+  const workers = [];
+  for (let i = 0; i < concurrency; i++) workers.push(worker());
+  await Promise.all(workers);
+  return list;
+}
+
+async function collectTypedLists(targets, page, limit, extra, accept) {
+  const list = [];
+  let cursor = 0;
+  let pagecount = Number(page) || 1;
+  const concurrency = Math.min(4, targets.length);
+  async function worker() {
+    while (cursor < targets.length && list.length < limit) {
+      const target = targets[cursor];
+      cursor += 1;
+      const params = { ac: 'videolist', t: String(target.typeId), pg: String(page) };
+      if (extra && extra.year) params.year = extra.year;
+      if (extra && extra.area) params.area = extra.area;
+      if (extra && extra.class) params.class = extra.class;
+      const data = await requestJSON(target.provider.api, params);
+      const reported = Number(data && data.pagecount);
+      if (Number.isFinite(reported) && reported > pagecount) pagecount = reported;
+      const items = data && Array.isArray(data.list) ? data.list : [];
+      for (let i = 0; i < items.length && list.length < limit; i++) {
+        const item = accept(target.provider, items[i]);
+        if (item) list.push(item);
+      }
+    }
+  }
+  const workers = [];
+  for (let i = 0; i < concurrency; i++) workers.push(worker());
+  await Promise.all(workers);
+  return { list: list, pagecount: pagecount };
 }
 
 async function mapInBatches(items, batchSize, mapper) {
@@ -278,7 +427,9 @@ function dedupeByTitle(list) {
       order.push(key);
       continue;
     }
-    if (itemScore(item) > itemScore(prev)) {
+    const newer = recency(item) > recency(prev);
+    const sameTimeBetterPic = recency(item) === recency(prev) && itemScore(item) > itemScore(prev);
+    if (newer || sameTimeBetterPic) {
       best.set(key, item);
     }
   }
@@ -288,13 +439,18 @@ function dedupeByTitle(list) {
 }
 
 function classifyTypeName(name) {
-  const n = String(name || '');
-  if (/少儿|儿童|亲子|幼儿|Kids|卡通片/.test(n)) return 'kids';
-  if (/纪录|纪录片|Doc|纪录片/.test(n)) return 'doc';
+  const n = String(name || '').replace(/\s+/g, '');
+  if (!n) return null;
+  // Order matters: 动画片 / 纪录片 / 剧情片 must not fall through to 电视剧.
+  if (/少儿|儿童|亲子|幼儿|卡通/.test(n)) return 'kids';
+  if (/纪录/.test(n)) return 'doc';
   if (/动漫|动画|番剧|国漫|日漫/.test(n)) return 'anime';
-  if (/综艺|晚会|真人|脱口秀|娱乐|选秀/.test(n)) return 'variety';
-  if (/电影|影片|院线/.test(n)) return 'movie';
-  if (/剧|电视|连续|剧集|美剧|韩剧|日剧|港剧|台剧|泰剧|短剧/.test(n)) return 'tv';
+  if (/综艺|晚会|脱口秀|选秀/.test(n)) return 'variety';
+  if (/电影|影片|院线|片/.test(n)) return 'movie';
+  if (/连续剧|电视剧|美剧|韩剧|日剧|港剧|台剧|泰剧|国产剧|港台剧|日韩剧|欧美剧|海外剧|短剧|网剧|剧集/.test(n)) {
+    return 'tv';
+  }
+  if (/剧/.test(n)) return 'tv';
   return null;
 }
 
@@ -352,9 +508,14 @@ export default class extends Spider {
     this.providers = DEFAULT_PROVIDERS;
     this.typeIdsByBucket = emptyBucketMap();
     this.typeNameByProviderType = {};
-    if (typeof ext !== 'string' || !ext.trim()) return;
+    this.parentTypeIds = {};
+    this.catalogReady = false;
+    if (!ext) return;
     try {
-      const config = JSON.parse(ext);
+      const config =
+        typeof ext === 'string'
+          ? (ext.trim() ? JSON.parse(ext) : null)
+          : ext;
       if (config && Array.isArray(config.providers) && config.providers.length) {
         this.providers = config.providers
           .filter(function (item) {
@@ -381,10 +542,16 @@ export default class extends Spider {
       const typeName = category.type_name || '';
       const bucket = classifyTypeName(typeName);
       this.typeNameByProviderType[provider.key + '|' + category.type_id] = typeName;
+      if (category.type_pid !== undefined && category.type_pid !== null && String(category.type_pid) !== '0') {
+        if (!this.parentTypeIds) this.parentTypeIds = {};
+        this.parentTypeIds[provider.key + '|' + category.type_pid] = true;
+      }
       if (bucket && this.typeIdsByBucket[bucket]) {
         this.typeIdsByBucket[bucket].push({
           provider: provider,
           typeId: category.type_id,
+          typeName: typeName,
+          bucket: bucket,
         });
       }
     }
@@ -407,7 +574,7 @@ export default class extends Spider {
   }
 
   buildRecommendList(results) {
-    const buckets = { tv: [], movie: [], variety: [], other: [] };
+    const buckets = { tv: [], movie: [], variety: [] };
     for (let index = 0; index < results.length; index++) {
       const result = results[index];
       const provider = result.provider;
@@ -422,8 +589,6 @@ export default class extends Spider {
         const bucket = this.classifyItem(provider, items[k]);
         if (bucket === 'tv' || bucket === 'movie' || bucket === 'variety') {
           buckets[bucket].push(item);
-        } else if (bucket !== 'anime') {
-          buckets.other.push(item);
         }
       }
     }
@@ -434,27 +599,22 @@ export default class extends Spider {
       if (buckets.movie[i]) list.push(buckets.movie[i]);
       if (buckets.variety[i]) list.push(buckets.variety[i]);
     }
-    for (let o = 0; o < buckets.other.length && list.length < 60; o++) {
-      list.push(buckets.other[o]);
-    }
-    return dedupeByTitle(list).slice(0, 60);
+    return sortByRecency(dedupeByTitle(list)).slice(0, 60);
   }
 
   async homeContent(filter) {
-    const providers = this.providers || DEFAULT_PROVIDERS;
-    this.typeIdsByBucket = emptyBucketMap();
-    this.typeNameByProviderType = {};
+    const configuredProviders = this.providers || DEFAULT_PROVIDERS;
+    const providers = activeProviders(configuredProviders, null);
     const self = this;
-    const results = await mapInBatches(providers, BATCH_SIZE, function (provider) {
-      return self.providerData(provider);
+    const list = await collectProviderLists(providers, 1, FIRST_SCREEN, null, function (provider, row) {
+      const bucket = self.classifyItem(provider, row);
+      if (bucket !== 'tv' && bucket !== 'movie' && bucket !== 'variety' && bucket !== 'anime') return null;
+      return mediaItem(provider, Object.assign({}, row));
     });
-    for (let index = 0; index < results.length; index++) {
-      this.rememberCatalog(results[index].provider, results[index].catalog);
-    }
     return {
       class: menuClasses(),
-      list: this.buildRecommendList(results),
-      filters: menuFilters(),
+      list: sortByHotRecent(dedupeByTitle(list)),
+      filters: menuFilters(configuredProviders),
     };
   }
 
@@ -463,87 +623,97 @@ export default class extends Spider {
     return { list: result.list };
   }
 
-  async bucketContent(bucket, pg, extend) {
+  async ensureCatalogs() {
+    if (this.catalogReady) return;
     const providers = this.providers || DEFAULT_PROVIDERS;
-    const page = String(pg || 1);
+    await Promise.all(providers.map(async (provider) => {
+      const catalog = await requestJSON(provider.api, { ac: 'list' });
+      this.rememberCatalog(provider, catalog);
+    }));
+    this.catalogReady = true;
+  }
 
-    if (bucket === 'recommend') {
-      const results = await mapInBatches(providers, BATCH_SIZE, async function (provider) {
-        const latest = await requestJSON(provider.api, {
-          ac: 'videolist',
-          pg: page,
-        });
-        return { provider: provider, latest: latest };
-      });
-      const list = applyExtend(this.buildRecommendList(results), extend);
-      return {
-        page: Number(page) || 1,
-        pagecount: list.length ? Number(page) + 1 : Number(page) || 1,
-        limit: list.length,
-        total: list.length,
-        list: list,
-      };
-    }
-
-    let targets = (this.typeIdsByBucket && this.typeIdsByBucket[bucket]) || [];
-    if (!targets.length) {
-      const catalogs = await mapInBatches(providers, BATCH_SIZE, async function (provider) {
-        const catalog = await requestJSON(provider.api, { ac: 'list' });
-        return { provider: provider, catalog: catalog };
-      });
-      this.typeIdsByBucket = emptyBucketMap();
-      this.typeNameByProviderType = {};
-      for (let i = 0; i < catalogs.length; i++) {
-        this.rememberCatalog(catalogs[i].provider, catalogs[i].catalog);
-      }
-      targets = this.typeIdsByBucket[bucket] || [];
-    }
-
-    if (!targets.length) {
-      return { page: Number(page) || 1, pagecount: 1, limit: 0, total: 0, list: [] };
-    }
-
-    // Cap fan-out for category pages: first matching type per provider is enough.
-    const byProvider = new Map();
-    for (let i = 0; i < targets.length; i++) {
-      const target = targets[i];
-      if (!byProvider.has(target.provider.key)) {
-        byProvider.set(target.provider.key, target);
-      }
-    }
-    const uniqueTargets = Array.from(byProvider.values());
-
-    const results = await mapInBatches(uniqueTargets, BATCH_SIZE, async function (target) {
-      const data = await requestJSON(
-        target.provider.api,
-        catalogParams(target.typeId, page, extend)
-      );
-      return { provider: target.provider, data: data };
+  leafTargets(bucket) {
+    const all = (this.typeIdsByBucket && this.typeIdsByBucket[bucket]) || [];
+    const parents = this.parentTypeIds || {};
+    const leaves = all.filter(function (target) {
+      if (/里番|伦理|福利|色情/.test(target.typeName || '')) return false;
+      return !parents[target.provider.key + '|' + target.typeId];
     });
+    return leaves.length ? leaves : all.filter(function (target) {
+      return !/里番|伦理|福利|色情/.test(target.typeName || '');
+    });
+  }
 
-    const list = [];
-    let pagecount = 1;
-    let total = 0;
-    for (let index = 0; index < results.length; index++) {
-      const result = results[index];
-      const items = result.data && Array.isArray(result.data.list) ? result.data.list : [];
-      if (result.data && result.data.pagecount) {
-        pagecount = Math.max(pagecount, Number(result.data.pagecount) || 1);
+  async bucketContent(bucket, pg, extend) {
+    const configuredProviders = this.providers || DEFAULT_PROVIDERS;
+    const providers = activeProviders(configuredProviders, extend);
+    const providerKeys = new Set(providers.map(function (provider) {
+      return provider.key;
+    }));
+    const requestedPage = Math.max(1, Number(pg) || 1);
+    const self = this;
+    const classKey = String((extend && extend.class) || '');
+    const areaKey = String((extend && extend.area) || '');
+    const extra = {};
+    if (extend && /^\d{4}$/.test(String(extend.year || ''))) {
+      extra.year = String(extend.year);
+    }
+    if (areaKey && areaKey !== '其他') extra.area = areaKey;
+    if (classKey && bucket !== 'anime') extra.class = classKey;
+    let list = [];
+    let reportedPages = requestedPage;
+    if (bucket !== 'recommend') {
+      await this.ensureCatalogs();
+      let targets = this.leafTargets(bucket).filter(function (target) {
+        return providerKeys.has(target.provider.key);
+      });
+      if (bucket === 'anime' && classKey) {
+        targets = targets.filter(function (target) {
+          return animeLeafKind(target.typeName) === classKey;
+        });
       }
-      if (result.data && result.data.total) {
-        total += Number(result.data.total) || 0;
+      if (targets.length) {
+        const typed = await collectTypedLists(targets, requestedPage, bucket === 'anime' ? 24 : 60, extra, function (provider, row) {
+          if (self.classifyItem(provider, row) === 'kids' || self.classifyItem(provider, row) === 'doc') {
+            return null;
+          }
+          if (bucket === 'anime' && classKey && !matchesAnimeClass(row, classKey)) {
+            return null;
+          }
+          return mediaItem(provider, Object.assign({}, row));
+        });
+        list = typed.list;
+        reportedPages = typed.pagecount;
       }
-      for (let j = 0; j < items.length; j++) {
-        const item = mediaItem(result.provider, Object.assign({}, items[j]));
-        if (item) list.push(item);
-      }
+    }
+    if (!list.length) {
+      list = await collectProviderLists(
+        providers,
+        requestedPage,
+        FIRST_SCREEN,
+        extra,
+        function (provider, row) {
+          const found = self.classifyItem(provider, row);
+          if (bucket === 'recommend') {
+            if (found !== 'tv' && found !== 'movie' && found !== 'variety' && found !== 'anime') return null;
+          } else if (found !== bucket) {
+            return null;
+          }
+          if (bucket === 'anime' && classKey && !matchesAnimeClass(row, classKey)) {
+            return null;
+          }
+          return mediaItem(provider, Object.assign({}, row));
+        }
+      );
     }
     const deduped = applyExtend(dedupeByTitle(list), extend);
+    const hasMore = reportedPages > requestedPage || deduped.length >= 12;
     return {
-      page: Number(page) || 1,
-      pagecount: pagecount,
+      page: requestedPage,
+      pagecount: hasMore ? requestedPage + 1 : requestedPage,
       limit: deduped.length,
-      total: total || deduped.length,
+      total: deduped.length,
       list: deduped,
     };
   }

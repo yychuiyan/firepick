@@ -2,9 +2,21 @@ import SwiftUI
 
 struct DanmakuSettingsView: View {
   @Environment(AppModel.self) private var model
+  /// When opened from the player menu, toggles this session's overlay.
+  var sessionEnabled: Binding<Bool>? = nil
+  var hasComments: Bool = true
 
   var body: some View {
     Form {
+      if let sessionEnabled {
+        Section {
+          Toggle("显示弹幕", isOn: sessionEnabled)
+            .disabled(!hasComments)
+        } footer: {
+          Text(hasComments ? "只影响当前播放页。" : "当前影片没有弹幕。")
+        }
+      }
+
       Section {
         Toggle(
           "默认显示弹幕",

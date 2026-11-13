@@ -46,14 +46,14 @@ enum CatVodHTMLQuery {
   }
 
   static func joinURL(_ base: String, _ relative: String) -> String {
+    if relative.hasPrefix("//") {
+      let scheme = URL(string: base)?.scheme ?? "https"
+      return "\(scheme):\(relative)"
+    }
     if relative.hasPrefix("http://") || relative.hasPrefix("https://")
       || relative.hasPrefix("ftp:") || relative.hasPrefix("magnet:")
-      || relative.hasPrefix("thunder:") || relative.hasPrefix("//")
+      || relative.hasPrefix("thunder:")
     {
-      if relative.hasPrefix("//"), let host = URL(string: base)?.host {
-        let scheme = URL(string: base)?.scheme ?? "https"
-        return "\(scheme):\(relative)"
-      }
       return relative
     }
     guard let baseURL = URL(string: base) else { return relative }
@@ -127,7 +127,7 @@ enum CatVodHTMLQuery {
 
   /// Converts a subset of hikerview rules into CSS selectors.
   private static func toCSS(_ rule: String, firstOnly: Bool) -> String {
-    var parts =
+    let parts =
       rule
       .replacingOccurrences(of: "&&", with: " ")
       .split(separator: " ")

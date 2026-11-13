@@ -44,7 +44,11 @@ struct SearchView: View {
     .navigationDestination(
       isPresented: Binding(
         get: { selectedItem != nil },
-        set: { if !$0 { selectedItem = nil } }
+        set: { presented in
+          if !presented {
+            Task { @MainActor in selectedItem = nil }
+          }
+        }
       )
     ) {
       if let selectedItem {

@@ -147,6 +147,16 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
   }
 
   private func downloadScript(from url: URL) async throws -> String {
+    #if DEBUG
+      if url.path.contains("firepick-cms.js"), let bundled = Self.bundledScript(for: url) {
+        NSLog(
+          "Firepick JS debug bundled url=%@ bytes=%ld",
+          url.absoluteString,
+          bundled.utf8.count
+        )
+        return bundled
+      }
+    #endif
     do {
       let remote = try await fetchRemoteScript(from: url)
       NSLog(

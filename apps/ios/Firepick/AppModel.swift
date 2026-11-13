@@ -220,12 +220,14 @@ final class AppModel {
   }
 
   var selectedTab: Tab = .vod
+  /// Live TV immersive fullscreen — drives root tab-bar visibility.
+  var liveFullscreenActive = false
+  /// When fullscreen, swipe-up can temporarily reveal the tab bar.
+  var liveShowsTabBarInFullscreen = false
   var configuration: VodConfiguration = .empty
   var selectedSite: SiteConfiguration?
-  /// Item the user left playing on the detail page. Browse shows a return bar.
-  var resumeBrowseItem: MediaItem?
-  static let officialSourceVersion = "10"
-  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=10"
+  static let officialSourceVersion = "11"
+  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=11"
   var selectedCategory: FirepickCore.Category?
   var homeResult: MediaResult?
   var detailResult: MediaResult?
@@ -250,6 +252,8 @@ final class AppModel {
     case loadDetail(MediaItem)
   }
   var isLoadingHome = false
+  private var categoryCache: [String: MediaResult] = [:]
+  private var prefetchTask: Task<Void, Never>?
   var isLoadingDetail = false
   var isLoadingSearch = false
   var isSwitchingConnection = false
@@ -285,6 +289,7 @@ final class AppModel {
   var playbackFlagSelections: [String: String] = [:]
   var favoriteLiveChannelIDs: Set<String> = []
   var lastLiveChannelID: String?
+  var lastLiveChannelName: String?
   var lastLiveGroupName: String?
   var lastLiveURLIndex: Int = 0
 
@@ -478,6 +483,7 @@ final class AppModel {
     playbackFlagSelections = persistence?.loadPlaybackFlagSelections() ?? [:]
     favoriteLiveChannelIDs = Set(persistence?.loadFavoriteLiveChannelIDs() ?? [])
     lastLiveChannelID = persistence?.lastLiveChannelID
+    lastLiveChannelName = persistence?.lastLiveChannelName
     lastLiveGroupName = persistence?.lastLiveGroupName
     lastLiveURLIndex = persistence?.lastLiveURLIndex ?? 0
     sourceConnections = (try? persistence?.loadSourceConnections()) ?? []
@@ -503,9 +509,11 @@ final class AppModel {
 
   func rememberLiveChannel(_ channel: LiveChannel, groupName: String?, urlIndex: Int) {
     lastLiveChannelID = channel.id
+    lastLiveChannelName = channel.name
     lastLiveGroupName = groupName
     lastLiveURLIndex = max(0, urlIndex)
     persistence?.saveLastLiveChannelID(channel.id)
+    persistence?.saveLastLiveChannelName(channel.name)
     persistence?.saveLastLiveGroupName(groupName)
     persistence?.saveLastLiveURLIndex(lastLiveURLIndex)
   }
@@ -515,11 +523,8 @@ final class AppModel {
   }
 
   func resolveInitialLiveChannel() -> (group: LiveGroup, channel: LiveChannel)? {
-    if let id = lastLiveChannelID,
-      let group = liveGroups.first(where: { $0.channels.contains(where: { $0.id == id }) }),
-      let channel = group.channels.first(where: { $0.id == id })
-    {
-      return (group, channel)
+    if let match = findLiveChannel(id: lastLiveChannelID, name: lastLiveChannelName) {
+      return match
     }
     let favorites = allLiveChannels().filter { favoriteLiveChannelIDs.contains($0.id) }
     if let channel = favorites.first,
@@ -527,8 +532,40 @@ final class AppModel {
     {
       return (group, channel)
     }
+    if let groupName = lastLiveGroupName,
+      let group = liveGroups.first(where: { $0.name == groupName }),
+      let channel = group.channels.first
+    {
+      return (group, channel)
+    }
     guard let group = liveGroups.first, let channel = group.channels.first else { return nil }
     return (group, channel)
+  }
+
+  private func findLiveChannel(id: String?, name: String?) -> (group: LiveGroup, channel: LiveChannel)? {
+    if let id,
+      let group = liveGroups.first(where: { $0.channels.contains(where: { $0.id == id }) }),
+      let channel = group.channels.first(where: { $0.id == id })
+    {
+      return (group, channel)
+    }
+    // URLs in id can drift after source refresh; fall back to stable channel name.
+    let resolvedName =
+      name
+      ?? id?.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init)
+    guard let resolvedName, !resolvedName.isEmpty else { return nil }
+    if let groupName = lastLiveGroupName,
+      let group = liveGroups.first(where: { $0.name == groupName }),
+      let channel = group.channels.first(where: { $0.name == resolvedName })
+    {
+      return (group, channel)
+    }
+    for group in liveGroups {
+      if let channel = group.channels.first(where: { $0.name == resolvedName }) {
+        return (group, channel)
+      }
+    }
+    return nil
   }
 
   func loadConnection(_ connection: SourceConnection) async {
@@ -679,8 +716,10 @@ final class AppModel {
     persistence?.saveSkipMarks(skipMarks)
   }
 
+  /// Per program (vodId), independent across titles. `flag` kept for API compat, unused.
   func skipMarkKey(sourceKey: String?, vodId: String, flag: String?) -> String {
-    "\(sourceKey ?? "")|\(vodId)|\(flag ?? "")"
+    _ = flag
+    return "\(sourceKey ?? "")|\(vodId)"
   }
 
   func skipMark(sourceKey: String?, vodId: String, flag: String?) -> SkipMark? {
@@ -1194,6 +1233,8 @@ final class AppModel {
     searchFailureCount = 0
     sourceTestStatus = nil
     selectedCategory = nil
+    prefetchTask?.cancel()
+    categoryCache = [:]
     categoryFilters = []
     filterSelections = [:]
     currentPage = 1
@@ -1219,6 +1260,7 @@ final class AppModel {
       attachSourceKey(site.key, to: &result)
       homeResult = result
       errorMessage = nil
+      categoryCache = [:]
       if let first = homeResult?.classes.first {
         selectedCategory = first
         // 推荐首页不展示筛选；切到分类时再由 loadCategory 注入 filters。
@@ -1227,6 +1269,8 @@ final class AppModel {
         // Home already returns the 推荐 list; skip a redundant category fetch.
         if !first.typeId.hasPrefix("bucket|recommend") {
           await loadCategory(first, site: site)
+        } else {
+          prefetchCategories(site: site, classes: result.classes)
         }
       }
     } catch {
@@ -1305,10 +1349,38 @@ final class AppModel {
     selectedTab = .live
   }
 
+  /// Fills 电视剧/电影/综艺/动漫 after 推荐 is on screen, so switching tabs does not show a loader.
+  private func prefetchCategories(site: SiteConfiguration, classes: [FirepickCore.Category]) {
+    prefetchTask?.cancel()
+    let generation = homeLoadGeneration
+    prefetchTask = Task {
+      for category in classes where !category.typeId.contains("recommend") {
+        if Task.isCancelled || generation != homeLoadGeneration { return }
+        let cacheKey = categoryCacheKey(site: site, typeId: category.typeId)
+        if categoryCache[cacheKey] != nil { continue }
+        do {
+          let provider = try await provider(for: site)
+          var result = try await provider.categoryContent(
+            typeId: category.typeId,
+            page: 1,
+            filter: true,
+            extend: [:]
+          )
+          if Task.isCancelled || generation != homeLoadGeneration { return }
+          attachSourceKey(site.key, to: &result)
+          categoryCache[cacheKey] = result
+        } catch {
+          continue
+        }
+      }
+    }
+  }
+
   func loadCategory(_ category: FirepickCore.Category, site: SiteConfiguration? = nil) async {
     guard let site = site ?? selectedSite else { return }
     let categoryChanged = selectedCategory?.typeId != category.typeId
     selectedCategory = category
+    let keptSource = filterSelections["source"]
     if categoryChanged {
       if let filters = homeResult?.filters?[category.typeId] {
         categoryFilters = filters
@@ -1318,10 +1390,31 @@ final class AppModel {
       filterSelections = categoryFilters.reduce(into: [:]) { values, filter in
         values[filter.key] = filter.initValue ?? filter.value.first?.value ?? ""
       }
+      if let keptSource, !keptSource.isEmpty {
+        filterSelections["source"] = keptSource
+      }
+    }
+    let filtersActive = hasActiveCategoryFilters
+    let cacheKey = categoryCacheKey(site: site, typeId: category.typeId)
+    if categoryChanged, !filtersActive, let cached = categoryCache[cacheKey],
+      !cached.list.isEmpty
+    {
+      var shown = cached
+      shown.classes = homeResult?.classes ?? cached.classes
+      shown.filters = homeResult?.filters ?? cached.filters
+      homeResult = shown
+      currentPage = 1
+      errorMessage = nil
+      isLoadingHome = false
+      return
     }
     homeLoadGeneration += 1
     let generation = homeLoadGeneration
     loadMoreFailed = false
+    if var kept = homeResult, categoryChanged || filtersActive {
+      kept.list = []
+      homeResult = kept
+    }
     isLoading = true
     isLoadingHome = true
     defer {
@@ -1346,6 +1439,9 @@ final class AppModel {
         result.filters = homeResult?.filters
       }
       attachSourceKey(site.key, to: &result)
+      if !filtersActive {
+        categoryCache[cacheKey] = result
+      }
       homeResult = result
       currentPage = 1
       errorMessage = nil
@@ -1371,6 +1467,20 @@ final class AppModel {
     let selected = filterSelections[filter.key] ?? filter.initValue
     return filter.value.first(where: { $0.value == selected })?.name
       ?? filter.name
+  }
+
+  /// Compare against each filter's default because a source filter may have a
+  /// non-empty initial value without the user changing anything.
+  var hasActiveCategoryFilters: Bool {
+    categoryFilters.contains { filter in
+      let initial = filter.initValue ?? filter.value.first?.value ?? ""
+      let current = filterSelections[filter.key] ?? initial
+      return current != initial
+    }
+  }
+
+  private func categoryCacheKey(site: SiteConfiguration, typeId: String) -> String {
+    "\(site.key)|\(typeId)"
   }
 
   func loadMore() async {
@@ -1579,6 +1689,40 @@ final class AppModel {
     } catch {
       lastRecoverableAction = .loadDetail(item)
       errorMessage = error.localizedDescription
+    }
+  }
+
+  /// Resolve the same title in another on-device site. VOD IDs are scoped to a
+  /// site, so switching the configuration address cannot reuse the old ID.
+  func findItem(named title: String, in site: SiteConfiguration) async throws -> MediaItem? {
+    let provider = try await provider(for: site)
+    let search = try await provider.searchContent(keyword: title, quick: false, page: 1)
+    let candidates =
+      search.list.isEmpty
+      ? try await provider.homeContent().list
+      : search.list
+    let target = Self.normalizedTitle(title)
+    guard !target.isEmpty else { return nil }
+    let ranked = candidates.compactMap { item -> (MediaItem, Int)? in
+      let candidate = Self.normalizedTitle(item.name)
+      guard !candidate.isEmpty else { return nil }
+      if candidate == target { return (item, 0) }
+      if candidate.hasPrefix(target) || target.hasPrefix(candidate) {
+        return (item, abs(candidate.count - target.count) + 1)
+      }
+      if candidate.contains(target) || target.contains(candidate) {
+        return (item, abs(candidate.count - target.count) + 100)
+      }
+      return nil
+    }
+    guard var best = ranked.min(by: { $0.1 < $1.1 })?.0 else { return nil }
+    best.sourceKey = site.key
+    return best
+  }
+
+  private static func normalizedTitle(_ title: String) -> String {
+    title.lowercased().filter { character in
+      !character.isWhitespace && !character.isPunctuation
     }
   }
 
@@ -2105,6 +2249,20 @@ final class AppModel {
       )
     }
 
+    // The saved copy can be an older warehouse. Refresh from the address so
+    // the title and script match the file that is actually being served.
+    let keptError = errorMessage
+    if let connection = currentConnection {
+      let refreshed = await applyConfiguration(
+        urlString: connection.url,
+        selectInitialSite: false,
+        displayURL: connection.displayAddress
+      )
+      if !refreshed {
+        errorMessage = keptError
+      }
+    }
+
     await selectPendingInitialSite()
   }
 
@@ -2117,6 +2275,10 @@ final class AppModel {
 
   func reloadHome() async {
     guard currentConnection != nil else { return }
+    if let category = selectedCategory {
+      await loadCategory(category)
+      return
+    }
     if let site = selectedSite {
       await selectSite(site)
     } else {

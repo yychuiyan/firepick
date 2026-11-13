@@ -73,4 +73,13 @@ struct RootView: View {
       }
     }
   }
+
+}
+
+/// Page background. Kept as a view so browse, detail, and library share one fill.
+struct FirepickBackdrop: View {
+  var body: some View {
+    Color(.systemBackground)
+      .ignoresSafeArea()
+  }
 }

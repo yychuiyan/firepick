@@ -1,128 +1,48 @@
 import FirepickCore
 import SwiftUI
 
+/// FongMi `dialog_filter`: a short bottom sheet of horizontal chip rows.
 struct BrowseFilterSheet: View {
   @Environment(AppModel.self) private var model
   @Environment(\.dismiss) private var dismiss
-  @State private var draft: [String: String] = [:]
 
   var body: some View {
-    NavigationStack {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 24) {
-          ForEach(model.categoryFilters, id: \.key) { filter in
-            filterSection(filter)
-          }
-          Text("年份、地区和类型会交给采集站筛选。站不支持时，会再在返回结果里筛一次。")
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-        }
-        .padding()
-      }
-      .navigationTitle("筛选")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .cancellationAction) {
-          Button("重置") {
-            resetDraft()
-          }
-        }
-        ToolbarItem(placement: .confirmationAction) {
-          Button("完成") {
-            Task { await applyAndClose() }
-          }
-          .fontWeight(.semibold)
-        }
-      }
-      .safeAreaInset(edge: .bottom) {
-        Button {
-          Task { await applyAndClose() }
-        } label: {
-          Text("查看结果")
-            .font(.headline)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(.orange)
-        .padding()
-        .background(.bar)
-      }
-    }
-    .presentationDetents([.medium, .large])
-    .onAppear {
-      draft = model.filterSelections
-    }
-  }
-
-  private func filterSection(_ filter: SourceFilter) -> some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Text(filter.name)
-        .font(.subheadline.weight(.semibold))
-      FlowChipRow(values: filter.value, selected: draft[filter.key] ?? "") { value in
-        draft[filter.key] = value.value
-      }
-    }
-  }
-
-  private func resetDraft() {
-    draft = model.categoryFilters.reduce(into: [:]) { values, filter in
-      values[filter.key] = filter.initValue ?? filter.value.first?.value ?? ""
-    }
-  }
-
-  private func applyAndClose() async {
-    await model.applyFilters(draft)
-    dismiss()
-  }
-}
-
-private struct FlowChipRow: View {
-  let values: [FilterValue]
-  let selected: String
-  let onSelect: (FilterValue) -> Void
-
-  var body: some View {
-    FlexibleChipWrap(values: values, selected: selected, onSelect: onSelect)
-  }
-}
-
-/// Simple wrapping chip layout without extra dependencies.
-private struct FlexibleChipWrap: View {
-  let values: [FilterValue]
-  let selected: String
-  let onSelect: (FilterValue) -> Void
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-        HStack(spacing: 8) {
-          ForEach(Array(row.enumerated()), id: \.offset) { _, value in
-            Button {
-              onSelect(value)
-            } label: {
-              Text(value.name)
-                .font(.subheadline)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                  selected == value.value ? Color.orange : Color.secondary.opacity(0.12),
-                  in: Capsule()
-                )
-                .foregroundStyle(selected == value.value ? Color.white : Color.primary)
+    VStack(alignment: .leading, spacing: 14) {
+      ForEach(model.categoryFilters, id: \.key) { filter in
+        ScrollView(.horizontal) {
+          HStack(spacing: 8) {
+        ForEach(filter.value, id: \.value) { value in
+              let selected = (model.filterSelections[filter.key] ?? filter.initValue ?? "") == value.value
+              Button(value.name) {
+                Task { await model.selectFilter(filter, value: value) }
+              }
+              .buttonStyle(.plain)
+              .font(.subheadline.weight(.semibold))
+              .foregroundStyle(selected ? Color.white : Color.primary)
+              .padding(.horizontal, 12)
+              .padding(.vertical, 8)
+              .background(
+                selected ? Color.orange : Color.secondary.opacity(0.12),
+                in: Capsule()
+              )
             }
-            .buttonStyle(.plain)
           }
-          Spacer(minLength: 0)
+          .padding(.horizontal, 4)
         }
+        .scrollIndicators(.hidden)
       }
     }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 18)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Color(.systemBackground))
+    .presentationDetents([.height(sheetHeight)])
+    .presentationDragIndicator(.visible)
+    .presentationBackground(Color(.systemBackground))
   }
 
-  /// Chunk into rows of ~4 for a stable wrap approximation.
-  private var rows: [[FilterValue]] {
-    stride(from: 0, to: values.count, by: 4).map { start in
-      Array(values[start..<min(start + 4, values.count)])
-    }
+  private var sheetHeight: CGFloat {
+    let rows = CGFloat(max(model.categoryFilters.count, 1))
+    return min(360, 36 + rows * 52)
   }
 }

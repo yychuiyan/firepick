@@ -4,7 +4,8 @@ import SwiftUI
 
 struct DetailView: View {
   @Environment(AppModel.self) private var model
-  let item: MediaItem
+  @Environment(\.dismiss) private var dismiss
+  @State private var currentItem: MediaItem
   @State private var playback: PlaybackRequest?
   @State private var playbackEpisode: Episode?
   @State private var playbackFlag: String?
@@ -13,16 +14,20 @@ struct DetailView: View {
   @State private var showingSourcePicker = false
   @State private var selectedFlag: String?
   @State private var reverseEpisodes = false
-  @State private var expandSynopsis = false
+  @State private var synopsisExpanded = false
   @State private var showingEpisodeDrawer = false
   @State private var didScrollToHistory = false
   @State private var isPlayerExpanded = false
 
+  init(item: MediaItem) {
+    _currentItem = State(initialValue: item)
+  }
+
   private var detail: MediaItem {
-    if let loaded = model.detailResult?.list.first, loaded.vodId == item.vodId {
+    if let loaded = model.detailResult?.list.first, loaded.vodId == currentItem.vodId {
       return loaded
     }
-    return item
+    return currentItem
   }
 
   private var lines: [PlaybackLine] {
@@ -52,22 +57,29 @@ struct DetailView: View {
 
   private var isDetailLoading: Bool {
     model.isLoadingDetail
-      && model.detailResult?.list.first?.vodId != item.vodId
+      && model.detailResult?.list.first?.vodId != currentItem.vodId
       && lines.isEmpty
   }
 
   var body: some View {
+    // Keep one PlayerView instance across expand/collapse so playback continues.
     VStack(spacing: 0) {
       inlinePlayer
       if !isPlayerExpanded {
         detailScroll
       }
     }
-    .background(isPlayerExpanded ? Color.black : Color.clear)
-    .navigationTitle(detail.name)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    .background {
+      if isPlayerExpanded {
+        Color.black.ignoresSafeArea()
+      } else {
+        FirepickBackdrop()
+      }
+    }
     .navigationBarTitleDisplayMode(.inline)
-    .toolbar(isPlayerExpanded ? .hidden : .automatic, for: .navigationBar)
-    .toolbar(isPlayerExpanded ? .hidden : .automatic, for: .tabBar)
+    .toolbar(.hidden, for: .navigationBar)
+    .toolbar(.hidden, for: .tabBar)
     .alert(
       "无法开始播放",
       isPresented: Binding(
@@ -96,23 +108,15 @@ struct DetailView: View {
     .sheet(isPresented: $showingSourcePicker) {
       SourcePickerView()
     }
-    .onAppear {
-      model.resumeBrowseItem = nil
-    }
-    .onDisappear {
-      if playback != nil {
-        model.resumeBrowseItem = detail
-      }
-    }
-    .task(id: item.vodId) {
-      if model.detailResult?.list.first?.vodId != item.vodId {
+    .task(id: currentItem.vodId) {
+      if model.detailResult?.list.first?.vodId != currentItem.vodId {
         model.detailResult = nil
       }
       selectedFlag = model.preferredPlaybackFlag(
-        sourceKey: item.sourceKey ?? model.selectedSite?.key,
-        vodId: item.vodId
+        sourceKey: currentItem.sourceKey ?? model.selectedSite?.key,
+        vodId: currentItem.vodId
       )
-      await model.loadDetail(item)
+      await model.loadDetail(currentItem)
       if selectedFlag == nil || !lines.contains(where: { $0.name == selectedFlag }) {
         selectedFlag = lines.first?.name
       }
@@ -134,6 +138,11 @@ struct DetailView: View {
       guard let next else { return }
       Task { await play(episode: next, flag: flag) }
     }
+    .onDisappear {
+      if isPlayerExpanded {
+        OrientationBridge.enterPortraitThenUnlock()
+      }
+    }
   }
 
   @ViewBuilder
@@ -143,34 +152,55 @@ struct DetailView: View {
         request: playback,
         item: detail,
         episode: playbackEpisode,
+        alternateURLs: fallbackURLs(
+          for: playbackEpisode,
+          flag: playbackFlag,
+          primary: playback.url
+        ),
         flag: playbackFlag,
         lineEpisodes: lines.first(where: { $0.name == playbackFlag })?.episodes
           ?? activeLine?.episodes
           ?? [],
         playbackLines: lines,
         chrome: isPlayerExpanded ? .immersive : .inline,
-        onExpand: { isPlayerExpanded = true },
-        onCollapse: { isPlayerExpanded = false }
+        onExpand: {
+          isPlayerExpanded = true
+          OrientationBridge.enterLandscape()
+        },
+        onCollapse: {
+          isPlayerExpanded = false
+          OrientationBridge.enterPortraitThenUnlock()
+        },
+        onPlayEpisode: { episode, flag in
+          Task { await play(episode: episode, flag: flag) }
+        }
       )
-      .id(playbackEpisode?.value ?? playback.url.absoluteString)
-      .aspectRatio(isPlayerExpanded ? nil : 16.0 / 9.0, contentMode: .fit)
-      .frame(maxWidth: .infinity, maxHeight: isPlayerExpanded ? .infinity : nil)
-      .clipped()
+      .id("\(playbackEpisode?.value ?? "")|\(playback.url.absoluteString)")
+      .modifier(PlayerFrameModifier(expanded: isPlayerExpanded))
     } else {
       ZStack {
         Color.black
-        CachedRemoteImage(url: detail.pic.flatMap(URL.init(string:))) {
-          Color.black
-        }
-        .scaledToFill()
-        .opacity(0.45)
-        if resolvingEpisodeID != nil || isDetailLoading {
+        if resolvingEpisodeID != nil || isDetailLoading || !lines.isEmpty {
           ProgressView()
             .tint(.white)
-        } else if lines.isEmpty && !isDetailLoading {
+        } else {
           Text("没有可播放线路")
             .font(.subheadline)
             .foregroundStyle(.white)
+        }
+        VStack {
+          HStack {
+            Button {
+              dismiss()
+            } label: {
+              Image(systemName: "chevron.left")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+            }
+            Spacer()
+          }
+          Spacer()
         }
       }
       .aspectRatio(16.0 / 9.0, contentMode: .fit)
@@ -182,37 +212,164 @@ struct DetailView: View {
   private var detailScroll: some View {
     ScrollViewReader { proxy in
       ScrollView {
-        VStack(alignment: .leading, spacing: 18) {
-          metadataSection
-          synopsisSection
+        VStack(alignment: .leading, spacing: 10) {
+          HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(detail.name)
+              .font(.title3.weight(.semibold))
+              .foregroundStyle(.primary)
+              .lineLimit(3)
+            if let score = displayScore {
+              Text(score)
+                .font(.title3.weight(.bold))
+                .foregroundStyle(.orange)
+                .monospacedDigit()
+            }
+          }
+          HStack(spacing: 8) {
+            if isCompleted {
+              Text("完结")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(Color.orange, in: Capsule())
+            }
+            if let remarks = detail.remarks?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !remarks.isEmpty,
+              !remarks.contains("完结")
+            {
+              Text(remarks)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+          }
+          if !factLine.isEmpty {
+            Text(factLine)
+              .font(.subheadline)
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+          }
+          if let director = detail.director, !director.isEmpty {
+            Text("导演：\(Self.plainText(director))")
+              .font(.subheadline)
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+          }
+          if let actor = detail.actor, !actor.isEmpty {
+            Text("演员：\(Self.plainText(actor))")
+              .font(.subheadline)
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+          }
+
           if isDetailLoading {
             HStack(spacing: 8) {
-              ProgressView()
+              ProgressView().tint(.orange)
               Text("加载线路中…")
                 .foregroundStyle(.secondary)
             }
-            .padding(.horizontal)
+            .padding(.top, 8)
           } else if lines.isEmpty {
             ContentUnavailableView(
               "没有可播放线路",
               systemImage: "play.slash",
-              description: Text(
-                model.errorMessage ?? "详情接口没有返回标准选集数据。"
-              )
+              description: Text(model.errorMessage ?? "详情接口没有返回标准选集数据。")
             )
             if model.errorMessage != nil {
               Button("重试加载详情") {
-                Task { await model.loadDetail(item) }
+                Task { await model.loadDetail(currentItem) }
               }
               .buttonStyle(.bordered)
-              .padding(.horizontal)
+              .tint(.orange)
             }
           } else {
-            linePicker
-            episodeAccess
+            Text("来源")
+              .font(.body)
+              .foregroundStyle(.primary)
+              .padding(.top, 8)
+            sourceChips
+            if lines.count > 1 {
+              Text("线路")
+                .font(.body)
+                .foregroundStyle(.primary)
+                .padding(.top, 8)
+              chipRow(lines.map(\.name), selected: activeLine?.name) { name in
+                selectedFlag = name
+              }
+            }
+            if !displayedEpisodes.isEmpty {
+              HStack(spacing: 8) {
+                Text("选集")
+                  .font(.body)
+                  .foregroundStyle(.primary)
+                if displayedEpisodes.count > 1 {
+                  Button {
+                    reverseEpisodes.toggle()
+                  } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                      .font(.caption.weight(.semibold))
+                      .foregroundStyle(.orange)
+                  }
+                  .buttonStyle(.plain)
+                  .accessibilityLabel(reverseEpisodes ? "正序" : "倒序")
+                }
+                Spacer()
+                if displayedEpisodes.count > 8 {
+                  Button {
+                    showingEpisodeDrawer = true
+                  } label: {
+                    Image(systemName: "square.grid.2x2")
+                      .foregroundStyle(.orange)
+                  }
+                  .buttonStyle(.plain)
+                  .accessibilityLabel("全部选集")
+                }
+              }
+              .padding(.top, 6)
+              ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                  ForEach(displayedEpisodes) { episode in
+                    episodeChip(episode)
+                  }
+                }
+              }
+              .scrollIndicators(.hidden)
+              .sheet(isPresented: $showingEpisodeDrawer) {
+                episodeDrawer
+              }
+            }
+          }
+
+          if let content = detail.content, !content.isEmpty {
+            let plain = Self.plainText(content)
+            let canExpand = plain.count > 72
+            Text("简介")
+              .font(.body)
+              .foregroundStyle(.primary)
+              .padding(.top, 8)
+            Button {
+              guard canExpand else { return }
+              synopsisExpanded.toggle()
+            } label: {
+              Text(plain)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineSpacing(4)
+                .lineLimit(synopsisExpanded ? nil : 3)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .multilineTextAlignment(.leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .animation(nil, value: synopsisExpanded)
+            .accessibilityHint(canExpand ? (synopsisExpanded ? "收起简介" : "展开简介") : "")
           }
         }
-        .padding(.vertical)
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
+        .padding(.bottom, 24)
       }
       .onChange(of: displayedEpisodes.map(\.value)) { _, _ in
         scrollToHistoryEpisode(using: proxy)
@@ -224,105 +381,170 @@ struct DetailView: View {
     }
   }
 
-  private var metadataSection: some View {
-    HStack(alignment: .top, spacing: 16) {
-      CachedRemoteImage(url: detail.pic.flatMap(URL.init(string:))) {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-          .fill(Color.secondary.opacity(0.12))
-      }
-      .scaledToFill()
-      .frame(width: 120, height: 168)
-      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-      VStack(alignment: .leading, spacing: 8) {
-        Text(detail.name)
-          .font(.title2.bold())
-        metaLine
-        Button {
-          guard let sourceKey = detail.sourceKey ?? model.selectedSite?.key else { return }
-          Task { await model.toggleFavorite(sourceKey: sourceKey, item: detail) }
-        } label: {
-          let sourceKey = detail.sourceKey ?? model.selectedSite?.key ?? ""
-          Label(
-            model.isFavorite(sourceKey: sourceKey, item: detail)
-              ? "已收藏" : "收藏",
-            systemImage: model.isFavorite(
-              sourceKey: sourceKey,
-              item: detail
-            ) ? "heart.fill" : "heart"
-          )
-        }
-        .buttonStyle(.bordered)
-      }
-    }
-    .padding(.horizontal)
+  /// Provider key embedded in `vod_id` as `iqiyi|12345`.
+  private var playbackProviderKey: String? {
+    let id = detail.vodId
+    guard let bar = id.firstIndex(of: "|") else { return nil }
+    let key = String(id[..<bar])
+    return key.isEmpty ? nil : key
   }
 
-  @ViewBuilder
-  private var metaLine: some View {
-    let parts = [detail.typeName, detail.year, detail.area]
-      .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-      .filter { !$0.isEmpty }
-    if !parts.isEmpty {
-      Text(parts.joined(separator: " · "))
-        .foregroundStyle(.secondary)
+  private var playbackSourceName: String {
+    if let key = playbackProviderKey {
+      return Self.providerDisplayNames[key] ?? key
     }
-    if let director = detail.director, !director.isEmpty {
-      Text("导演 \(Self.plainText(director))")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .lineLimit(2)
-    }
-    if let actor = detail.actor, !actor.isEmpty {
-      Text("演员 \(Self.plainText(actor))")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .lineLimit(2)
-    }
+    let name = model.selectedSite?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return name.isEmpty ? "拾萤" : name
   }
 
-  @ViewBuilder
-  private var synopsisSection: some View {
-    if let content = detail.content, !content.isEmpty {
-      let text = Self.plainText(content)
-      VStack(alignment: .leading, spacing: 6) {
-        Text(text)
-          .font(.callout)
-          .foregroundStyle(.secondary)
-          .lineLimit(expandSynopsis ? nil : 3)
-        Button(expandSynopsis ? "收起" : "展开") {
-          expandSynopsis.toggle()
-        }
-        .font(.caption.weight(.semibold))
-      }
-      .padding(.horizontal)
-    }
-  }
+  private static let providerDisplayNames: [String: String] = [
+    "iqiyi": "爱奇艺",
+    "dytt": "电影天堂",
+    "maoyan": "猫眼",
+    "lzcaiji": "量子",
+    "lzi": "量子影视",
+    "zy360": "360资源",
+    "jisu": "极速",
+    "modu": "魔都",
+    "ffzy": "非凡",
+    "bfzy": "暴风",
+    "zuid": "最大",
+    "xinlang": "新浪",
+    "subo": "速播",
+    "jinying": "金鹰",
+    "uku": "U酷",
+    "guangsu": "光速",
+    "hongniu": "红牛",
+    "moduanime": "魔都动漫",
+    "ruyi": "如意",
+    "haohua": "豪华",
+    "yzzy": "优质",
+    "huya": "虎牙",
+    "wolong": "卧龙",
+    "maotai": "茅台",
+    "ikun": "iKun",
+  ]
 
   @ViewBuilder
-  private var linePicker: some View {
-    if lines.count > 1 {
+  private var sourceChips: some View {
+    let sites = model.onDeviceSites
+    if sites.count > 1 {
       ScrollView(.horizontal) {
         HStack(spacing: 8) {
-          ForEach(lines) { line in
-            Button(line.name) {
-              selectedFlag = line.name
+          ForEach(sites, id: \.key) { site in
+            let selected = model.selectedSite?.key == site.key
+            Button {
+              Task {
+                await switchSource(to: site)
+              }
+            } label: {
+              Text(site.name)
+                .font(.subheadline)
+                .foregroundStyle(selected ? Color.white : Color.primary)
+                .lineLimit(1)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(
+                  selected ? Color.orange : Color.secondary.opacity(0.12),
+                  in: Capsule()
+                )
             }
-            .buttonStyle(.bordered)
-            .tint(activeLine?.name == line.name ? .orange : .secondary)
+            .buttonStyle(.plain)
           }
         }
-        .padding(.horizontal)
       }
       .scrollIndicators(.hidden)
+    } else {
+      Text(playbackSourceName)
+        .font(.subheadline)
+        .foregroundStyle(.white)
+        .lineLimit(1)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color.orange, in: Capsule())
     }
   }
 
-  private var isSingleEpisode: Bool {
-    (activeLine?.episodes.count ?? 0) <= 1
+  /// Douban score only (product rule); fall back to site score when Douban is empty.
+  private var displayScore: String? {
+    if let douban = detail.doubanScore, douban > 0 {
+      return String(format: "%.1f", douban)
+    }
+    if let score = detail.score, score > 0 {
+      return String(format: "%.1f", score)
+    }
+    return nil
   }
 
-  /// Variety-style lists use titled cards; numbered series stay compact.
+  private var isCompleted: Bool {
+    let remarks = detail.remarks ?? ""
+    if remarks.contains("完结") || remarks.contains("已完结") { return true }
+    if remarks.range(of: #"全\s*\d+\s*集"#, options: .regularExpression) != nil,
+      !remarks.contains("更新")
+    {
+      return true
+    }
+    return false
+  }
+
+  private var factLine: String {
+    var parts: [String] = []
+    if let year = detail.year?.trimmingCharacters(in: .whitespacesAndNewlines), !year.isEmpty {
+      parts.append("年份：\(year)")
+    }
+    if let area = detail.area?.trimmingCharacters(in: .whitespacesAndNewlines), !area.isEmpty {
+      parts.append("地区：\(area)")
+    }
+    if let type = detail.typeName?.trimmingCharacters(in: .whitespacesAndNewlines), !type.isEmpty {
+      parts.append("类型：\(type)")
+    }
+    return parts.joined(separator: " ")
+  }
+
+  private func chipRow(_ titles: [String], selected: String?, onSelect: @escaping (String) -> Void) -> some View {
+    ScrollView(.horizontal) {
+      HStack(spacing: 8) {
+        ForEach(titles, id: \.self) { title in
+          let isOn = title == selected
+          Button(title) { onSelect(title) }
+            .buttonStyle(.plain)
+            .font(.subheadline)
+            .foregroundStyle(isOn ? Color.white : Color.primary)
+            .lineLimit(1)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(isOn ? Color.orange : Color.secondary.opacity(0.12), in: Capsule())
+        }
+      }
+    }
+    .scrollIndicators(.hidden)
+  }
+
+  private func episodeChip(_ episode: Episode) -> some View {
+    let isOn = focusedEpisodeValue == episode.value
+    return Button {
+      Task { await play(episode: episode) }
+    } label: {
+      Text(episode.name)
+        .font(.subheadline)
+        .foregroundStyle(isOn ? Color.white : Color.primary)
+        .lineLimit(1)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+    }
+    .buttonStyle(.plain)
+    .background(
+      isOn ? Color.orange : Color.secondary.opacity(0.12),
+      in: Capsule()
+    )
+    .id(episode.value)
+  }
+
+  /// Keep the playing / pending episode highlighted — never swap the chip for a spinner.
+  private var focusedEpisodeValue: String? {
+    playbackEpisode?.value ?? historyEntry?.episodeId ?? activeLine?.episodes.first?.value
+  }
+
   private var usesEpisodeCards: Bool {
     let names = activeLine?.episodes.map(\.name) ?? []
     guard names.count > 1 else { return false }
@@ -336,47 +558,6 @@ struct DetailView: View {
       .replacingOccurrences(of: "集", with: "")
       .trimmingCharacters(in: .whitespacesAndNewlines)
     return !trimmed.isEmpty && trimmed.allSatisfy(\.isNumber)
-  }
-
-  private var currentEpisodeLabel: String {
-    if let history = historyEntry,
-      displayedEpisodes.contains(where: { $0.value == history.episodeId })
-    {
-      return history.episodeName
-    }
-    return displayedEpisodes.first?.name ?? "选集"
-  }
-
-  @ViewBuilder
-  private var episodeAccess: some View {
-    if !isSingleEpisode {
-      Button {
-        showingEpisodeDrawer = true
-      } label: {
-        HStack(spacing: 8) {
-          Text("选集")
-            .font(.headline)
-            .foregroundStyle(.primary)
-          Text(currentEpisodeLabel)
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-          Spacer()
-          Text("展开")
-            .font(.subheadline.weight(.semibold))
-          Image(systemName: "chevron.up")
-            .font(.caption.weight(.semibold))
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-      }
-      .buttonStyle(.plain)
-      .padding(.horizontal)
-      .sheet(isPresented: $showingEpisodeDrawer) {
-        episodeDrawer
-      }
-    }
   }
 
   private var episodeDrawer: some View {
@@ -418,36 +599,30 @@ struct DetailView: View {
   }
 
   private func episodeCell(_ episode: Episode) -> some View {
-    let isHistory = historyEntry?.episodeId == episode.value
+    let isOn = focusedEpisodeValue == episode.value
     return Button {
       showingEpisodeDrawer = false
       Task { await play(episode: episode) }
     } label: {
-      if resolvingEpisodeID == episode.id {
-        ProgressView()
-          .frame(maxWidth: .infinity, minHeight: 36)
-      } else {
-        Text(episode.name)
-          .lineLimit(usesEpisodeCards ? 3 : 1)
-          .multilineTextAlignment(.center)
-          .frame(maxWidth: .infinity, minHeight: usesEpisodeCards ? 64 : 36)
-      }
+      Text(episode.name)
+        .lineLimit(usesEpisodeCards ? 3 : 1)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity, minHeight: usesEpisodeCards ? 64 : 36)
     }
     .buttonStyle(.bordered)
-    .tint(isHistory ? .orange : .secondary)
-    .disabled(resolvingEpisodeID != nil)
+    .tint(isOn ? .orange : .secondary)
     .id(episode.value)
   }
 
   private func scrollToHistoryEpisode(using proxy: ScrollViewProxy) {
     guard !didScrollToHistory,
-      let historyID = historyEntry?.episodeId,
-      displayedEpisodes.contains(where: { $0.value == historyID })
+      let focusID = focusedEpisodeValue,
+      displayedEpisodes.contains(where: { $0.value == focusID })
     else { return }
     didScrollToHistory = true
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
       withAnimation(.easeInOut(duration: 0.25)) {
-        proxy.scrollTo(historyID, anchor: .center)
+        proxy.scrollTo(focusID, anchor: .center)
       }
     }
   }
@@ -466,6 +641,37 @@ struct DetailView: View {
     await play(episode: next, flag: nextName)
   }
 
+  private func switchSource(to site: SiteConfiguration) async {
+    let previousSite = model.selectedSite
+    await model.selectSite(site)
+    do {
+      guard let replacement = try await model.findItem(named: detail.name, in: site) else {
+        if let previousSite {
+          await model.selectSite(previousSite)
+        }
+        playbackError = "「\(site.name)」没有找到《\(detail.name)》"
+        return
+      }
+      playback = nil
+      playbackEpisode = nil
+      playbackFlag = nil
+      selectedFlag = nil
+      showingEpisodeDrawer = false
+      model.detailResult = nil
+      currentItem = replacement
+      await model.loadDetail(replacement)
+      selectedFlag = lines.first?.name
+      if !lines.isEmpty {
+        await playPrimary()
+      }
+    } catch {
+      if let previousSite {
+        await model.selectSite(previousSite)
+      }
+      playbackError = error.localizedDescription
+    }
+  }
+
   private func playPrimary() async {
     if let history = historyEntry,
       let line = lines.first(where: {
@@ -481,8 +687,36 @@ struct DetailView: View {
     await play(episode: episode, flag: line.name)
   }
 
+  private func fallbackURLs(for episode: Episode?, flag: String?, primary: URL) -> [URL] {
+    guard let episode else { return [] }
+    var urls: [URL] = []
+    func add(_ raw: String) {
+      guard let url = URL(string: raw),
+        url.scheme == "http" || url.scheme == "https",
+        url != primary,
+        !urls.contains(url)
+      else { return }
+      urls.append(url)
+    }
+    for line in lines where line.name != flag {
+      let match = line.episodes.first(where: { $0.name == episode.name }) ?? line.episodes.first
+      if let match { add(match.value) }
+    }
+    return urls.sorted { mediaRank($0) > mediaRank($1) }
+  }
+
+  private func mediaRank(_ url: URL) -> Int {
+    let text = url.absoluteString.lowercased()
+    if text.contains(".m3u8") { return 2 }
+    if text.contains(".mp4") { return 1 }
+    return 0
+  }
+
   private func play(episode: Episode, flag: String? = nil) async {
     let lineName = flag ?? activeLine?.name ?? lines.first?.name ?? ""
+    // Focus the chip immediately; loading stays in the player, not on 选集.
+    playbackEpisode = episode
+    playbackFlag = lineName
     resolvingEpisodeID = episode.id
     playbackError = nil
     defer { resolvingEpisodeID = nil }
@@ -492,17 +726,9 @@ struct DetailView: View {
         episode: episode,
         flag: lineName
       )
-      playbackEpisode = episode
-      playbackFlag = lineName
     } catch {
       playbackError = error.localizedDescription
     }
-  }
-
-  private func format(_ seconds: Double) -> String {
-    guard seconds.isFinite else { return "00:00" }
-    let value = Int(seconds)
-    return String(format: "%02d:%02d", value / 60, value % 60)
   }
 
   private static func plainText(_ html: String) -> String {
@@ -514,5 +740,22 @@ struct DetailView: View {
       .replacingOccurrences(of: "&quot;", with: "\"")
       .replacingOccurrences(of: "&#39;", with: "'")
       .replacingOccurrences(of: "&apos;", with: "'")
+  }
+}
+
+private struct PlayerFrameModifier: ViewModifier {
+  let expanded: Bool
+
+  func body(content: Content) -> some View {
+    if expanded {
+      content
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea()
+    } else {
+      content
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .frame(maxWidth: .infinity)
+        .clipped()
+    }
   }
 }

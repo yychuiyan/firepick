@@ -72,17 +72,26 @@ public final class AVPlayerEngine: PlaybackEngine {
 
   private var timeObserver: Any?
   private var statusObservation: NSKeyValueObservation?
+  private var timeControlObservation: NSKeyValueObservation?
   private var endObserver: NSObjectProtocol?
   private var bufferSeconds: Double = 5
 
   public init() {
     timeObserver = player.addPeriodicTimeObserver(
-      forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+      forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
       queue: .main
     ) { [weak self] time in
       Task { @MainActor in
-        self?.currentTime = time.seconds.isFinite ? max(0, time.seconds) : 0
-        self?.duration = self?.player.currentItem?.duration.seconds ?? 0
+        guard let self else { return }
+        self.currentTime = time.seconds.isFinite ? max(0, time.seconds) : 0
+        self.duration = Self.readableDuration(self.player.currentItem) ?? self.duration
+        self.syncStateFromPlayer()
+      }
+    }
+    timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) {
+      [weak self] _, _ in
+      Task { @MainActor in
+        self?.syncStateFromPlayer()
       }
     }
   }
@@ -114,7 +123,13 @@ public final class AVPlayerEngine: PlaybackEngine {
         Task { @MainActor in
           switch item.status {
           case .readyToPlay:
-            self?.state = .ready
+            // Do not clobber .playing / .paused — play() may already have started.
+            if let self, self.state == .loading || self.state == .idle {
+              self.state = .ready
+            }
+            if let known = Self.readableDuration(item) {
+              self?.duration = known
+            }
           case .failed:
             self?.state = .failed(item.error?.localizedDescription ?? "未知播放错误")
           default:
@@ -137,6 +152,17 @@ public final class AVPlayerEngine: PlaybackEngine {
       if request.startPosition > 0 {
         await player.seek(to: CMTime(seconds: request.startPosition, preferredTimescale: 600))
         currentTime = request.startPosition
+      }
+      if let known = Self.readableDuration(item) {
+        duration = known
+      } else {
+        Task { [weak self] in
+          guard let known = try? await asset.load(.duration),
+            known.seconds.isFinite,
+            known.seconds > 0
+          else { return }
+          self?.duration = known.seconds
+        }
       }
     } catch {
       state = .failed(error.localizedDescription)
@@ -186,6 +212,56 @@ public final class AVPlayerEngine: PlaybackEngine {
   public func applyOptions(_ options: PlaybackEngineOptions) {
     bufferSeconds = options.bufferSeconds
     player.currentItem?.preferredForwardBufferDuration = bufferSeconds
+  }
+
+  /// Keep SwiftUI icons aligned with the real AVPlayer clock.
+  private func syncStateFromPlayer() {
+    switch state {
+    case .loading, .failed, .idle, .ended:
+      return
+    default:
+      break
+    }
+    // Prefer rate: HLS often sits in .waitingToPlayAtSpecifiedRate while frames
+    // already advance, which used to leave the UI stuck on the play icon.
+    if player.rate != 0 {
+      if state != .playing { state = .playing }
+      return
+    }
+    switch player.timeControlStatus {
+    case .playing:
+      if state != .playing { state = .playing }
+    case .paused:
+      if player.currentItem != nil, state != .paused, state != .ready {
+        state = .paused
+      }
+    case .waitingToPlayAtSpecifiedRate:
+      break
+    @unknown default:
+      break
+    }
+  }
+
+  /// True when AVPlayer is actually outputting, not only when our enum says so.
+  public var isActivelyPlaying: Bool {
+    if player.rate != 0 { return true }
+    if state == .playing {
+      return player.timeControlStatus == .playing
+        || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+    }
+    return false
+  }
+
+  /// HLS often reports `duration` as NaN until the playlist is parsed.
+  /// The seekable range end is the duration the progress bar can use.
+  private static func readableDuration(_ item: AVPlayerItem?) -> Double? {
+    guard let item else { return nil }
+    let seconds = item.duration.seconds
+    if seconds.isFinite, seconds > 0 { return seconds }
+    guard let range = item.seekableTimeRanges.last?.timeRangeValue else { return nil }
+    let end = range.end.seconds
+    guard end.isFinite, end > 0 else { return nil }
+    return end
   }
 }
 

@@ -163,6 +163,12 @@ struct OnDeviceJavaScriptHostTests {
     let html = "<div>A</div><div>B</div><div>C</div>"
     #expect(CatVodHTMLQuery.pdfh(html, rule: "div:eq(1)&&Text") == "B")
     #expect(CatVodHTMLQuery.pdfh(html, rule: "div&&:eq(2)&&Text") == "C")
+    #expect(
+      CatVodHTMLQuery.joinURL(
+        "https://source.example/path",
+        "//cdn.example/image.jpg"
+      ) == "https://cdn.example/image.jpg"
+    )
   }
 
   @Test

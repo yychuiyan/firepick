@@ -23,16 +23,13 @@ struct LibraryView: View {
   @State private var resumingID: String?
 
   private var columns: [GridItem] {
-    [
-      GridItem(
-        .adaptive(minimum: model.posterSizePreference.minimumWidth, maximum: 240),
-        spacing: 14
-      )
-    ]
+    let count = model.posterSizePreference == .large ? 2 : 3
+    return Array(repeating: GridItem(.flexible(minimum: 0), spacing: 10), count: count)
   }
 
   var body: some View {
     posterGrid
+    .background(FirepickBackdrop())
     .overlay {
       if mode == .history && model.history.isEmpty
         || mode == .favorites && model.favorites.isEmpty
@@ -49,10 +46,13 @@ struct LibraryView: View {
     .toolbar {
       if canClear {
         ToolbarItem(placement: .topBarTrailing) {
-          Button("清空", role: .destructive) {
+          Button(role: .destructive) {
             showingClearConfirmation = true
+          } label: {
+            Image(systemName: "trash")
           }
           .disabled(isClearing)
+          .accessibilityLabel("清空")
         }
       }
     }
@@ -78,7 +78,7 @@ struct LibraryView: View {
 
   private var posterGrid: some View {
     ScrollView {
-      LazyVGrid(columns: columns, spacing: 18) {
+      LazyVGrid(columns: columns, spacing: 12) {
         if mode == .history {
           ForEach(model.history) { entry in
             Button {

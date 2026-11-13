@@ -72,6 +72,7 @@ struct PlaybackTests {
     #expect(PlaybackTimeline.position(20, duration: 12) == 12)
     #expect(PlaybackTimeline.position(-1, duration: 12) == 0)
     #expect(PlaybackTimeline.position(.nan, duration: 12) == 0)
+    #expect(PlaybackTimeline.position(8, duration: 0) == 8)
   }
 
   @Test

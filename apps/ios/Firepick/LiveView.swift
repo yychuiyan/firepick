@@ -8,19 +8,27 @@ struct LiveView: View {
     Group {
       if model.isLoadingLive && model.liveGroups.isEmpty {
         ZStack {
-          Color.black.ignoresSafeArea()
+          Color(.systemBackground).ignoresSafeArea()
           ProgressView("正在加载直播…")
-            .tint(.white)
-            .foregroundStyle(.white)
         }
       } else {
         LivePlaybackShell()
       }
     }
+    .toolbar(tabBarVisibility, for: .tabBar)
+    .animation(.easeInOut(duration: 0.28), value: model.liveFullscreenActive)
+    .animation(.easeInOut(duration: 0.28), value: model.liveShowsTabBarInFullscreen)
     .task {
       if model.liveGroups.isEmpty {
         await model.refreshLiveSources()
       }
     }
+  }
+
+  private var tabBarVisibility: Visibility {
+    if model.liveFullscreenActive && !model.liveShowsTabBarInFullscreen {
+      return .hidden
+    }
+    return .automatic
   }
 }
