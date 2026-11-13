@@ -27,7 +27,7 @@ struct SettingsView: View {
                 Text("配置地址")
                   .font(.caption)
                   .foregroundStyle(.secondary)
-                Text(model.currentConnection?.url ?? "尚未选择")
+                Text(model.currentConnection?.displayAddress ?? "尚未选择")
                   .foregroundStyle(.primary)
                   .lineLimit(1)
               }
@@ -55,7 +55,7 @@ struct SettingsView: View {
                         Text(connection.name)
                           .foregroundStyle(.primary)
                           .lineLimit(1)
-                        Text(connection.url)
+                        Text(connection.displayAddress)
                           .font(.caption)
                           .foregroundStyle(.secondary)
                           .lineLimit(1)
@@ -85,11 +85,11 @@ struct SettingsView: View {
           }
 
           NavigationLink {
-            SourceManagementView()
+            ConfigurationManagementView()
           } label: {
             LabeledContent(
-              "管理已添加的点播源",
-              value: "\(model.configuration.sites.count) 个"
+              "已添加的配置地址",
+              value: "\(model.sourceConnections.count) 个"
             )
           }
 

@@ -9,8 +9,12 @@ struct SourceConnection: Codable, Identifiable, Equatable {
   var url: String
   var name: String
   var updatedAt: Date
+  var displayURL: String?
 
   var id: String { url }
+  var displayAddress: String {
+    SourceAddress.displayURL(displayURL ?? url)
+  }
 }
 
 @MainActor
@@ -251,7 +255,10 @@ final class AppModel {
   }
 
   func loadConnection(_ connection: SourceConnection) async {
-    if await applyConfiguration(urlString: connection.url) {
+    if await applyConfiguration(
+      urlString: connection.url,
+      displayURL: connection.displayAddress
+    ) {
       currentConnection = connection
     }
   }
@@ -265,11 +272,13 @@ final class AppModel {
     try? persistence?.saveSourceConnections(sourceConnections)
   }
 
-  private func recordConnection(url: URL) {
+  private func recordConnection(url: URL, displayURL: String? = nil) {
+    let existing = sourceConnections.first { $0.url == url.absoluteString }
     let connection = SourceConnection(
       url: url.absoluteString,
       name: url.host ?? url.absoluteString,
-      updatedAt: .now
+      updatedAt: .now,
+      displayURL: displayURL ?? existing?.displayURL
     )
     sourceConnections.removeAll { $0.url == connection.url }
     sourceConnections.insert(connection, at: 0)
@@ -385,7 +394,8 @@ final class AppModel {
   @discardableResult
   func applyConfiguration(
     urlString: String,
-    selectInitialSite: Bool = true
+    selectInitialSite: Bool = true,
+    displayURL: String? = nil
   ) async -> Bool {
     guard let url = normalizedConfigurationURL(urlString) else {
       errorMessage = "配置地址无效"
@@ -402,7 +412,7 @@ final class AppModel {
         baseURL: downloaded.url,
         selectInitialSite: selectInitialSite
       )
-      recordConnection(url: url)
+      recordConnection(url: url, displayURL: displayURL ?? urlString)
       configurationCandidates = []
       return true
     } catch {

@@ -20,9 +20,9 @@ Java/JAR、Python、Node.js 等复杂 Provider。
 当前公开发布版本：
 
 ```text
-Version: 0.1.16
-Build:   17
-SHA-256: dc175255bcd2e4cacbd57d30ef1b8e6d310680ba862f74c6f2959af251a0f71b
+Version: 0.1.17
+Build:   18
+SHA-256: 3b8d1e3251ecd7f388dd19eaa95b7f4eee0761cb01b3e43beffb97744bb9af98
 ```
 
 SideStore 更新源：
@@ -34,7 +34,7 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 当前 IPA 下载地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/Firepick-0.1.16.ipa
+https://dl.yychuiyan.com/firepick/Firepick-0.1.17.ipa
 ```
 
 ## 功能概览
@@ -42,7 +42,7 @@ https://dl.yychuiyan.com/firepick/Firepick-0.1.16.ipa
 | 模块 | 当前能力 |
 | --- | --- |
 | 点播 | CatVod/TVBox 配置、分类、筛选、详情、剧集、搜索、换源 |
-| 源管理 | URL 添加、手动添加、修改、删除、隐藏、切换、测试 |
+| 源管理 | 设置页只管理配置地址；点播页选择配置内部的点播源 |
 | 直播/电视 | JSON、M3U、TXT 直播源，频道分组、频道头、XMLTV EPG |
 | 播放 | AVPlayer；MPVKit-GPL 支持 MKV、ISO、M2TS、字幕和续播 |
 | 代理 | `proxy://` 解析、Android Bridge Range/HEAD 转发、iOS 回环代理 |
@@ -184,7 +184,7 @@ make bootstrap
 make test
 ```
 
-当前基线为 47 项测试、14 个 suite 全部通过。
+当前基线为 48 项测试、14 个 suite 全部通过。
 
 生成 Xcode 工程：
 
@@ -376,7 +376,7 @@ FIREPICK_CURL_DOH_URL="https://223.5.5.5/dns-query" \
 版本规则：
 
 - 后续补丁版本依次使用 `0.1.10`、`0.1.11`、`0.1.12`、`0.1.13`、
-  `0.1.14`、`0.1.15`、`0.1.16`，不跳到 `0.2.0`。
+  `0.1.14`、`0.1.15`、`0.1.16`、`0.1.17`，不跳到 `0.2.0`。
 - 每次发布增加 `MARKETING_VERSION`。
 - 同一版本重新构建时仍应增加 `CURRENT_PROJECT_VERSION`。
 - 不复用旧版本号发布不同代码。

@@ -86,4 +86,16 @@ struct ConfigurationTests {
       try ConfigurationDecoder.normalize(malformed)
     }
   }
+
+  @Test
+  func restoresInternationalizedDomainNameForDisplay() {
+    #expect(
+      SourceAddress.displayURL("http://www.xn--sss604efuw.net/tv")
+        == "http://www.饭太硬.net/tv"
+    )
+    #expect(
+      SourceAddress.displayURL("http://www.饭太硬.net/tv")
+        == "http://www.饭太硬.net/tv"
+    )
+  }
 }

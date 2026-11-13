@@ -29,9 +29,11 @@
 		9D51269D1491C27F603C131A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 62DE027BA3F9570841E293A3 /* Assets.xcassets */; };
 		A5A5148787DEBEFEB8739A4E /* PlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE02C211147015A1AB863F08 /* PlayerView.swift */; };
 		B65DEC177A516442A1C7236A /* DLNACastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41AC6E1084DB23277EA497FF /* DLNACastView.swift */; };
+		BF1A3F1798B55D3F26950C26 /* SourcePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE5F82CABA149E98E879DC20 /* SourcePickerView.swift */; };
 		E453604A064BAF9DD2D89C9E /* FirepickBridge in Frameworks */ = {isa = PBXBuildFile; productRef = A504A30197E66A6EEDE1E506 /* FirepickBridge */; };
 		F0ECBA96B08467C2BF0F0876 /* FirepickPlayback in Frameworks */ = {isa = PBXBuildFile; productRef = 8B2E7F2448F446CCC95D5EA7 /* FirepickPlayback */; };
 		F5ECA2C70D0E18F336557B79 /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 555FA1ABB2446A268E99A6A0 /* QRScannerView.swift */; };
+		FEB0695FE418AB62A97727A9 /* ConfigurationManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95ED5FFE00DFDB9AD9DB5FCB /* ConfigurationManagementView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -53,7 +55,9 @@
 		77048C5D133AC644C55D1DFA /* AppPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPersistence.swift; sourceTree = "<group>"; };
 		8445B9D7C5CEFB67C6D3AED3 /* FirepickKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = FirepickKit; path = Packages/FirepickKit; sourceTree = SOURCE_ROOT; };
 		8764AA710399DA3C242FEA9F /* Firepick.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Firepick.entitlements; sourceTree = "<group>"; };
+		95ED5FFE00DFDB9AD9DB5FCB /* ConfigurationManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigurationManagementView.swift; sourceTree = "<group>"; };
 		A98D1D722D170291E8258F75 /* SourceManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceManagementView.swift; sourceTree = "<group>"; };
+		AE5F82CABA149E98E879DC20 /* SourcePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcePickerView.swift; sourceTree = "<group>"; };
 		B01E3CFD909F6354967BE97D /* InfoPlist.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = InfoPlist.strings; path = "zh-Hans.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
 		B1F681642E64727908F3D814 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		BE02C211147015A1AB863F08 /* PlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerView.swift; sourceTree = "<group>"; };
@@ -117,6 +121,7 @@
 				77048C5D133AC644C55D1DFA /* AppPersistence.swift */,
 				62DE027BA3F9570841E293A3 /* Assets.xcassets */,
 				0AB5ADB64B002E75E2AEFD21 /* BrowseView.swift */,
+				95ED5FFE00DFDB9AD9DB5FCB /* ConfigurationManagementView.swift */,
 				68964CAC4A11B003ADE5EF23 /* DanmakuSettingsView.swift */,
 				39D426E5BF64F85D713A6F25 /* DetailView.swift */,
 				41AC6E1084DB23277EA497FF /* DLNACastView.swift */,
@@ -136,6 +141,7 @@
 				07A7F9C2D284DAFBC0B15DB1 /* SearchView.swift */,
 				15F1A48D7B7D4F18CD3B72E0 /* SettingsView.swift */,
 				A98D1D722D170291E8258F75 /* SourceManagementView.swift */,
+				AE5F82CABA149E98E879DC20 /* SourcePickerView.swift */,
 			);
 			path = Firepick;
 			sourceTree = "<group>";
@@ -234,6 +240,7 @@
 				1E799F37E17C0D22A452274E /* AppModel.swift in Sources */,
 				6E52C53515C87FAAD5CE1D6B /* AppPersistence.swift in Sources */,
 				6996D39BD048CA2F6795750B /* BrowseView.swift in Sources */,
+				FEB0695FE418AB62A97727A9 /* ConfigurationManagementView.swift in Sources */,
 				B65DEC177A516442A1C7236A /* DLNACastView.swift in Sources */,
 				8ED4F4BF9811684D667A99AB /* DanmakuSettingsView.swift in Sources */,
 				088AD96810B59C6A1F9B6E6E /* DetailView.swift in Sources */,
@@ -249,6 +256,7 @@
 				0818F4090044B3FFA590F5BE /* SearchView.swift in Sources */,
 				8FDDEAE7CE94E79DD0336FA4 /* SettingsView.swift in Sources */,
 				0C297617F7014493822974C0 /* SourceManagementView.swift in Sources */,
+				BF1A3F1798B55D3F26950C26 /* SourcePickerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -6,6 +6,7 @@ struct BrowseView: View {
   @Environment(AppModel.self) private var model
   @State private var selectedItem: MediaItem?
   @State private var showingSearch = false
+  @State private var showingSourcePicker = false
 
   private var columns: [GridItem] {
     [
@@ -132,6 +133,9 @@ struct BrowseView: View {
       .sheet(isPresented: $showingSearch) {
         SearchView()
       }
+      .sheet(isPresented: $showingSourcePicker) {
+        SourcePickerView()
+      }
       .sheet(item: $selectedItem) { item in
         DetailView(item: item)
       }
@@ -144,12 +148,23 @@ struct BrowseView: View {
         Text(model.selectedSite?.name ?? "拾萤")
           .font(.system(size: 28, weight: .bold))
           .lineLimit(1)
-        if let site = model.selectedSite {
-          Text("连接方式 · \(model.routeLabel(for: site))")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
+        Button {
+          showingSourcePicker = true
+        } label: {
+          HStack(spacing: 5) {
+            if let site = model.selectedSite {
+              Text(model.routeLabel(for: site))
+            }
+            Text(model.selectedSite == nil ? "选择点播源" : "切换点播源")
+            Image(systemName: "chevron.down")
+              .font(.caption2.weight(.semibold))
+          }
+          .font(.caption)
+          .foregroundStyle(.orange)
+          .lineLimit(1)
         }
+        .buttonStyle(.plain)
+        .disabled(model.configuration.sites.isEmpty)
       }
       Spacer(minLength: 8)
       HStack(spacing: 8) {
