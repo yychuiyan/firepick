@@ -226,8 +226,8 @@ final class AppModel {
   var liveShowsTabBarInFullscreen = false
   var configuration: VodConfiguration = .empty
   var selectedSite: SiteConfiguration?
-  static let officialSourceVersion = "11"
-  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=11"
+  static let officialSourceVersion = "12"
+  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=12"
   var selectedCategory: FirepickCore.Category?
   var homeResult: MediaResult?
   var detailResult: MediaResult?
@@ -1261,6 +1261,13 @@ final class AppModel {
       homeResult = result
       errorMessage = nil
       categoryCache = [:]
+      if result.list.isEmpty, !result.classes.isEmpty {
+        // Classes come from the spider menu even when every provider timed out.
+        presentRecoverableError(
+          "采集站响应较慢或暂时不可用，请下拉刷新重试。",
+          action: .reloadHome
+        )
+      }
       if let first = homeResult?.classes.first {
         selectedCategory = first
         // 推荐首页不展示筛选；切到分类时再由 loadCategory 注入 filters。
@@ -2302,8 +2309,15 @@ final class AppModel {
   /// Ensures the VOD home has a selected site and loaded content after a
   /// configuration address is applied — including when the user is still on Settings.
   func ensureHomeContentLoaded() async {
-    guard currentConnection != nil, selectedSite == nil else { return }
-    await selectPendingInitialSite()
+    guard currentConnection != nil else { return }
+    if selectedSite == nil {
+      await selectPendingInitialSite()
+      return
+    }
+    // Categories-without-list usually means the last fetch timed out on a slow link.
+    if let home = homeResult, !home.classes.isEmpty, home.list.isEmpty, !isLoadingHome {
+      await reloadHome()
+    }
   }
 
   func reloadHome() async {

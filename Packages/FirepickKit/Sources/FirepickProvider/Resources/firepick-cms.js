@@ -235,7 +235,8 @@ function applyExtend(list, extend) {
 }
 
 const BATCH_SIZE = 8;
-const REQUEST_TIMEOUT_MS = 4000;
+// Mobile/cellular often needs >4s; empty home with categories usually means timeout.
+const REQUEST_TIMEOUT_MS = 12000;
 const FIRST_SCREEN = 36;
 const ADULT_PATTERN = /伦理|福利|里番|无码|有码|SWAG|色情|成人|黄游|性爱|口交|三级片/i;
 
@@ -292,7 +293,8 @@ async function collectProviderLists(providers, page, limit, extra, accept, pageS
   const list = [];
   let cursor = 0;
   let stopped = false;
-  const span = pageSpan || (providers.length <= 2 ? 4 : 1);
+  // Prefer a short span so the first screen returns before slow pages pile up.
+  const span = pageSpan || (providers.length <= 2 ? 2 : 1);
   const start = (Math.max(1, Number(page) || 1) - 1) * span + 1;
   const concurrency = Math.min(10, providers.length);
   function take() {

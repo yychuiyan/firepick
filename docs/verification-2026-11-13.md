@@ -4,7 +4,7 @@
 
 - `swift test --package-path Packages/FirepickKit`: 61 tests in 15 suites pass.
 - iOS Simulator Debug build: `BUILD SUCCEEDED`.
-- Unsigned `0.1.25` (build `26`) Release device build succeeds.
+- Unsigned `0.1.26` (build `27`) Release device build succeeds.
 - IPA ZIP integrity passes and contains the standard `Payload/` layout.
 - Bundled and source copies of `firepick-cms.js` have the same SHA-256.
 
@@ -13,7 +13,7 @@
 The published configuration is:
 
 ```text
-https://dl.yychuiyan.com/firepick/ios-sources.json?v=11
+https://dl.yychuiyan.com/firepick/ios-sources.json?v=12
 ```
 
 The source probe reports:
@@ -35,14 +35,14 @@ the new home, filter and configuration-update UI. Simulator playback rendered
 video with a valid 46:14 timeline, and the live page rendered a working CCTV
 stream with its channel shelf.
 
-The `0.1.25` startup recovery path prefers a saved remote line when a local
+The `0.1.26` startup recovery path prefers a saved remote line when a local
 loopback configuration is unavailable, then falls back to the official line.
 
 ## Install artifact
 
 ```text
-artifacts/Firepick-unsigned-0.1.25.ipa
-SHA-256: 2c46f30bc787ed3e62935d4b8ae0b974d9f742530f7cc59adcffc549e664085b
+artifacts/Firepick-unsigned-0.1.26.ipa
+SHA-256: e0c82e4a9fe00d1d086ee79070f275c25e320f1a89bf806688a3451bec47787d
 ```
 
 Physical-device SideStore signing and seven-day renewal remain separate
