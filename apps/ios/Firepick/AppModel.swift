@@ -2259,11 +2259,44 @@ final class AppModel {
         displayURL: connection.displayAddress
       )
       if !refreshed {
-        errorMessage = keptError
+        // Local warehouse (127.0.0.1) often dies between sessions — fall back
+        // to a reachable remote/official line instead of leaving an empty home.
+        if await restoreFallbackWarehouse(excluding: connection.url) {
+          errorMessage = nil
+        } else {
+          errorMessage = keptError
+        }
       }
     }
 
     await selectPendingInitialSite()
+  }
+
+  /// Prefer official COS, then any non-loopback saved line.
+  private func restoreFallbackWarehouse(excluding url: String) async -> Bool {
+    let excluded = url
+    let remote = sourceConnections.filter { connection in
+      guard connection.enabled, connection.url != excluded else { return false }
+      guard let host = URL(string: connection.url)?.host?.lowercased() else { return false }
+      return host != "127.0.0.1" && host != "localhost"
+    }
+    let ordered =
+      remote.filter { $0.url.contains("dl.yychuiyan.com") || $0.url.contains("ios-sources.json") }
+      + remote
+    var seen = Set<String>()
+    for candidate in ordered where seen.insert(candidate.url).inserted {
+      if await applyConfiguration(
+        urlString: candidate.url,
+        selectInitialSite: false,
+        displayURL: candidate.displayAddress
+      ) {
+        return true
+      }
+    }
+    if await applyConfiguration(urlString: Self.officialSourceURL, selectInitialSite: false) {
+      return true
+    }
+    return false
   }
 
   /// Ensures the VOD home has a selected site and loaded content after a
