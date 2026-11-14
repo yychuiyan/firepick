@@ -22,12 +22,15 @@ struct DetailView: View {
   @State private var isPlayerExpanded = false
   /// Frozen playable 来源 order (sorted once on enter). nil = still probing silently.
   @State private var orderedPlayableStations: [AppModel.CollectionStation]?
-  @State private var didAutoSelectOptimalSource = false
+  /// User picked 来源 manually — skip auto optimal until stuck / episode change.
+  @State private var userLockedSource = false
   @State private var lastPlaybackTime: Double = 0
   @State private var sourceSwitchHandoff: (position: Double, episodeName: String?)?
   @State private var isSwitchingSource = false
   /// Keep 选集 highlight stable across source switches (episode `value` changes per站).
   @State private var focusEpisodeName: String?
+  /// Bumped on each play() so rapid 切集 only applies the latest resolve.
+  @State private var playGeneration = 0
 
   init(item: MediaItem) {
     _currentItem = State(initialValue: item)
@@ -60,9 +63,21 @@ struct DetailView: View {
 
   private var historyEntry: HistoryEntry? {
     let sourceKey = detail.sourceKey ?? model.selectedSite?.key ?? ""
-    return model.history.first {
+    let forVod = model.history.filter {
       $0.sourceKey == sourceKey && $0.item.vodId == detail.vodId
     }
+    // Prefer the focused / current episode's row so resume is not another ep's clock.
+    if let name = focusEpisodeName ?? playbackEpisode?.name,
+      let match = forVod.first(where: { $0.episodeName == name })
+    {
+      return match
+    }
+    if let id = playbackEpisode?.value,
+      let match = forVod.first(where: { $0.episodeId == id })
+    {
+      return match
+    }
+    return forVod.first
   }
 
   private var isDetailLoading: Bool {
@@ -72,24 +87,41 @@ struct DetailView: View {
   }
 
   var body: some View {
-    // Keep one PlayerView instance across expand/collapse so playback continues.
-    VStack(spacing: 0) {
-      inlinePlayer
-      if !isPlayerExpanded {
-        detailScroll
+    // Layout follows the real window:
+    // - Immersive keys only when landscape (otherwise they look “功能键变了”)
+    // - Half-screen + detail only when portrait and not expanded
+    GeometryReader { geo in
+      let windowPortrait = geo.size.height >= geo.size.width
+      let windowLandscape = !windowPortrait
+      let useImmersiveChrome = windowLandscape
+      let playerFillsWindow = isPlayerExpanded || windowLandscape
+      let showDetail = !isPlayerExpanded && windowPortrait
+      VStack(spacing: 0) {
+        inlinePlayer(
+          fillsWindow: playerFillsWindow,
+          immersive: useImmersiveChrome,
+          containerSize: geo.size
+        )
+        if showDetail {
+          detailScroll
+        }
       }
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    .background {
-      if isPlayerExpanded {
-        Color.black.ignoresSafeArea()
-      } else {
-        FirepickBackdrop()
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+      .background {
+        if playerFillsWindow {
+          Color.black.ignoresSafeArea()
+        } else {
+          FirepickBackdrop()
+        }
       }
     }
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
+    .onDisappear {
+      // Returning from detail/player can leave the tab bar without its material.
+      TabBarChrome.restore()
+    }
     .alert(
       "无法开始播放",
       isPresented: Binding(
@@ -155,12 +187,15 @@ struct DetailView: View {
         sourceKey: detail.sourceKey ?? model.selectedSite?.key,
         vodId: detail.vodId
       )
+      // 来源切换 owns playback via applyReplacement — don't restart from 0 here.
+      guard !isSwitchingSource else { return }
       guard let oldFlag, oldFlag != flag, playback != nil else { return }
       let episodes = lines.first(where: { $0.name == flag })?.episodes ?? []
       let currentName = playbackEpisode?.name
       let next = episodes.first(where: { $0.name == currentName }) ?? episodes.first
       guard let next else { return }
-      Task { await play(episode: next, flag: flag) }
+      let resume = lastPlaybackTime > 1 ? lastPlaybackTime : nil
+      Task { await play(episode: next, flag: flag, startPosition: resume) }
     }
     .onDisappear {
       if isPlayerExpanded {
@@ -170,7 +205,9 @@ struct DetailView: View {
   }
 
   @ViewBuilder
-  private var inlinePlayer: some View {
+  private func inlinePlayer(fillsWindow: Bool, immersive: Bool, containerSize: CGSize)
+    -> some View
+  {
     if let playback {
       PlayerView(
         request: playback,
@@ -186,29 +223,43 @@ struct DetailView: View {
           ?? activeLine?.episodes
           ?? [],
         playbackLines: lines,
-        chrome: isPlayerExpanded ? .immersive : .inline,
+        chrome: immersive ? .immersive : .inline,
+        layoutExpanded: fillsWindow,
         onExpand: {
           isPlayerExpanded = true
           OrientationBridge.enterLandscape()
         },
         onCollapse: {
-          isPlayerExpanded = false
-          OrientationBridge.enterPortraitThenUnlock()
+          Task { @MainActor in
+            await OrientationBridge.collapseToPortrait()
+            isPlayerExpanded = false
+          }
         },
-        onPlayEpisode: { episode, flag in
-          Task { await play(episode: episode, flag: flag) }
+        onPlayEpisode: { episode, flag, start in
+          // Serialise 切集 from the player so rapid next taps don't stack resolves.
+          Task { @MainActor in
+            await play(episode: episode, flag: flag, startPosition: start)
+          }
         },
         onPlaybackTimeChange: { time in
           lastPlaybackTime = time
         },
         onUnplayable: {
           guard let key = playbackProviderKey else { return false }
+          // Stuck: unlock manual choice and resume auto optimal failover.
+          userLockedSource = false
           return failoverToNextStation(from: key)
         }
       )
       // Stable within one DetailView — soft-reload keeps progress chrome on 来源 switch.
       .id("firepick-player")
-      .modifier(PlayerFrameModifier(expanded: isPlayerExpanded))
+      .modifier(
+        PlayerFrameModifier(
+          expanded: fillsWindow,
+          containerWidth: containerSize.width,
+          containerHeight: containerSize.height
+        )
+      )
     } else {
       ZStack {
         Color.black
@@ -474,25 +525,30 @@ struct DetailView: View {
     }
   }
 
-  /// Auto-pick the fastest playable station once on enter. Returns true if playback was started.
+  /// Auto-pick the fastest playable station. Skipped while the user locked a manual pick.
   @discardableResult
-  private func autoSelectOptimalSourceIfNeeded() async -> Bool {
-    guard !didAutoSelectOptimalSource else { return false }
-    didAutoSelectOptimalSource = true
+  private func autoSelectOptimalSourceIfNeeded(force: Bool = false) async -> Bool {
+    if userLockedSource && !force { return false }
+    if force { userLockedSource = false }
+    // Mid-playback handoff only when forced (episode change / stuck path).
+    if !force {
+      guard playback == nil, lastPlaybackTime < 1.5 else { return false }
+    }
     guard let stations = orderedPlayableStations, let best = stations.first else { return false }
     let bestKey = stationProviderKey(best)
     guard playbackProviderKey != bestKey else { return false }
-    await switchCollectionStation(bestKey)
-    return playbackProviderKey == bestKey && playback != nil
+    await switchCollectionStation(bestKey, silent: true, userInitiated: false)
+    return playbackProviderKey == bestKey
   }
 
   @discardableResult
   private func failoverToNextStation(from failedKey: String) -> Bool {
+    userLockedSource = false
     dropUnplayableStation(failedKey)
     guard let next = orderedPlayableStations?.first else { return false }
     let nextKey = stationProviderKey(next)
     guard nextKey != failedKey else { return false }
-    Task { await switchCollectionStation(nextKey) }
+    Task { await switchCollectionStation(nextKey, silent: true, userInitiated: false) }
     return true
   }
 
@@ -543,7 +599,13 @@ struct DetailView: View {
           Button {
             showingSourceStationPicker = false
             guard !selected else { return }
-            Task { await switchCollectionStation(providerKey) }
+            Task {
+              await switchCollectionStation(
+                providerKey,
+                silent: true,
+                userInitiated: true
+              )
+            }
           } label: {
             HStack(spacing: 12) {
               Text(station.name)
@@ -569,7 +631,6 @@ struct DetailView: View {
             .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
-          .disabled(isSwitchingSource)
         }
       }
       .listStyle(.plain)
@@ -601,7 +662,6 @@ struct DetailView: View {
           sourceMenuLabel(selectedName, ms: selectedMS)
         }
         .buttonStyle(.plain)
-        .disabled(isSwitchingSource)
         .sheet(isPresented: $showingSourceStationPicker) {
           sourceStationPickerSheet
         }
@@ -687,9 +747,23 @@ struct DetailView: View {
 
   /// Prefer episode name so 来源 switches don't flash the highlight off/on.
   private func isFocusedEpisode(_ episode: Episode) -> Bool {
+    // Playing URL wins — avoids lighting every 期 when names collide or fuzzy index misfires.
+    if let playbackEpisode, playbackEpisode.value == episode.value {
+      return true
+    }
     if let focusEpisodeName, !focusEpisodeName.isEmpty {
-      if episode.name == focusEpisodeName { return true }
-      if let a = Self.episodeIndex(focusEpisodeName), let b = Self.episodeIndex(episode.name),
+      if episode.name == focusEpisodeName {
+        let sameName = displayedEpisodes.filter { $0.name == focusEpisodeName }
+        if sameName.count > 1, let playbackEpisode {
+          return episode.value == playbackEpisode.value
+        }
+        return true
+      }
+      // Fuzzy index only for 第N集/期 style — never for 2024-01-06期 dates
+      // (old all-digit Int made many 期 look like one episode).
+      if Self.canFuzzyMatchEpisodeNames(focusEpisodeName, episode.name),
+        let a = Self.episodeIndex(focusEpisodeName),
+        let b = Self.episodeIndex(episode.name),
         a == b
       {
         return true
@@ -697,12 +771,14 @@ struct DetailView: View {
       return false
     }
     if let playbackEpisode {
-      return playbackEpisode.value == episode.value || playbackEpisode.name == episode.name
+      return playbackEpisode.name == episode.name
     }
     if let history = historyEntry {
       if history.episodeId == episode.value { return true }
       if history.episodeName == episode.name { return true }
-      if let a = Self.episodeIndex(history.episodeName), let b = Self.episodeIndex(episode.name),
+      if Self.canFuzzyMatchEpisodeNames(history.episodeName, episode.name),
+        let a = Self.episodeIndex(history.episodeName),
+        let b = Self.episodeIndex(episode.name),
         a == b
       {
         return true
@@ -710,7 +786,11 @@ struct DetailView: View {
     }
     if let hint = titleHistoryHint {
       if hint.name == episode.name { return true }
-      if let a = Self.episodeIndex(hint.name), let b = Self.episodeIndex(episode.name), a == b {
+      if Self.canFuzzyMatchEpisodeNames(hint.name, episode.name),
+        let a = Self.episodeIndex(hint.name),
+        let b = Self.episodeIndex(episode.name),
+        a == b
+      {
         return true
       }
       // While we already know the resume episode, never light up 第1集 as a fallback.
@@ -749,15 +829,19 @@ struct DetailView: View {
 
   /// Keep the playing / pending episode highlighted — never swap the chip for a spinner.
   private var focusedEpisodeValue: String? {
+    if let playbackEpisode {
+      return playbackEpisode.value
+    }
     if let name = focusEpisodeName,
       let match = displayedEpisodes.first(where: { $0.name == name })
         ?? displayedEpisodes.first(where: {
-          Self.episodeIndex($0.name) == Self.episodeIndex(name)
+          Self.canFuzzyMatchEpisodeNames($0.name, name)
+            && Self.episodeIndex($0.name) == Self.episodeIndex(name)
         })
     {
       return match.value
     }
-    return playbackEpisode?.value ?? historyEntry?.episodeId ?? activeLine?.episodes.first?.value
+    return historyEntry?.episodeId ?? activeLine?.episodes.first?.value
   }
 
   private var usesEpisodeCards: Bool {
@@ -865,13 +949,20 @@ struct DetailView: View {
       Task { await play(episode: episode) }
     } label: {
       Text(episode.name)
+        .font(.subheadline)
+        .foregroundStyle(isOn ? Color.white : Color.primary)
         .lineLimit(usesEpisodeCards ? 3 : 1)
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity, minHeight: usesEpisodeCards ? 64 : 36)
+        .padding(.horizontal, 8)
+        .background(
+          isOn ? Color.orange : Color.secondary.opacity(0.12),
+          in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
     }
-    .buttonStyle(.bordered)
-    .tint(isOn ? .orange : .secondary)
-    .id(episode.name)
+    .buttonStyle(.plain)
+    // Prefer value so duplicate 期 titles don't share one SwiftUI identity.
+    .id(episode.id)
   }
 
   private var focusedEpisodeScrollID: String? {
@@ -945,9 +1036,17 @@ struct DetailView: View {
   }
 
   /// Switch CMS provider inside 拾萤 without reloading the whole home catalog.
-  private func switchCollectionStation(_ providerKey: String) async {
+  private func switchCollectionStation(
+    _ providerKey: String,
+    silent: Bool = false,
+    userInitiated: Bool = false
+  ) async {
     guard let site = model.selectedSite else { return }
     if playbackProviderKey == providerKey { return }
+    if userInitiated {
+      // Manual pick: honor this station; don't bounce to auto-optimal afterward.
+      userLockedSource = true
+    }
     beginSourceHandoff()
     do {
       guard
@@ -959,13 +1058,30 @@ struct DetailView: View {
       else {
         clearSourceHandoff()
         dropUnplayableStation(providerKey)
-        playbackError = "「\(Self.providerDisplayNames[providerKey] ?? providerKey)」没有找到《\(detail.name)》"
+        if silent, !userInitiated, failoverToNextStation(from: providerKey) {
+          return
+        }
+        if userInitiated {
+          userLockedSource = false
+        }
+        if !silent {
+          playbackError =
+            "「\(Self.providerDisplayNames[providerKey] ?? providerKey)」没有找到《\(detail.name)》"
+        }
         return
       }
       await applyReplacement(replacement)
     } catch {
       clearSourceHandoff()
-      playbackError = error.localizedDescription
+      if silent, !userInitiated, failoverToNextStation(from: providerKey) {
+        return
+      }
+      if userInitiated {
+        userLockedSource = false
+      }
+      if !silent {
+        playbackError = error.localizedDescription
+      }
     }
   }
 
@@ -1008,11 +1124,20 @@ struct DetailView: View {
   private func playPrimary() async {
     let handoff = sourceSwitchHandoff
     sourceSwitchHandoff = nil
-    let resume = handoff.map { max(0, $0.position) }
     let preferredName =
       handoff?.episodeName ?? focusEpisodeName ?? historyEntry?.episodeName ?? titleHistoryHint?.name
-    let resumePosition =
-      resume ?? historyEntry?.position ?? titleHistoryHint?.position
+    // Source handoff keeps the live clock. Fresh open applies「已看完 → 0」.
+    let resumePosition: Double? = {
+      if let handoff { return max(0, handoff.position) }
+      if let entry = historyEntry {
+        return AppModel.resumeStartPosition(
+          position: entry.position,
+          duration: entry.duration
+        )
+      }
+      // Title-level hint has no duration — keep raw position.
+      return titleHistoryHint.map { max(0, $0.position) }
+    }()
 
     if let preferredName, let match = matchEpisode(named: preferredName) {
       selectedFlag = match.line.name
@@ -1055,9 +1180,34 @@ struct DetailView: View {
     return nil
   }
 
+  /// True only when both labels are plain episode numbers (第3集 / 03), not dates.
+  private static func canFuzzyMatchEpisodeNames(_ a: String, _ b: String) -> Bool {
+    isStrictEpisodeNumberLabel(a) && isStrictEpisodeNumberLabel(b)
+  }
+
+  private static func isStrictEpisodeNumberLabel(_ name: String) -> Bool {
+    episodeIndex(name) != nil
+  }
+
+  /// Parse 第12集 / 第12期 / 12 — not concatenated calendar digits like 20240106.
   private static func episodeIndex(_ name: String) -> Int? {
-    let digits = name.filter(\.isNumber)
-    return digits.isEmpty ? nil : Int(digits)
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    let patterns = [
+      #"^第\s*0*(\d+)\s*[集期话]$"#,
+      #"^0*(\d+)$"#,
+    ]
+    for pattern in patterns {
+      guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+      let range = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
+      guard let match = regex.firstMatch(in: trimmed, options: [], range: range),
+        match.numberOfRanges >= 2,
+        let capture = Range(match.range(at: 1), in: trimmed),
+        let value = Int(trimmed[capture])
+      else { continue }
+      return value
+    }
+    return nil
   }
 
   private func fallbackURLs(for episode: Episode?, flag: String?, primary: URL) -> [URL] {
@@ -1090,22 +1240,46 @@ struct DetailView: View {
     flag: String? = nil,
     startPosition: Double? = nil
   ) async {
+    playGeneration += 1
+    let generation = playGeneration
     let lineName = flag ?? activeLine?.name ?? lines.first?.name ?? ""
+    let previousEpisodeName = playbackEpisode?.name ?? focusEpisodeName
     // Focus the chip immediately; loading stays in the player, not on 选集.
     focusEpisodeName = episode.name
     playbackEpisode = episode
     playbackFlag = lineName
     resolvingEpisodeID = episode.id
     playbackError = nil
-    defer { resolvingEpisodeID = nil }
+    defer {
+      if generation == playGeneration {
+        resolvingEpisodeID = nil
+      }
+    }
+
+    // 切集：只解除手动锁，便于之后卡住再自动换源。
+    // 不要在这里 await 换最优源——会先黑屏再卡 2–3s 才播新集。
+    let episodeChanged =
+      previousEpisodeName != nil && previousEpisodeName != episode.name
+    if episodeChanged {
+      userLockedSource = false
+    }
+
     do {
-      playback = try await model.resolvePlayback(
+      // nil override → resolvePlayback 用该集历史（id/name）；显式 override 给上/下一集续播点。
+      let resolved = try await model.resolvePlayback(
         item: detail,
         episode: episode,
         flag: lineName,
         startPositionOverride: startPosition
       )
+      guard generation == playGeneration else { return }
+      playback = resolved
     } catch {
+      guard generation == playGeneration else { return }
+      if let key = playbackProviderKey, failoverToNextStation(from: key) {
+        // Silent 换源 — keep player on loading chrome, no error toast.
+        return
+      }
       playbackError = error.localizedDescription
       if let key = playbackProviderKey {
         dropUnplayableStation(key)
@@ -1127,17 +1301,18 @@ struct DetailView: View {
 
 private struct PlayerFrameModifier: ViewModifier {
   let expanded: Bool
+  let containerWidth: CGFloat
+  let containerHeight: CGFloat
 
   func body(content: Content) -> some View {
-    if expanded {
-      content
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .ignoresSafeArea()
-    } else {
-      content
-        .aspectRatio(16.0 / 9.0, contentMode: .fit)
-        .frame(maxWidth: .infinity)
-        .clipped()
-    }
+    // Single modifier chain — never `if/else` around `content` or SwiftUI
+    // remounts AVPlayer (reload flash + seek back a few seconds).
+    let width = max(containerWidth, 1)
+    let height = expanded ? max(containerHeight, 1) : width * 9.0 / 16.0
+    content
+      .frame(width: width, height: height)
+      .frame(maxWidth: .infinity, maxHeight: expanded ? .infinity : nil)
+      .clipped()
+      .ignoresSafeArea(.container, edges: expanded ? .all : [])
   }
 }

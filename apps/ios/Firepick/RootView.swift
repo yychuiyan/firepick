@@ -20,6 +20,7 @@ struct RootView: View {
         .tag(AppModel.Tab.settings)
     }
     .tint(.orange)
+    .toolbarBackground(.visible, for: .tabBar)
     .safeAreaInset(edge: .top, spacing: 0) {
       VStack(spacing: 0) {
         if !model.isNetworkAvailable, !model.suppressNetworkBanner {
@@ -37,7 +38,11 @@ struct RootView: View {
             onDismiss: { model.suppressConstrainedBanner = true }
           )
         } else if let message = model.errorMessage, !message.isEmpty,
-          model.statusToast == nil
+          model.statusToast == nil,
+          // Restore often fails the first warehouse hit then succeeds on fallback —
+          // don't flash “无法加载配置” while that settles.
+          !model.isRestoringSession,
+          !model.isLoadingHome
         {
           ErrorBannerView(
             message: message,

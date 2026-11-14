@@ -11,6 +11,7 @@
     private let opacity: Double
     private let fontScale: Double
     private let speed: Double
+    private let displayArea: DanmakuDisplayArea
 
     @State private var anchorTime: Double = 0
     @State private var anchorDate = Date()
@@ -22,7 +23,8 @@
       isEnabled: Bool = true,
       opacity: Double = 0.9,
       fontScale: Double = 1,
-      speed: Double = 1
+      speed: Double = 1,
+      displayArea: DanmakuDisplayArea = .full
     ) {
       self.comments = comments
       self.currentTime = currentTime
@@ -31,6 +33,7 @@
       self.opacity = min(1, max(0.2, opacity))
       self.fontScale = min(1.75, max(0.75, fontScale))
       self.speed = min(2, max(0.5, speed))
+      self.displayArea = displayArea
     }
 
     public var body: some View {
@@ -123,6 +126,8 @@
       let resolved = context.resolve(text)
       let measured = resolved.measure(in: CGSize(width: 1_000, height: 100))
       let lane = stableLane(item.id)
+      let lanePitch = fontSize + 13
+      let scrollingLanes = maxScrollingLanes(height: size.height, pitch: lanePitch)
       let centerY: CGFloat
       let centerX: CGFloat
 
@@ -130,22 +135,30 @@
       case .scrolling:
         let travel = size.width + measured.width + 24
         centerX = size.width + measured.width / 2 - travel * progress
-        centerY = 26 + CGFloat(lane % 8) * (fontSize + 13)
+        centerY = 26 + CGFloat(lane % scrollingLanes) * lanePitch
       case .reverse:
         let travel = size.width + measured.width + 24
         centerX = -measured.width / 2 + travel * progress
-        centerY = 26 + CGFloat(lane % 8) * (fontSize + 13)
+        centerY = 26 + CGFloat(lane % scrollingLanes) * lanePitch
       case .top:
         centerX = size.width / 2
-        centerY = 24 + CGFloat(lane % 4) * 38
+        let topLanes = max(1, min(4, scrollingLanes))
+        centerY = 24 + CGFloat(lane % topLanes) * 38
       case .bottom:
         centerX = size.width / 2
-        centerY = size.height - 72 - CGFloat(lane % 4) * 38
+        let bottomLanes = max(1, min(4, scrollingLanes))
+        centerY = size.height - 72 - CGFloat(lane % bottomLanes) * 38
       }
 
       var colored = context
       colored.addFilter(.shadow(color: .black.opacity(0.9), radius: 2, x: 1, y: 1))
       colored.draw(resolved, at: CGPoint(x: centerX, y: centerY), anchor: .center)
+    }
+
+    private func maxScrollingLanes(height: CGFloat, pitch: CGFloat) -> Int {
+      if displayArea == .oneLine { return 1 }
+      let usable = max(pitch, height * displayArea.heightFraction - 32)
+      return max(1, Int(usable / max(pitch, 1)))
     }
 
     private func stableLane(_ value: String) -> Int {

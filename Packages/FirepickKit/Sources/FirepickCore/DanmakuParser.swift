@@ -60,6 +60,18 @@ public enum DanmakuParser {
             return
         }
         guard let object = value as? [String: Any] else { return }
+        // 弹弹play: { "p": "12.5,1,16777215", "m": "text" }
+        if let p = string(object["p"]),
+          let text = string(object["m"])
+            ?? string(object["text"])
+            ?? string(object["content"])
+            ?? string(object["msg"])
+        {
+            if let comment = parseParameterized(time: p, text: text, identifier: comments.count) {
+                comments.append(comment)
+                return
+            }
+        }
         if let text = string(object["text"])
             ?? string(object["content"])
             ?? string(object["msg"])
@@ -81,12 +93,6 @@ public enum DanmakuParser {
             )
             return
         }
-        if let p = string(object["p"]), let text = string(object["text"] ?? object["content"]) {
-            if let comment = parseParameterized(time: p, text: text, identifier: comments.count) {
-                comments.append(comment)
-            }
-            return
-        }
         for key in ["data", "comments", "danmaku", "list", "elems", "items"] {
             if let nested = object[key] {
                 collectJSON(nested, into: &comments)
@@ -105,8 +111,19 @@ public enum DanmakuParser {
         let isMilliseconds = first > 10_000 || fields.count > 3 && first > 1_000
         let time = isMilliseconds ? first / 1_000 : first
         let mode = fields.count > 1 ? parseMode(String(fields[1])) : .scrolling
-        let size = fields.count > 2 ? Double(fields[2]) ?? 24 : 24
-        let color = fields.count > 3 ? parseColor(String(fields[3])) : "#FFFFFF"
+        // B站 XML: time,mode,size,color,…  弹弹 JSON: time,mode,color
+        let size: Double
+        let color: String
+        if fields.count >= 4 {
+            size = Double(fields[2]) ?? 24
+            color = parseColor(String(fields[3]))
+        } else if fields.count == 3 {
+            size = 24
+            color = parseColor(String(fields[2]))
+        } else {
+            size = 24
+            color = "#FFFFFF"
+        }
         return DanmakuComment(
             id: "xml|\(identifier)|\(time)|\(text)",
             time: time,

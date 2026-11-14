@@ -20,7 +20,6 @@ struct LibraryView: View {
   @State private var selectedItem: MediaItem?
   @State private var showingClearConfirmation = false
   @State private var isClearing = false
-  @State private var resumingID: String?
 
   private var columns: [GridItem] {
     let count = model.posterSizePreference == .large ? 2 : 3
@@ -82,15 +81,9 @@ struct LibraryView: View {
         if mode == .history {
           ForEach(model.history) { entry in
             Button {
-              Task {
-                resumingID = entry.id
-                defer { resumingID = nil }
-                if await model.resumeFromHistory(entry) {
-                  return
-                }
-                model.detailResult = nil
-                selectedItem = entry.item
-              }
+              // Same Detail + inline player as browse — not RootView fullScreenCover.
+              model.detailResult = nil
+              selectedItem = entry.item
             } label: {
               MediaCardView(
                 item: entry.item,
@@ -99,18 +92,8 @@ struct LibraryView: View {
                   : nil,
                 subtitle: "\(entry.episodeName) · \(format(entry.position))"
               )
-              .overlay {
-                if resumingID == entry.id {
-                  ZStack {
-                    Color.black.opacity(0.25)
-                    ProgressView().tint(.white)
-                  }
-                  .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
-              }
             }
             .buttonStyle(.plain)
-            .disabled(resumingID != nil)
             .contextMenu {
               Button("打开详情") {
                 model.detailResult = nil

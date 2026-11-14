@@ -1,16 +1,16 @@
 import { Spider, net } from 'catvod';
 
-// Curated from LunaTV jin18 + local probe (scripts/probe-cms-providers.mjs).
-// Re-run the probe periodically; dead hosts drag search latency.
-// Faster hosts first. A single slow/blocked API must not empty the home grid.
+// Active pool from scripts/probe-cms-providers.mjs (re-run when stale).
+// Ranked by search breadth + latency; same-catalog mirrors collapsed to one host.
+// Faster hosts first so collectProviderLists fills the first screen sooner.
 const DEFAULT_PROVIDERS = [
-  { key: 'sdzy', name: '索尼', api: 'https://sdzyapi.com/api.php/provide/vod' },
-  { key: 'guangsu', name: '光速', api: 'https://api.guangsuapi.com/api.php/provide/vod' },
-  { key: 'lzi', name: '量子', api: 'https://cj.lziapi.com/api.php/provide/vod' },
+  { key: 'maoyan', name: '猫眼', api: 'https://api.maoyanapi.top/api.php/provide/vod' },
   { key: 'bfzy', name: '暴风', api: 'https://bfzyapi.com/api.php/provide/vod' },
-  { key: 'ffzy_cj', name: '非凡', api: 'https://cj.ffzyapi.com/api.php/provide/vod' },
-  { key: 'ruyi', name: '如意', api: 'https://cj.rycjapi.com/api.php/provide/vod' },
-  { key: 'iqiyi', name: '爱奇艺', api: 'https://iqiyizyapi.com/api.php/provide/vod' },
+  { key: 'subo', name: '速播', api: 'https://subocaiji.com/api.php/provide/vod' },
+  { key: 'zuid', name: '最大', api: 'https://api.zuidapi.com/api.php/provide/vod' },
+  { key: 'lzi', name: '量子', api: 'https://cj.lziapi.com/api.php/provide/vod' },
+  { key: 'jinying', name: '金鹰', api: 'https://jyzyapi.com/provide/vod/from/jinyingyun/at/json' },
+  { key: 'huya', name: '虎牙', api: 'https://www.huyaapi.com/api.php/provide/vod' },
 ];
 
 const MENU = [
@@ -69,12 +69,38 @@ const FILTER_YEAR = [
   { n: '更早', v: '2000' },
 ];
 
+// 电视剧 / 综艺 / 动漫：默认豆瓣热门（对齐 FongMi 仓里的豆瓣站榜单思路）。
 const FILTER_SORT = [
-  { n: '热门', v: '' },
-  { n: '最新', v: 'time' },
+  { n: '豆瓣热门', v: '' },
+  { n: '上映时间', v: 'release' },
+  { n: '最新更新', v: 'time' },
   { n: '最热', v: 'hits' },
   { n: '豆瓣评分', v: 'douban' },
 ];
+
+// 电影：默认上映时间；可选豆瓣热门。
+const FILTER_SORT_MOVIE = [
+  { n: '上映时间', v: '' },
+  { n: '豆瓣热门', v: 'douban_hot' },
+  { n: '最新更新', v: 'time' },
+  { n: '最热', v: 'hits' },
+  { n: '豆瓣评分', v: 'douban' },
+];
+
+// m.douban.com rexxar collections (same idea as CatVod Douban spiders).
+const DOUBAN_COLLECTION = {
+  recommend: 'subject_real_time_hotest',
+  tv: 'tv_hot',
+  movie: 'movie_hot_gaia',
+  variety: 'show_hot',
+  anime: 'tv_animation',
+};
+const DOUBAN_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+  Referer: 'https://m.douban.com/',
+  Accept: 'application/json,text/plain,*/*',
+};
 
 function bucketFilters(bucket) {
   const anime = bucket === 'anime';
@@ -87,10 +113,15 @@ function bucketFilters(bucket) {
     value: anime ? ANIME_CLASS : FILTER_CLASS,
   });
   if (!anime) {
-    filters.push({ key: 'area', name: '地区', value: FILTER_AREA });
+    filters.push({ key: 'area', name: '地区', init: '', value: FILTER_AREA });
   }
-  filters.push({ key: 'year', name: '年份', value: FILTER_YEAR });
-  filters.push({ key: 'by', name: '排序', value: FILTER_SORT });
+  filters.push({ key: 'year', name: '年份', init: '', value: FILTER_YEAR });
+  filters.push({
+    key: 'by',
+    name: '排序',
+    init: '',
+    value: bucket === 'movie' ? FILTER_SORT_MOVIE : FILTER_SORT,
+  });
   return filters;
 }
 
@@ -154,16 +185,112 @@ function sortByHotRecent(list) {
   });
 }
 
+/// 腾讯 / 爱奇艺 / 优酷 / 芒果 / B站 — browse lists prefer these.
+/// CMS rarely fills 播出平台; fall back to mainstream catalog signals.
+function majorPlatformRank(item) {
+  if (!item) return 0;
+  const blob = [
+    item.vod_name,
+    item.type_name,
+    item.vod_class,
+    item.vod_tag,
+    item.vod_remarks,
+    item.vod_note,
+    item.vod_blurb,
+    item.vod_content,
+    item.vod_play_from,
+    item.vod_publisher,
+    item.vod_tv,
+    item.vod_version,
+  ].join(' ');
+  if (/腾讯视频|腾讯独播|(?:^|[^a-z])tx(?:视频)?/i.test(blob)) return 4;
+  if (/爱奇艺|iqiyi/i.test(blob)) return 4;
+  if (/优酷|youku/i.test(blob)) return 4;
+  if (/芒果TV|芒果视频|芒果独播|mgtv/i.test(blob)) return 4;
+  if (/哔哩哔哩|bilibili|B站|b站|仅限B站|僅限B站/i.test(blob)) return 4;
+  if (/独播/.test(blob) && /腾讯|爱奇艺|优酷|芒果|哔哩|B站/.test(blob)) return 4;
+  const douban = parseScore(item.vod_douban_score) || parseScore(item.vod_score);
+  if (douban >= 6) return 3;
+  if (douban > 0) return 2;
+  const hasCast = String(item.vod_actor || '').trim().length > 1;
+  const isFeature = String(item.vod_state || '') === '正片';
+  const year = Number(String(item.vod_year || '').slice(0, 4));
+  const hasYear = Number.isFinite(year) && year >= 2018;
+  // Real series/movies usually ship cast + year; short-drama dumps often omit both.
+  if (isFeature && hasCast && hasYear) return 2;
+  if (hasCast && hasYear) return 1;
+  return 0;
+}
+
 function hotRecentScore(item, current) {
   const year = Number(String((item && item.vod_year) || '').slice(0, 4));
   let yearRank = 0;
   if (Number.isFinite(year) && year >= current) yearRank = 3;
   else if (Number.isFinite(year) && year >= current - 1) yearRank = 2;
   else if (Number.isFinite(year) && year >= current - 2) yearRank = 1;
-  return yearRank * 1e12 + parseScore(item && item.vod_hits) * 1000 + recency(item) / 1e8;
+  let score =
+    majorPlatformRank(item) * 1e14 +
+    yearRank * 1e12 +
+    parseScore(item && item.vod_hits) * 1000 +
+    recency(item) / 1e8;
+  // Any short-drama that slipped through ranks far below real series.
+  if (looksShortDrama(item)) score -= 1e15;
+  return score;
 }
 
-function applyExtend(list, extend) {
+/// 上映时间：大平台优先，再年份，同年份看入库/更新时间。
+function releaseTime(item) {
+  const year = Number(String((item && item.vod_year) || '').slice(0, 4));
+  const yearScore = Number.isFinite(year) && year > 1900 ? year : 0;
+  const raw = String((item && (item.vod_time || item.vod_time_add)) || '').trim();
+  const time = Date.parse(raw.replace(' ', 'T'));
+  const timeScore = Number.isFinite(time) ? time : 0;
+  return majorPlatformRank(item) * 1e16 + yearScore * 1e13 + timeScore;
+}
+
+function sortByReleaseTime(list) {
+  return list.slice().sort(function (a, b) {
+    return releaseTime(b) - releaseTime(a);
+  });
+}
+
+/// Keep major-platform titles up front, then mix CMS hosts for the rest.
+function diversifyByProvider(sortedList, perProvider) {
+  const cap = Math.max(1, perProvider || 4);
+  const picked = [];
+  const used = {};
+  // 1) Lock in 腾讯/爱奇艺/优酷/芒果/B站 (or strong proxies) already sorted to the top.
+  for (let i = 0; i < sortedList.length; i++) {
+    const item = sortedList[i];
+    if (majorPlatformRank(item) < 2) continue;
+    picked.push(item);
+    used[item.vod_id] = true;
+    if (picked.length >= FIRST_SCREEN) return picked.concat(
+      sortedList.filter(function (row) { return !used[row.vod_id]; })
+    );
+  }
+  // 2) Round-robin remaining CMS providers so the grid is not one host.
+  const counts = {};
+  for (let i = 0; i < sortedList.length; i++) {
+    const item = sortedList[i];
+    if (used[item.vod_id]) continue;
+    const split = splitID(item && item.vod_id);
+    const key = split ? split.provider : '_';
+    counts[key] = counts[key] || 0;
+    if (counts[key] >= cap) continue;
+    picked.push(item);
+    used[item.vod_id] = true;
+    counts[key] += 1;
+  }
+  for (let i = 0; i < sortedList.length; i++) {
+    const item = sortedList[i];
+    if (used[item.vod_id]) continue;
+    picked.push(item);
+  }
+  return picked;
+}
+
+function applyExtend(list, extend, bucket) {
   const ext = extend && typeof extend === 'object' ? extend : {};
   const classKey = String(ext.class || '');
   const areaKey = String(ext.area || '');
@@ -177,11 +304,7 @@ function applyExtend(list, extend) {
   }
   if (areaKey) {
     out = out.filter(function (item) {
-      const area = String(item.vod_area || '');
-      if (areaKey === '其他') {
-        return !/(大陆|中国|香港|台湾|美国|韩国|日本|英国)/.test(area);
-      }
-      return area.indexOf(areaKey) >= 0 || (areaKey === '大陆' && /中国/.test(area));
+      return matchesArea(item, areaKey);
     });
   }
   if (yearKey) {
@@ -197,27 +320,247 @@ function applyExtend(list, extend) {
   }
   if (sortKey === 'hits') {
     out.sort(function (a, b) {
+      const platform = majorPlatformRank(b) - majorPlatformRank(a);
+      if (platform) return platform;
       return parseScore(b.vod_hits) - parseScore(a.vod_hits);
     });
   } else if (sortKey === 'douban') {
     out.sort(function (a, b) {
+      const platform = majorPlatformRank(b) - majorPlatformRank(a);
+      if (platform) return platform;
       const left = parseScore(a.vod_douban_score) || parseScore(a.vod_score);
       const right = parseScore(b.vod_douban_score) || parseScore(b.vod_score);
       if (right !== left) return right - left;
       return recency(b) - recency(a);
     });
   } else if (sortKey === 'time') {
-    out = sortByRecency(out);
+    out.sort(function (a, b) {
+      const platform = majorPlatformRank(b) - majorPlatformRank(a);
+      if (platform) return platform;
+      return recency(b) - recency(a);
+    });
+  } else if (sortKey === 'hot') {
+    out = sortByHotRecent(out);
+  } else if (sortKey === 'douban_hot') {
+    // Already ordered by Douban chart — keep as-is.
+  } else if (sortKey === 'release' || (bucket === 'movie' && !sortKey)) {
+    // 显式「上映时间」，或电影默认（by 为空）
+    out = sortByReleaseTime(out);
+  } else if (!sortKey) {
+    // TV / variety / anime default is Douban chart order when resolved upstream;
+    // fallback CMS path still uses hot-recent.
+    out = sortByHotRecent(out);
   } else {
     out = sortByHotRecent(out);
   }
   return out;
 }
 
+async function fetchDoubanHotEntries(bucket, count) {
+  const collection = DOUBAN_COLLECTION[bucket];
+  if (!collection) return [];
+  const want = Math.max(8, Math.min(30, count || FIRST_SCREEN));
+  const url =
+    'https://m.douban.com/rexxar/api/v2/subject_collection/' +
+    collection +
+    '/items?start=0&count=' +
+    want;
+  try {
+    const response = await net.req(url, {
+      timeout: 8000,
+      headers: DOUBAN_HEADERS,
+    });
+    if (!response || response.code < 200 || response.code >= 300) return [];
+    const data = JSON.parse(response.content);
+    const rows = data.subject_collection_items || data.items || [];
+    const out = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const title = String((row && (row.title || row.name)) || '').trim();
+      if (!title) continue;
+      const rating =
+        row.rating && typeof row.rating === 'object'
+          ? Number(row.rating.value)
+          : Number(row.rating);
+      out.push({
+        title: title,
+        year: String((row && row.year) || '').slice(0, 4),
+        rating: Number.isFinite(rating) && rating > 0 ? rating : 0,
+        pic: (row && (row.pic && (row.pic.normal || row.pic.large))) || (row && row.cover_url) || '',
+        rank: i + 1,
+      });
+    }
+    return out;
+  } catch (error) {
+    return [];
+  }
+}
+
+function titleMatchScore(query, candidate) {
+  const q = normalizeTitle(query);
+  const c = normalizeTitle(candidate);
+  if (!q || !c) return 0;
+  if (q === c) return 100;
+  if (c.indexOf(q) === 0 || q.indexOf(c) === 0) return 80;
+  if (c.indexOf(q) >= 0 || q.indexOf(c) >= 0) return 50;
+  return 0;
+}
+
+async function findCMSMatchForTitle(entry, providers, accept) {
+  const title = entry.title;
+  let best = null;
+  let bestScore = 0;
+  // First few fast hosts are enough — full 7× search is too slow for chart resolve.
+  const hosts = providers.slice(0, 3);
+  await Promise.all(
+    hosts.map(async function (provider) {
+      const data = await requestJSON(
+        provider.api,
+        { ac: 'videolist', wd: title, pg: '1' },
+        7000
+      );
+      const items = data && Array.isArray(data.list) ? data.list : [];
+      for (let i = 0; i < items.length; i++) {
+        const mapped = accept(provider, items[i]);
+        if (!mapped) continue;
+        let score = titleMatchScore(title, mapped.vod_name);
+        if (score < 50) continue;
+        if (entry.year && String(mapped.vod_year || '').indexOf(entry.year) >= 0) score += 8;
+        score += itemScore(mapped);
+        if (score > bestScore) {
+          bestScore = score;
+          best = mapped;
+        }
+      }
+    })
+  );
+  if (!best) return null;
+  if (entry.rating > 0) {
+    best.vod_douban_score = String(entry.rating);
+  }
+  if (!best.vod_pic && entry.pic) best.vod_pic = entry.pic;
+  best._douban_rank = entry.rank;
+  return best;
+}
+
+const doubanEntryCache = { at: 0, byBucket: {} };
+const doubanResolveCache = { at: 0, byBucket: {} };
+const DOUBAN_CACHE_MS = 10 * 60 * 1000;
+
+async function cachedDoubanEntries(bucket, count) {
+  const now = Date.now();
+  if (
+    doubanEntryCache.at
+    && now - doubanEntryCache.at < DOUBAN_CACHE_MS
+    && doubanEntryCache.byBucket[bucket]
+  ) {
+    return doubanEntryCache.byBucket[bucket];
+  }
+  const entries = await fetchDoubanHotEntries(bucket, count);
+  if (entries.length) {
+    doubanEntryCache.at = now;
+    doubanEntryCache.byBucket[bucket] = entries;
+  }
+  return entries;
+}
+
+async function resolveDoubanHotList(bucket, providers, accept) {
+  const now = Date.now();
+  if (
+    doubanResolveCache.at
+    && now - doubanResolveCache.at < DOUBAN_CACHE_MS
+    && doubanResolveCache.byBucket[bucket]
+    && doubanResolveCache.byBucket[bucket].length >= 6
+  ) {
+    return doubanResolveCache.byBucket[bucket].slice();
+  }
+  const entries = await cachedDoubanEntries(bucket, 16);
+  if (!entries.length) return null;
+  const out = [];
+  const used = {};
+  for (let i = 0; i < entries.length; i += 4) {
+    const chunk = entries.slice(i, i + 4);
+    const found = await Promise.all(
+      chunk.map(function (entry) {
+        return findCMSMatchForTitle(entry, providers, accept);
+      })
+    );
+    for (let j = 0; j < found.length; j++) {
+      const item = found[j];
+      if (!item) continue;
+      const key = normalizeTitle(item.vod_name);
+      if (!key || used[key]) continue;
+      used[key] = true;
+      out.push(item);
+    }
+    if (out.length >= FIRST_SCREEN) break;
+  }
+  if (out.length >= 6) {
+    doubanResolveCache.at = now;
+    doubanResolveCache.byBucket[bucket] = out.slice();
+  }
+  return out.length ? out : null;
+}
+
+/// CMS first screen, then Douban order on top when chart resolves in time.
+async function doubanOrCMSList(bucket, providers, accept, cmsFetcher) {
+  const cmsPromise = cmsFetcher();
+  const doubanPromise = resolveDoubanHotList(bucket, providers, accept).catch(function () {
+    return null;
+  });
+  // Don't block first paint forever on Douban — prefer CMS if chart is slow.
+  const raced = await Promise.race([
+    doubanPromise.then(function (list) {
+      return { kind: 'douban', list: list };
+    }),
+    new Promise(function (resolve) {
+      setTimeout(function () {
+        resolve({ kind: 'timeout', list: null });
+      }, 2800);
+    }),
+  ]);
+  let douban = raced.kind === 'douban' ? raced.list : null;
+  const cmsList = await cmsPromise;
+  if (!douban) {
+    douban = await doubanPromise;
+  }
+  if (douban && douban.length >= 6) {
+    const used = {};
+    const merged = [];
+    for (let i = 0; i < douban.length; i++) {
+      const key = normalizeTitle(douban[i].vod_name);
+      if (!key || used[key]) continue;
+      used[key] = true;
+      merged.push(douban[i]);
+    }
+    const cms = dedupeByTitle(cmsList || []);
+    for (let i = 0; i < cms.length; i++) {
+      const key = normalizeTitle(cms[i].vod_name);
+      if (!key || used[key]) continue;
+      used[key] = true;
+      merged.push(cms[i]);
+    }
+    return { list: merged, fromDouban: true };
+  }
+  return { list: dedupeByTitle(cmsList || []), fromDouban: false };
+}
+
+/// True when the user narrowed or re-sorted — keep that order (no platform shuffle).
+function extendRequestsStrictOrder(extend) {
+  const ext = extend && typeof extend === 'object' ? extend : {};
+  if (String(ext.class || '')) return true;
+  if (String(ext.area || '')) return true;
+  if (String(ext.year || '')) return true;
+  // Non-default sort key (movie default is ''; tv default is '')
+  if (String(ext.by || '')) return true;
+  return false;
+}
+
 const BATCH_SIZE = 8;
 // Mobile/cellular often needs >4s; empty home with categories usually means timeout.
 const REQUEST_TIMEOUT_MS = 12000;
-const FIRST_SCREEN = 36;
+// Smaller first screen → stop waiting on slow CMS hosts sooner.
+const FIRST_SCREEN = 24;
 const ADULT_PATTERN = /伦理|福利|里番|无码|有码|SWAG|色情|成人|黄游|性爱|口交|三级片/i;
 
 function encode(value) {
@@ -364,7 +707,33 @@ function normalizeTitle(name) {
   return String(name || '')
     .replace(/\s+/g, '')
     .replace(/[　]/g, '')
+    .replace(/[：:·\-—_|／/【】\[\]()（）「」『』《》<>]/g, '')
+    // 一马当先 / 一马当先2026 / 一马当先第一季 → same show for list dedupe.
+    .replace(/(?:第?[0-9０-９一二三四五六七八九十两]+季|第?[0-9０-９]+部|最终季|完结篇)$/g, '')
+    .replace(/(?:19|20)\d{2}$/g, '')
     .toLowerCase();
+}
+
+function matchesArea(item, areaKey) {
+  const area = String((item && item.vod_area) || '');
+  const typeBlob = [item && item.type_name, item && item.vod_class, item && item.vod_tag].join('');
+  if (areaKey === '其他') {
+    return !/(大陆|中国|内地|香港|台湾|美国|韩国|日本|英国|国产)/.test(area)
+      && !/(国产剧|大陆剧|香港|台湾|美剧|韩剧|日剧)/.test(typeBlob);
+  }
+  if (areaKey === '大陆') {
+    if (/大陆|中国|内地/.test(area)) return true;
+    if (/(香港|台湾|美国|韩国|日本|英国|泰国|新加坡|其他|其它)/.test(area)) return false;
+    // Many CMS rows leave vod_area blank but tag 国产剧 / 大陆剧.
+    if (!area.trim() && /国产|大陆|内地/.test(typeBlob)) return true;
+    return false;
+  }
+  if (area.indexOf(areaKey) >= 0) return true;
+  if (areaKey === '美国' && /美剧|欧美/.test(typeBlob)) return true;
+  if (areaKey === '韩国' && /韩剧|韩国/.test(typeBlob)) return true;
+  if (areaKey === '日本' && /日剧|日本/.test(typeBlob)) return true;
+  if ((areaKey === '香港' || areaKey === '台湾') && typeBlob.indexOf(areaKey) >= 0) return true;
+  return false;
 }
 
 function looksAdult(item) {
@@ -380,19 +749,82 @@ function looksAdult(item) {
   return ADULT_PATTERN.test(blob);
 }
 
+/// 短剧 / 竖屏微短剧 — keep out of 电视剧 & 推荐 (they flood CMS “最新”).
+function looksShortDrama(item) {
+  if (!item) return true;
+  const typeBlob = [item.type_name, item.vod_class, item.vod_tag].join('');
+  if (/短剧|微短剧|竖屏|抖音剧|快手剧|小程序剧|短篇剧/.test(typeBlob)) return true;
+  const name = String(item.vod_name || '');
+  if (/短剧|微短剧/.test(name)) return true;
+  const remarks = String(item.vod_remarks || item.vod_note || '');
+  if (/竖屏|短剧|微短剧/.test(remarks)) return true;
+  // Strong title tropes — enough alone (CMS often files these under 国产剧).
+  if (
+    /七零|八零|九零|团宠|闪婚|和离|家妻|家夫|萌宝|娇妻|弃妇|真千金|假千金|世子妃|娘娘|穿书|马甲|双穿|觉醒后|分手后|退婚后|改嫁|替嫁|带球跑|霸总|神医战神|战神归来/.test(
+      name
+    )
+  ) {
+    return true;
+  }
+  // Weaker tropes + mini-drama pack size (全40–120集 / 已完结无“更新至”).
+  const weakTrope =
+    /重生|神医|战神|总裁|闪婚|娇妻|弃妇|千金|后妈|后爸|虐渣|打脸|逆袭/.test(name);
+  const full = remarks.match(/全\s*(\d+)\s*集/);
+  if (full && !/更新/.test(remarks)) {
+    const n = Number(full[1]);
+    if (Number.isFinite(n) && n >= 40 && n <= 120 && weakTrope) return true;
+  }
+  // “已完结” + weak trope + no year / low year often = short drama dump.
+  if (weakTrope && /已完结|全集/.test(remarks) && !/更新/.test(remarks)) {
+    const year = Number(String(item.vod_year || '').slice(0, 4));
+    if (!Number.isFinite(year) || year < 2020) return true;
+  }
+  return false;
+}
+
+function coerceScore(value) {
+  if (value == null || value === '') return 0;
+  const n = Number(String(value).replace(/分/g, '').trim());
+  return Number.isFinite(n) && n > 0 && n <= 10 ? n : 0;
+}
+
+/// List APIs often omit Douban; pull score from alternate keys / remarks.
+function enrichScores(item) {
+  if (!item) return item;
+  let douban = coerceScore(item.vod_douban_score);
+  let score = coerceScore(item.vod_score) || coerceScore(item.vod_scroe);
+  if (!douban && !score) {
+    const blob = String(item.vod_remarks || item.vod_note || '');
+    let match = blob.match(/豆瓣[:：\s]*([0-9]+(?:\.[0-9])?)/);
+    if (match) douban = coerceScore(match[1]);
+    if (!douban) {
+      match = blob.match(/(?:评分|满分)[:：\s]*([0-9]+(?:\.[0-9])?)/);
+      if (match) score = coerceScore(match[1]);
+    }
+    if (!douban && !score) {
+      match = blob.match(/\b([0-9]\.[0-9])\s*分\b/);
+      if (match) score = coerceScore(match[1]);
+    }
+  }
+  if (douban > 0) item.vod_douban_score = String(douban);
+  if (score > 0) item.vod_score = String(score);
+  return item;
+}
+
 function mediaItem(provider, item) {
   if (!item || item.vod_id === undefined || !item.vod_name) return null;
   if (looksAdult(item)) return null;
   item.vod_id = providerID(provider, item.vod_id);
   if (!item.vod_pic && item.vod_pic_thumb) item.vod_pic = item.vod_pic_thumb;
   if (!item.vod_remarks && item.vod_note) item.vod_remarks = item.vod_note;
-  return item;
+  return enrichScores(item);
 }
 
 function itemScore(item) {
-  let score = 0;
+  let score = majorPlatformRank(item) * 10;
   if (item.vod_pic) score += 2;
   if (item.vod_remarks || item.vod_note) score += 1;
+  if (String(item.vod_actor || '').trim()) score += 1;
   return score;
 }
 
@@ -409,6 +841,12 @@ function dedupeByTitle(list) {
       order.push(key);
       continue;
     }
+    const platformDelta = majorPlatformRank(item) - majorPlatformRank(prev);
+    if (platformDelta > 0) {
+      best.set(key, item);
+      continue;
+    }
+    if (platformDelta < 0) continue;
     const newer = recency(item) > recency(prev);
     const sameTimeBetterPic = recency(item) === recency(prev) && itemScore(item) > itemScore(prev);
     if (newer || sameTimeBetterPic) {
@@ -454,10 +892,11 @@ function classifyTypeName(name) {
   // Order matters: 动画片 / 纪录片 / 剧情片 must not fall through to 电视剧.
   if (/少儿|儿童|亲子|幼儿|卡通/.test(n)) return 'kids';
   if (/纪录/.test(n)) return 'doc';
+  if (/短剧|微短剧|竖屏/.test(n)) return null; // not TV — filtered in lists
   if (/动漫|动画|番剧|国漫|日漫/.test(n)) return 'anime';
   if (/综艺|晚会|脱口秀|选秀/.test(n)) return 'variety';
   if (/电影|影片|院线|片/.test(n)) return 'movie';
-  if (/连续剧|电视剧|美剧|韩剧|日剧|港剧|台剧|泰剧|国产剧|港台剧|日韩剧|欧美剧|海外剧|短剧|网剧|剧集/.test(n)) {
+  if (/连续剧|电视剧|美剧|韩剧|日剧|港剧|台剧|泰剧|国产剧|港台剧|日韩剧|欧美剧|海外剧|网剧|剧集/.test(n)) {
     return 'tv';
   }
   if (/剧/.test(n)) return 'tv';
@@ -616,14 +1055,23 @@ export default class extends Spider {
     const configuredProviders = this.providers || DEFAULT_PROVIDERS;
     const providers = configuredProviders;
     const self = this;
-    const list = await collectProviderLists(providers, 1, FIRST_SCREEN, null, function (provider, row) {
+    function acceptHome(provider, row) {
+      if (looksShortDrama(row)) return null;
       const bucket = self.classifyItem(provider, row);
-      if (bucket !== 'tv' && bucket !== 'movie' && bucket !== 'variety' && bucket !== 'anime') return null;
+      if (bucket !== 'tv' && bucket !== 'movie' && bucket !== 'variety' && bucket !== 'anime') {
+        return null;
+      }
       return mediaItem(provider, Object.assign({}, row));
+    }
+    const packed = await doubanOrCMSList('recommend', providers, acceptHome, function () {
+      return collectProviderLists(providers, 1, FIRST_SCREEN * 2, null, acceptHome);
     });
+    const list = packed.fromDouban
+      ? packed.list.slice(0, FIRST_SCREEN)
+      : sortByHotRecent(packed.list).slice(0, FIRST_SCREEN);
     return {
       class: menuClasses(),
-      list: sortByHotRecent(dedupeByTitle(list)),
+      list: list,
       filters: menuFilters(),
     };
   }
@@ -647,12 +1095,38 @@ export default class extends Spider {
     const all = (this.typeIdsByBucket && this.typeIdsByBucket[bucket]) || [];
     const parents = this.parentTypeIds || {};
     const leaves = all.filter(function (target) {
-      if (/里番|伦理|福利|色情/.test(target.typeName || '')) return false;
+      const name = target.typeName || '';
+      if (/里番|伦理|福利|色情|短剧|微短剧|竖屏/.test(name)) return false;
       return !parents[target.provider.key + '|' + target.typeId];
     });
     return leaves.length ? leaves : all.filter(function (target) {
-      return !/里番|伦理|福利|色情/.test(target.typeName || '');
+      return !/里番|伦理|福利|色情|短剧|微短剧|竖屏/.test(target.typeName || '');
     });
+  }
+
+  /// One leaf type per provider for first screen (avoids 40+ typed requests).
+  preferredLeafTargets(bucket, targets) {
+    const prefer = {
+      tv: /国产剧|连续剧|电视剧|港台剧|日韩剧|欧美剧|美剧|韩剧/,
+      movie: /电影|动作片|喜剧片|爱情片|剧情片|科幻片|恐怖片|战争片|纪录片/,
+      variety: /综艺|晚会|脱口秀/,
+      anime: /动漫|国漫|日漫|动画/,
+    };
+    const re = prefer[bucket];
+    const best = new Map();
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i];
+      const key = target.provider.key;
+      const prev = best.get(key);
+      if (!prev) {
+        best.set(key, target);
+        continue;
+      }
+      if (re && re.test(target.typeName || '') && !re.test(prev.typeName || '')) {
+        best.set(key, target);
+      }
+    }
+    return Array.from(best.values());
   }
 
   async bucketContent(bucket, pg, extend) {
@@ -665,6 +1139,8 @@ export default class extends Spider {
     const self = this;
     const classKey = String((extend && extend.class) || '');
     const areaKey = String((extend && extend.area) || '');
+    const yearKey = String((extend && extend.year) || '');
+    const sortKey = String((extend && extend.by) || '');
     const extra = {};
     if (extend && /^\d{4}$/.test(String(extend.year || ''))) {
       extra.year = String(extend.year);
@@ -673,7 +1149,75 @@ export default class extends Spider {
     if (classKey && bucket !== 'anime') extra.class = classKey;
     let list = [];
     let reportedPages = requestedPage;
-    if (bucket !== 'recommend') {
+
+    function acceptRow(provider, row) {
+      // 电视剧 / 推荐：丢掉短剧，避免“最新”被竖屏短剧刷屏。
+      if ((bucket === 'tv' || bucket === 'recommend') && looksShortDrama(row)) {
+        return null;
+      }
+      const found = self.classifyItem(provider, row);
+      if (bucket === 'recommend') {
+        if (found !== 'tv' && found !== 'movie' && found !== 'variety' && found !== 'anime') return null;
+      } else if (found !== bucket) {
+        return null;
+      }
+      if (bucket === 'anime' && classKey && !matchesAnimeClass(row, classKey)) {
+        return null;
+      }
+      if (found === 'kids' || found === 'doc') return null;
+      return mediaItem(provider, Object.assign({}, row));
+    }
+
+    // Warm catalogs in the background — do not block the first screen on 7× ac=list.
+    if (!this.catalogReady) {
+      this.ensureCatalogs().catch(function () {});
+    }
+
+    // Default TV/variety/anime (and explicit 豆瓣热门): Douban order on page 1,
+    // CMS continuation on later pages (load more).
+    const wantDouban =
+      !classKey
+      && !areaKey
+      && !yearKey
+      && (
+        sortKey === 'douban_hot'
+        || (sortKey === '' && bucket !== 'movie')
+      );
+    const filtered = extendRequestsStrictOrder(extend);
+
+    if (wantDouban && requestedPage === 1 && !filtered) {
+      const want = bucket === 'tv' ? FIRST_SCREEN * 3 : FIRST_SCREEN;
+      const packed = await doubanOrCMSList(bucket, providers, acceptRow, function () {
+        return collectProviderLists(providers, 1, want, extra, acceptRow);
+      });
+      if (packed.list.length) {
+        const ordered = packed.fromDouban
+          ? packed.list
+          : sortByHotRecent(packed.list);
+        // Keep pagecount open so loadMore can pull CMS pages 2+.
+        return {
+          page: 1,
+          pagecount: 99,
+          limit: ordered.length,
+          total: ordered.length,
+          list: ordered.slice(0, FIRST_SCREEN),
+        };
+      }
+    }
+
+    // Page 1 unfiltered: videolist (fast). Filtered (地区/年份/类型): typed
+    // 国产剧 leaves + deeper pull — CMS area=大陆 “最新” is mostly 短剧/更新中,
+    // so completed hits like 嫁金钗 never appear unless we query category pages.
+    if (requestedPage === 1 && !filtered) {
+      const want = bucket === 'tv' ? FIRST_SCREEN * 3 : FIRST_SCREEN;
+      list = await collectProviderLists(
+        providers,
+        1,
+        want,
+        extra,
+        acceptRow
+      );
+    } else if (bucket !== 'recommend') {
       await this.ensureCatalogs();
       let targets = this.leafTargets(bucket).filter(function (target) {
         return providerKeys.has(target.provider.key);
@@ -683,18 +1227,41 @@ export default class extends Spider {
           return animeLeafKind(target.typeName) === classKey;
         });
       }
+      if (filtered && areaKey === '大陆' && bucket === 'tv') {
+        const mainland = targets.filter(function (target) {
+          return /国产|大陆|内地/.test(target.typeName || '');
+        });
+        if (mainland.length) targets = mainland;
+      }
+      targets = this.preferredLeafTargets(bucket, targets);
       if (targets.length) {
-        const typed = await collectTypedLists(targets, requestedPage, bucket === 'anime' ? 24 : 60, extra, function (provider, row) {
-          if (self.classifyItem(provider, row) === 'kids' || self.classifyItem(provider, row) === 'doc') {
+        const typedAccept = function (provider, row) {
+          if (bucket === 'tv' && looksShortDrama(row)) return null;
+          if (self.classifyItem(provider, row) === 'kids'
+            || self.classifyItem(provider, row) === 'doc') {
             return null;
           }
           if (bucket === 'anime' && classKey && !matchesAnimeClass(row, classKey)) {
             return null;
           }
           return mediaItem(provider, Object.assign({}, row));
-        });
+        };
+        const want = filtered ? FIRST_SCREEN * 4 : FIRST_SCREEN;
+        const typed = await collectTypedLists(
+          targets,
+          requestedPage,
+          want,
+          extra,
+          typedAccept
+        );
         list = typed.list;
         reportedPages = typed.pagecount;
+        // Filtered page 1: also pull page 2 so 已完结热门 (嫁金钗…) aren't buried.
+        if (filtered && requestedPage === 1) {
+          const more = await collectTypedLists(targets, 2, FIRST_SCREEN * 2, extra, typedAccept);
+          list = list.concat(more.list);
+          reportedPages = Math.max(reportedPages, more.pagecount, 2);
+        }
       }
     }
     if (!list.length) {
@@ -703,21 +1270,18 @@ export default class extends Spider {
         requestedPage,
         FIRST_SCREEN,
         extra,
-        function (provider, row) {
-          const found = self.classifyItem(provider, row);
-          if (bucket === 'recommend') {
-            if (found !== 'tv' && found !== 'movie' && found !== 'variety' && found !== 'anime') return null;
-          } else if (found !== bucket) {
-            return null;
-          }
-          if (bucket === 'anime' && classKey && !matchesAnimeClass(row, classKey)) {
-            return null;
-          }
-          return mediaItem(provider, Object.assign({}, row));
-        }
+        acceptRow
       );
     }
-    const deduped = applyExtend(dedupeByTitle(list), extend);
+    let deduped = applyExtend(dedupeByTitle(list), extend, bucket);
+    // Unfiltered first page only: mix platforms. Filtered / custom sort keeps order.
+    if (
+      requestedPage === 1
+      && deduped.length > 8
+      && !extendRequestsStrictOrder(extend)
+    ) {
+      deduped = diversifyByProvider(deduped, bucket === 'movie' ? 3 : 4);
+    }
     const hasMore = reportedPages > requestedPage || deduped.length >= 12;
     return {
       page: requestedPage,
@@ -749,7 +1313,8 @@ export default class extends Spider {
       list.map(function (item) {
         return mediaItem(provider, Object.assign({}, item));
       }).filter(Boolean),
-      extend
+      extend,
+      null
     );
     return {
       page: pg || 1,

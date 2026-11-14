@@ -12,6 +12,9 @@ final class AppPersistence {
     static let danmakuOpacity = "danmakuOpacity"
     static let danmakuFontScale = "danmakuFontScale"
     static let danmakuSpeed = "danmakuSpeed"
+    static let danmakuAutoMatch = "danmakuAutoMatch"
+    static let danmakuCustomAPIBase = "danmakuCustomAPIBase"
+    static let danmakuDisplayArea = "danmakuDisplayArea"
     static let sourceConnections = "sourceConnections"
     static let currentConnectionURL = "currentConnectionURL"
     static let searchHistory = "searchHistory"
@@ -105,6 +108,21 @@ final class AppPersistence {
     return defaults.double(forKey: Key.danmakuSpeed)
   }
 
+  var danmakuAutoMatch: Bool? {
+    guard defaults.object(forKey: Key.danmakuAutoMatch) != nil else {
+      return nil
+    }
+    return defaults.bool(forKey: Key.danmakuAutoMatch)
+  }
+
+  var danmakuCustomAPIBase: String? {
+    defaults.string(forKey: Key.danmakuCustomAPIBase)
+  }
+
+  var danmakuDisplayArea: String? {
+    defaults.string(forKey: Key.danmakuDisplayArea)
+  }
+
   var currentConnectionURL: String? {
     defaults.string(forKey: Key.currentConnectionURL)
   }
@@ -182,6 +200,18 @@ final class AppPersistence {
 
   func saveDanmakuSpeed(_ value: Double) {
     defaults.set(value, forKey: Key.danmakuSpeed)
+  }
+
+  func saveDanmakuAutoMatch(_ value: Bool) {
+    defaults.set(value, forKey: Key.danmakuAutoMatch)
+  }
+
+  func saveDanmakuCustomAPIBase(_ value: String) {
+    defaults.set(value, forKey: Key.danmakuCustomAPIBase)
+  }
+
+  func saveDanmakuDisplayArea(_ value: String) {
+    defaults.set(value, forKey: Key.danmakuDisplayArea)
   }
 
   var videoOutputPreference: String? { defaults.string(forKey: Key.videoOutputPreference) }

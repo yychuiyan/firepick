@@ -41,7 +41,7 @@ struct MediaCardView: View {
     Color.clear
       .modifier(PosterSizeModifier(height: compactPosterHeight, ratio: posterRatio))
       .overlay {
-        CachedRemoteImage(url: item.pic.flatMap(URL.init(string:))) {
+        CachedRemoteImage(url: RemoteImageCache.normalizedURL(from: item.pic)) {
           Color.black.opacity(0.12)
             .shimmering()
         }

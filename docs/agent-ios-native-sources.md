@@ -89,13 +89,13 @@ with authorized endpoints before uploading a real `ios-sources.json`.
 The current curated configuration is:
 
 ```text
-https://dl.yychuiyan.com/firepick/ios-sources.json?v=13
+https://dl.yychuiyan.com/firepick/ios-sources.json?v=14
 ```
 
 Its JavaScript aggregator is:
 
 ```text
-https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=13
+https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=14
 ```
 
 Full acceptance probe:
@@ -103,16 +103,20 @@ Full acceptance probe:
 ```bash
 swift run --package-path Packages/FirepickKit firepick-source-probe \
   --invoke --live --search '庆余年' --site firepick_cms \
-  'https://dl.yychuiyan.com/firepick/ios-sources.json?v=13'
+  'https://dl.yychuiyan.com/firepick/ios-sources.json?v=14'
 ```
 
 Expected current shape: one on-device JS site (`拾萤`) backed by seven active
-AppleCMS providers, synthetic menu buckets, non-zero search results for probe
-keywords, a direct playback URL, and three parsed live playlists. The larger
-`sources/providers.whitelist.json` is a maintenance candidate list, not the
-maintenance pool. Official app builds prefer the bundled aggregator; changes to
-the active provider list require an app release. Re-probe candidates with
-`node scripts/probe-cms-providers.mjs` when the active source goes stale.
+AppleCMS providers (`lzcaiji` / `bfzy` / `subo` / `ffzy_cj` / `jisu` / `dytt` /
+`zuid`), synthetic menu buckets, Douban-hot default lists for TV/variety/anime,
+non-zero search results for probe keywords, a direct playback URL, and three
+parsed live playlists. The larger `sources/providers.whitelist.json` is a
+maintenance candidate list, not the active pool. Official app builds prefer the
+bundled aggregator; changes to the active provider list require an app release.
+Re-probe candidates with `node scripts/probe-cms-providers.mjs` when stale.
+The script ranks live hosts and rewrites `DEFAULT_PROVIDERS` in both
+`Packages/.../Resources/firepick-cms.js` and `sources/firepick-cms.js`, plus
+`AppModel.firepickCMSProviders`.
 
 ## Acceptance
 

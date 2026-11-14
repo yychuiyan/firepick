@@ -103,6 +103,11 @@ import Observation
       runtime.setDouble("speed", Double(max(0.25, min(rate, 4))))
     }
 
+    public func setPreferredPeakBitRate(_ bitsPerSecond: Double) {
+      // HLS peak bitrate is an AVPlayer concept; MPV keeps adaptive default.
+      _ = bitsPerSecond
+    }
+
     public func applyOptions(_ options: PlaybackEngineOptions) {
       self.options = options
       runtime.applyOptions(options)
@@ -687,6 +692,7 @@ import Observation
     public func stop() {}
     public func setPlaybackRate(_ rate: Float) {}
     public func applyOptions(_ options: PlaybackEngineOptions) {}
+    public func setPreferredPeakBitRate(_ bitsPerSecond: Double) {}
   }
 
 #endif

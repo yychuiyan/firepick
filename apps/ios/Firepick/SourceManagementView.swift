@@ -90,13 +90,19 @@ struct SourceManagementView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(latencyColor(ms).opacity(0.12), in: Capsule())
-    } else if model.probingCollectionStationIDs.contains(station.id) {
-      // Keep row height stable without a loud spinner — show placeholder.
+    } else if model.probingCollectionStationIDs.contains(station.id) || isProbing {
       Text("…")
         .font(.caption.monospacedDigit())
         .foregroundStyle(.tertiary)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
+    } else if model.didProbeCollectionStations {
+      Text("失败")
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(.red.opacity(0.85))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.red.opacity(0.10), in: Capsule())
     } else {
       Text("—")
         .font(.caption)

@@ -94,4 +94,50 @@ struct PlaybackTests {
     #expect(software.mpvHardwareDecode == "no")
     #expect(software.bufferSeconds == 2)
   }
+
+  @Test
+  func detectsMinorityHLSAdSegmentWithoutRewritingTimeline() throws {
+    let playlist = """
+    #EXTM3U
+    #EXT-X-TARGETDURATION:10
+    #EXTINF:10,
+    main/1.ts
+    #EXTINF:10,
+    main/2.ts
+    #EXTINF:10,
+    main/3.ts
+    #EXTINF:10,
+    main/4.ts
+    #EXTINF:10,
+    main/5.ts
+    #EXTINF:10,
+    main/6.ts
+    #EXT-X-DISCONTINUITY
+    #EXTINF:5,
+    ads/promo.ts
+    #EXT-X-ENDLIST
+    """
+    let detection = HlsAdSkipDetector.detect(
+      playlist: playlist,
+      baseURL: URL(string: "https://cdn.example/show/index.m3u8")
+    )
+    let skip = try #require(detection.skips.first)
+    #expect(detection.skips.count == 1)
+    #expect(abs(skip.start - 60) < 0.01)
+    #expect(abs((skip.end ?? 0) - 65) < 0.01)
+  }
+
+  @Test
+  func doesNotTreatLivePlaylistAsVODAds() {
+    let detection = HlsAdSkipDetector.detect(
+      playlist: """
+      #EXTM3U
+      #EXTINF:5,
+      ads/1.ts
+      """,
+      baseURL: URL(string: "https://cdn.example/live/index.m3u8")
+    )
+    #expect(detection.reason == "live")
+    #expect(detection.skips.isEmpty)
+  }
 }

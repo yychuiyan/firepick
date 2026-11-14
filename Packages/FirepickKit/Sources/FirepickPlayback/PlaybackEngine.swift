@@ -59,6 +59,8 @@ public protocol PlaybackEngine: AnyObject {
   func stop()
   func setPlaybackRate(_ rate: Float)
   func applyOptions(_ options: PlaybackEngineOptions)
+  /// Cap adaptive stream bitrate (0 = automatic / uncapped).
+  func setPreferredPeakBitRate(_ bitsPerSecond: Double)
 }
 
 @MainActor
@@ -67,14 +69,19 @@ public final class AVPlayerEngine: PlaybackEngine {
   public private(set) var state: PlaybackState = .idle
   public private(set) var currentTime: Double = 0
   public private(set) var duration: Double = 0
+  /// First decoded frame attached — false while black/blank after replaceCurrentItem.
+  public private(set) var isReadyForDisplay: Bool = false
   public let player = AVPlayer()
   private var playbackRate: Float = 1
 
   private var timeObserver: Any?
   private var statusObservation: NSKeyValueObservation?
   private var timeControlObservation: NSKeyValueObservation?
+  private var presentationSizeObservation: NSKeyValueObservation?
+  private var bufferEmptyObservation: NSKeyValueObservation?
   private var endObserver: NSObjectProtocol?
   private var bufferSeconds: Double = 5
+  private var preferredPeakBitRate: Double = 0
 
   public init() {
     timeObserver = player.addPeriodicTimeObserver(
@@ -86,6 +93,9 @@ public final class AVPlayerEngine: PlaybackEngine {
         self.currentTime = time.seconds.isFinite ? max(0, time.seconds) : 0
         self.duration = Self.readableDuration(self.player.currentItem) ?? self.duration
         self.syncStateFromPlayer()
+        if !self.isReadyForDisplay {
+          self.refreshReadyForDisplay()
+        }
       }
     }
     timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) {
@@ -97,7 +107,19 @@ public final class AVPlayerEngine: PlaybackEngine {
   }
 
   public func load(_ request: PlaybackRequest) async throws {
-    state = .loading
+    // Mid-playback URL switch: avoid flipping to .loading (UI spinner / black cover).
+    // Never pre-attach the same AVPlayerItem to a second AVPlayer — that aborts with
+    // "An AVPlayerItem cannot be associated with more than one instance of AVPlayer".
+    let seamless = player.currentItem != nil
+    if !seamless {
+      state = .loading
+    }
+    // New item starts black until video dimensions / buffer look real.
+    isReadyForDisplay = false
+    presentationSizeObservation?.invalidate()
+    presentationSizeObservation = nil
+    bufferEmptyObservation?.invalidate()
+    bufferEmptyObservation = nil
     #if os(iOS)
       let audio = AVAudioSession.sharedInstance()
       try audio.setCategory(.playback, mode: .moviePlayback)
@@ -112,13 +134,29 @@ public final class AVPlayerEngine: PlaybackEngine {
       ]
     let asset = AVURLAsset(url: request.url, options: options)
     do {
+      // Prefetch on the asset only (safe). Do not warm via a throwaway AVPlayer.
       let playable = try await asset.load(.isPlayable)
       guard playable else {
         throw FirepickError.playback("媒体不可播放")
       }
+      _ = try? await asset.load(.duration)
       let item = AVPlayerItem(asset: asset)
       item.preferredForwardBufferDuration = bufferSeconds
+      item.preferredPeakBitRate = preferredPeakBitRate
       player.replaceCurrentItem(with: item)
+      presentationSizeObservation = item.observe(\.presentationSize, options: [.new]) {
+        [weak self] _, _ in
+        Task { @MainActor in
+          self?.refreshReadyForDisplay()
+        }
+      }
+      bufferEmptyObservation = item.observe(\.isPlaybackBufferEmpty, options: [.new]) {
+        [weak self] _, _ in
+        Task { @MainActor in
+          self?.refreshReadyForDisplay()
+        }
+      }
+      refreshReadyForDisplay()
       statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
         Task { @MainActor in
           switch item.status {
@@ -130,6 +168,7 @@ public final class AVPlayerEngine: PlaybackEngine {
             if let known = Self.readableDuration(item) {
               self?.duration = known
             }
+            self?.refreshReadyForDisplay()
           case .failed:
             self?.state = .failed(item.error?.localizedDescription ?? "未知播放错误")
           default:
@@ -164,8 +203,13 @@ public final class AVPlayerEngine: PlaybackEngine {
           self?.duration = known.seconds
         }
       }
+      if seamless, state == .loading || state == .idle {
+        state = .ready
+      }
     } catch {
-      state = .failed(error.localizedDescription)
+      if !seamless {
+        state = .failed(error.localizedDescription)
+      }
       throw error
     }
   }
@@ -194,11 +238,32 @@ public final class AVPlayerEngine: PlaybackEngine {
       NotificationCenter.default.removeObserver(endObserver)
       self.endObserver = nil
     }
+    presentationSizeObservation?.invalidate()
+    presentationSizeObservation = nil
+    bufferEmptyObservation?.invalidate()
+    bufferEmptyObservation = nil
+    isReadyForDisplay = false
     player.pause()
     player.replaceCurrentItem(with: nil)
     currentTime = 0
     duration = 0
     state = .idle
+  }
+
+  /// Proxy for “first frame”: video size known and buffer not empty.
+  private func refreshReadyForDisplay() {
+    guard let item = player.currentItem, item.status == .readyToPlay else {
+      isReadyForDisplay = false
+      return
+    }
+    let size = item.presentationSize
+    let hasVideo = size.width > 1 && size.height > 1
+    if hasVideo {
+      isReadyForDisplay = !item.isPlaybackBufferEmpty || item.isPlaybackLikelyToKeepUp
+      return
+    }
+    // Audio-only / size not yet reported: accept once the buffer looks healthy.
+    isReadyForDisplay = item.isPlaybackLikelyToKeepUp && !item.isPlaybackBufferEmpty
   }
 
   public func setPlaybackRate(_ rate: Float) {
@@ -209,9 +274,15 @@ public final class AVPlayerEngine: PlaybackEngine {
     }
   }
 
+  public func setPreferredPeakBitRate(_ bitsPerSecond: Double) {
+    preferredPeakBitRate = max(0, bitsPerSecond)
+    player.currentItem?.preferredPeakBitRate = preferredPeakBitRate
+  }
+
   public func applyOptions(_ options: PlaybackEngineOptions) {
     bufferSeconds = options.bufferSeconds
     player.currentItem?.preferredForwardBufferDuration = bufferSeconds
+    player.currentItem?.preferredPeakBitRate = preferredPeakBitRate
   }
 
   /// Keep SwiftUI icons aligned with the real AVPlayer clock.
@@ -284,4 +355,5 @@ public final class UnavailableMPVEngine: PlaybackEngine {
   public func stop() { state = .idle }
   public func setPlaybackRate(_ rate: Float) {}
   public func applyOptions(_ options: PlaybackEngineOptions) {}
+  public func setPreferredPeakBitRate(_ bitsPerSecond: Double) {}
 }

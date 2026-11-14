@@ -118,7 +118,8 @@ struct LivePlaybackShell: View {
       }
     }
     .onChange(of: scenePhase) { _, phase in
-      if phase != .active, model.selectedTab == .live {
+      // Honor 后台播放 — previously live always paused when leaving the app.
+      if phase != .active, model.selectedTab == .live, !model.backgroundPlaybackEnabled {
         playbackEngine.pause()
       }
     }
@@ -876,6 +877,7 @@ private struct LiveSystemPlayerView: UIViewControllerRepresentable {
     controller.videoGravity = .resizeAspect
     controller.view.backgroundColor = .black
     controller.allowsPictureInPicturePlayback = true
+    controller.allowsVideoFrameAnalysis = false
     return controller
   }
 
@@ -883,5 +885,6 @@ private struct LiveSystemPlayerView: UIViewControllerRepresentable {
     if controller.player !== player {
       controller.player = player
     }
+    controller.allowsVideoFrameAnalysis = false
   }
 }

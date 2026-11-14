@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import FirepickCore
+@testable import FirepickPlayback
 
 struct DanmakuParserTests {
     @Test
@@ -49,5 +50,26 @@ struct DanmakuParserTests {
         """
         let comments = DanmakuParser.parse(Data(json.utf8))
         #expect(comments.map(\.text) == ["valid"])
+    }
+
+    @Test
+    func parsesDandanPlayParameterizedJSON() {
+        let json = """
+        {"comments":[{"p":"12.5,1,16777215","m":"hello"},{"p":"15,5,255","m":"top"}]}
+        """
+        let comments = DanmakuParser.parse(Data(json.utf8))
+        #expect(comments.count == 2)
+        #expect(comments[0].time == 12.5)
+        #expect(comments[0].color == "#FFFFFF")
+        #expect(comments[1].mode == .top)
+        #expect(comments[1].color == "#0000FF")
+    }
+
+    @Test
+    func cleansDanmakuSearchTitleAndEpisodeNumber() {
+        #expect(DanmakuSourceResolver.cleanTitle("庆余年 第二季（2024）") == "庆余年 第二季")
+        #expect(DanmakuSourceResolver.episodeNumber(from: "第12集") == 12)
+        #expect(DanmakuSourceResolver.episodeNumber(from: "EP 07") == 7)
+        #expect(DanmakuSourceResolver.episodeNumber(from: "2024-01-06期") == nil)
     }
 }

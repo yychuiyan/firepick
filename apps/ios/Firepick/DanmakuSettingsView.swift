@@ -1,3 +1,4 @@
+import FirepickCore
 import SwiftUI
 
 struct DanmakuSettingsView: View {
@@ -25,11 +26,47 @@ struct DanmakuSettingsView: View {
             set: { model.setDanmakuEnabledByDefault($0) }
           )
         )
+        Toggle(
+          "自动匹配弹幕",
+          isOn: Binding(
+            get: { model.danmakuAutoMatch },
+            set: { model.setDanmakuAutoMatch($0) }
+          )
+        )
       } footer: {
-        Text("新打开的播放页面会使用此开关；播放页内仍可临时关闭弹幕。")
+        Text("新打开的播放页使用默认开关。自动匹配会按片名在 B 站找同集弹幕；填了下方聚合 API 时优先用它（可覆盖爱优腾芒哔）。")
       }
 
       Section {
+        TextField(
+          "https://host/token",
+          text: Binding(
+            get: { model.danmakuCustomAPIBase },
+            set: { model.setDanmakuCustomAPIBase($0) }
+          )
+        )
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .keyboardType(.URL)
+      } header: {
+        Text("弹幕聚合 API（可选）")
+      } footer: {
+        Text("兼容弹弹play / danmu_api：/api/v2/search/episodes 与 /api/v2/comment/{id}。留空则只用内置 B 站匹配。")
+      }
+
+      Section {
+        Picker(
+          "显示区域",
+          selection: Binding(
+            get: { model.danmakuDisplayArea },
+            set: { model.setDanmakuDisplayArea($0) }
+          )
+        ) {
+          ForEach(DanmakuDisplayArea.allCases) { area in
+            Text(area.title).tag(area)
+          }
+        }
+        .pickerStyle(.navigationLink)
         settingSlider(
           title: "透明度",
           value: Binding(
@@ -61,6 +98,10 @@ struct DanmakuSettingsView: View {
           displayValue:
             "\(model.danmakuSpeed.formatted(.number.precision(.fractionLength(1))))×"
         )
+      } header: {
+        Text("显示")
+      } footer: {
+        Text("显示区域参考 B 站：从满屏到最少「一行」。")
       }
 
       Section {

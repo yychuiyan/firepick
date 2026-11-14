@@ -54,13 +54,43 @@ final class OrientationBridge {
     }
   }
 
+  /// Current window scene is portrait (or square).
+  static var isPortraitInterface: Bool {
+    let scene = UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .first
+    switch scene?.interfaceOrientation {
+    case .landscapeLeft, .landscapeRight:
+      return false
+    default:
+      return true
+    }
+  }
+
   /// Force portrait when leaving fullscreen, then restore free rotation.
   static func enterPortraitThenUnlock() {
+    Task { @MainActor in
+      await collapseToPortrait()
+    }
+  }
+
+  /// Lock portrait, nudge until the scene is upright, then unlock.
+  /// Callers that swap half-screen chrome should await this first.
+  @discardableResult
+  static func collapseToPortrait(timeoutMs: UInt64 = 1800) async -> Bool {
     shared.setMask(.portrait)
     apply(force: .portrait)
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-      unlock()
+    let steps = max(1, Int(timeoutMs / 50))
+    for _ in 0..<steps {
+      if isPortraitInterface { break }
+      try? await Task.sleep(for: .milliseconds(50))
+      apply(force: .portrait)
     }
+    let upright = isPortraitInterface
+    // Hold portrait briefly so SwiftUI can lay out half-screen before free rotate.
+    try? await Task.sleep(for: .milliseconds(upright ? 200 : 80))
+    unlock()
+    return upright
   }
 
   static func unlock() {

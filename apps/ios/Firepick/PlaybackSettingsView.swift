@@ -60,8 +60,23 @@ struct PlaybackSettingsView: View {
       }
 
       Section {
-        Picker(
+        Toggle(
           "智能去广",
+          isOn: Binding(
+            get: { model.cloudAdSkipEnabled },
+            set: { model.setCloudAdSkipEnabled($0) }
+          )
+        )
+        Text("开启后，若片源或云端返回片中广告时间轴，播到广告段会自动跳过。无广告轴时不会有额外提示。")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+      } header: {
+        Text("智能去广")
+      }
+
+      Section {
+        Picker(
+          "片头片尾",
           selection: Binding(
             get: { model.adSkipPreference },
             set: { model.setAdSkipPreference($0) }
@@ -71,7 +86,7 @@ struct PlaybackSettingsView: View {
             Text(value.title).tag(value)
           }
         }
-        Text("基于本机标记的片头片尾跳过。")
+        Text("在播放页菜单标记片头/片尾后，按此偏好自动跳过。与片中广告无关。")
           .font(.footnote)
           .foregroundStyle(.secondary)
         if model.adSkipPreference != .off {
@@ -80,10 +95,10 @@ struct PlaybackSettingsView: View {
           }
         }
       } header: {
-        Text("智能去广")
+        Text("片头片尾")
       }
 
-      Section("播放行为") {
+      Section {
         Toggle(
           "后台播放",
           isOn: Binding(
@@ -91,6 +106,9 @@ struct PlaybackSettingsView: View {
             set: { model.setBackgroundPlaybackEnabled($0) }
           )
         )
+        Text("开启后切到后台或锁屏时继续出声；关闭则进入后台时自动暂停。")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
         Toggle(
           "无痕模式",
           isOn: Binding(
@@ -98,7 +116,7 @@ struct PlaybackSettingsView: View {
             set: { model.setIncognitoModeEnabled($0) }
           )
         )
-        Text("无痕开启后不写入最近观看。")
+        Text("开启后不写入最近观看；收藏不受影响。")
           .font(.footnote)
           .foregroundStyle(.secondary)
         Toggle(
@@ -122,6 +140,8 @@ struct PlaybackSettingsView: View {
             Text(value.title).tag(value)
           }
         }
+      } header: {
+        Text("播放行为")
       }
 
       Section("字幕特效") {

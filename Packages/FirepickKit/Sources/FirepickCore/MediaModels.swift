@@ -337,6 +337,12 @@ public struct SkipSegment: Codable, Equatable, Sendable {
     public var type: String?
     public var start: Double
     public var end: Double?
+
+    public init(type: String? = nil, start: Double, end: Double? = nil) {
+        self.type = type
+        self.start = start
+        self.end = end
+    }
 }
 
 public struct DRM: Codable, Equatable, Sendable {

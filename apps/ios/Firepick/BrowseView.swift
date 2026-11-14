@@ -39,12 +39,16 @@ struct BrowseView: View {
     model.homeResult?.list ?? []
   }
 
-  /// Full-screen loader only before the first grid appears — filter/category
-  /// changes keep the previous posters and refresh silently.
+  /// Full-screen loader only before the first grid appears — category/filter
+  /// switches keep posters and refresh silently (no「正在加载中」flash).
   private var isInitialHomeLoading: Bool {
-    hasActiveWarehouse
-      && model.isLoadingHome
-      && (model.homeResult == nil || model.homeResult?.list.isEmpty == true)
+    // Cold start: restore has not finished — never flash “还没有内容”.
+    if model.isRestoringSession {
+      return model.homeResult == nil
+    }
+    // Require homeResult == nil so an in-flight category fetch that still holds
+    // the previous list (or briefly empties) never replaces the grid with a spinner.
+    return hasActiveWarehouse && model.isLoadingHome && model.homeResult == nil
   }
 
   var body: some View {
@@ -53,24 +57,25 @@ struct BrowseView: View {
         VStack(spacing: 0) {
           pageHeader
             .padding(.bottom, 4)
-          if hasActiveWarehouse, !isInitialHomeLoading {
+          // Keep tabs visible while a category fetch runs (list cleared → loading).
+          if hasActiveWarehouse, !visibleCategories.isEmpty {
             stickyCategoryChrome
           }
         }
         .background(Color(.systemBackground))
 
         Group {
-          if !hasActiveWarehouse {
+          if isInitialHomeLoading {
+            // Keep ProgressView OUT of ScrollView+refreshable — otherwise iOS shows
+            // both the system refresh spinner and our labeled ProgressView.
+            ProgressView("正在加载中")
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+          } else if !hasActiveWarehouse {
             ScrollView {
               emptyContent
                 .padding(.vertical)
                 .padding(.bottom, 72)
             }
-          } else if isInitialHomeLoading {
-            // Keep ProgressView OUT of ScrollView+refreshable — otherwise iOS shows
-            // both the system refresh spinner and our labeled ProgressView.
-            ProgressView("正在加载中")
-              .frame(maxWidth: .infinity, maxHeight: .infinity)
           } else if let items = model.homeResult?.list, !items.isEmpty {
             ScrollView {
               LazyVStack(alignment: .leading, spacing: 28) {
@@ -123,6 +128,18 @@ struct BrowseView: View {
         await model.ensureHomeContentLoaded()
       }
       .toolbar(isRootVisible ? .hidden : .automatic, for: .navigationBar)
+      // Detail hides the tab bar; without an explicit restore the glass chrome can stay clear.
+      .toolbar(isRootVisible ? .visible : .automatic, for: .tabBar)
+      .toolbarBackground(.visible, for: .tabBar)
+      .onChange(of: isRootVisible) { _, visible in
+        guard visible else { return }
+        TabBarChrome.restore()
+      }
+      .onAppear {
+        if isRootVisible {
+          TabBarChrome.restore()
+        }
+      }
       .sheet(isPresented: $showingSourcePicker) {
         SourcePickerView()
       }
@@ -212,6 +229,7 @@ struct BrowseView: View {
             ForEach(visibleCategories) { category in
               let selected = model.selectedCategory?.typeId == category.typeId
               Button {
+                guard model.selectedCategory?.typeId != category.typeId else { return }
                 Task { await model.loadCategory(category) }
               } label: {
                 Text(category.typeName)
@@ -322,8 +340,9 @@ struct BrowseView: View {
         systemImage: "iphone.slash",
         description: Text("该配置没有可用的 HTTP/JS 源。请换用自建 iOS 配置仓后重试。")
       )
-    } else if model.selectedSite == nil {
-      ProgressView("正在加载本机源…")
+    } else if model.selectedSite == nil || model.isRestoringSession {
+      // Same label as the full-screen loader — avoid a second distinct "本机源" flash.
+      ProgressView("正在加载中")
         .frame(maxWidth: .infinity)
         .padding(.vertical, 48)
     } else if let error = model.errorMessage, !error.isEmpty {
@@ -392,7 +411,7 @@ struct BrowseView: View {
       }
       .disabled(model.selectedSite == nil)
       .opacity(model.selectedSite == nil ? 0.4 : 1)
-      headerIcon("star", label: "收藏") {
+      headerIcon("heart", label: "收藏") {
         showingFavorites = true
       }
       headerIcon("clock.arrow.circlepath", label: "最近观看") {

@@ -8,7 +8,8 @@ public enum PlaybackEngineKind: String, Codable, Sendable {
 
 public struct PlaybackRequest: Equatable, Identifiable, Sendable {
     public var id: String {
-        "\(url.absoluteString)|\(formatHint ?? "")|\(startPosition)|\(subtitles.count)"
+        // Exclude startPosition — live progress bumps must not re-trigger PlayerView.task reload.
+        "\(url.absoluteString)|\(formatHint ?? "")|\(subtitles.count)|\(skips.count)"
     }
     public var url: URL
     public var headers: [String: String]
@@ -17,6 +18,8 @@ public struct PlaybackRequest: Equatable, Identifiable, Sendable {
     public var preferredEngine: PlaybackEngineKind?
     public var subtitles: [PlaybackSubtitle]
     public var danmaku: [PlaybackDanmaku]
+    /// Mid-roll ad (and optional intro/outro) ranges from playerContent / cloud.
+    public var skips: [SkipSegment]
 
     public init(
         url: URL,
@@ -25,7 +28,8 @@ public struct PlaybackRequest: Equatable, Identifiable, Sendable {
         startPosition: Double = 0,
         preferredEngine: PlaybackEngineKind? = nil,
         subtitles: [PlaybackSubtitle] = [],
-        danmaku: [PlaybackDanmaku] = []
+        danmaku: [PlaybackDanmaku] = [],
+        skips: [SkipSegment] = []
     ) {
         self.url = url
         self.headers = headers
@@ -34,6 +38,7 @@ public struct PlaybackRequest: Equatable, Identifiable, Sendable {
         self.preferredEngine = preferredEngine
         self.subtitles = subtitles
         self.danmaku = danmaku
+        self.skips = skips
     }
 }
 

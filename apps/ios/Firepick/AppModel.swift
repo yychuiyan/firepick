@@ -129,6 +129,7 @@ final class AppModel {
     }
   }
 
+  /// 片头片尾本机标记行为（与「智能去广」片中广告无关）。
   enum AdSkipPreference: String, CaseIterable, Identifiable {
     case off
     case marked
@@ -138,8 +139,8 @@ final class AppModel {
     var title: String {
       switch self {
       case .off: "关闭"
-      case .marked: "跳过片头片尾"
-      case .aggressive: "激进（自动跳）"
+      case .marked: "自动跳过"
+      case .aggressive: "激进（播完直接下一集）"
       }
     }
   }
@@ -226,13 +227,15 @@ final class AppModel {
   var liveShowsTabBarInFullscreen = false
   var configuration: VodConfiguration = .empty
   var selectedSite: SiteConfiguration?
-  static let officialSourceVersion = "13"
-  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=13"
+  static let officialSourceVersion = "14"
+  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=14"
   var selectedCategory: FirepickCore.Category?
   var homeResult: MediaResult?
   var detailResult: MediaResult?
   var categoryFilters: [SourceFilter] = []
   var filterSelections: [String: String] = [:]
+  /// Per-category filter memory so switching 电视剧↔电影 keeps prior picks.
+  private var filterSelectionsByCategory: [String: [String: String]] = [:]
   var currentPage = 1
   var isLoadingMore = false
   var searchSections: [SearchSection] = []
@@ -252,6 +255,10 @@ final class AppModel {
     case loadDetail(MediaItem)
   }
   var isLoadingHome = false
+  /// True from cold start until bootstrap restore finishes.
+  /// Default true so the first frame shows loading, not “还没有内容”.
+  /// Browse must not kick off a parallel home load — that flashes a second spinner.
+  var isRestoringSession = true
   private var categoryCache: [String: MediaResult] = [:]
   private var prefetchTask: Task<Void, Never>?
   private var didRetryEmptyHome = false
@@ -275,11 +282,15 @@ final class AppModel {
   var suppressNetworkBanner = false
   var suppressConstrainedBanner = false
   private var homeLoadGeneration = 0
+  /// Category switch / loadMore only — must not cancel `prefetchCategories`.
+  private var categoryLoadGeneration = 0
   private var searchLoadGeneration = 0
   var connectionLatencyMS: [String: Int] = [:]
   /// CMS / site probe results for 采集站管理 (keyed by CollectionStation.id).
   var collectionStationLatencyMS: [String: Int] = [:]
   var probingCollectionStationIDs: Set<String> = []
+  /// True after at least one 采集站测速 pass finished (so "失败" ≠ "尚未测").
+  var didProbeCollectionStations = false
   /// True only for user-tapped 切换/添加线路 — hides Settings spinner on silent restore.
   var userInitiatedConnectionSwitch = false
   /// Reserved. Cloud skip is not wired; local intro/outro marks still apply.
@@ -329,9 +340,16 @@ final class AppModel {
   var danmakuOpacity = 0.9
   var danmakuFontScale = 1.0
   var danmakuSpeed = 1.0
+  /// Auto-match B站 / 自定义弹幕 API when spider returns no danmaku URL.
+  var danmakuAutoMatch = true
+  /// Optional 弹弹兼容 API root (e.g. https://host/token) covering 爱优腾芒哔.
+  var danmakuCustomAPIBase = ""
+  var danmakuDisplayArea: DanmakuDisplayArea = .full
   var cacheStatus: String?
   var cacheSizeText = "计算中"
   private var configDigest = ""
+  /// Local SHA of the VOD JSON (ignores Bridge upload id) — used to skip redundant home reloads.
+  private var localConfigDigest = ""
   private var configurationBaseURL: URL?
   private var pendingInitialSiteKey: String?
   private var loadedEPGSources: Set<String> = []
@@ -353,6 +371,11 @@ final class AppModel {
   }()
 
   func bootstrap() async {
+    isRestoringSession = true
+    defer {
+      // restorePersistentState clears this itself; keep a safety net for test/error paths.
+      if isRestoringSession { isRestoringSession = false }
+    }
     startNetworkMonitoring()
     do {
       library = try LibraryStore()
@@ -384,6 +407,7 @@ final class AppModel {
           await configureBridge(credentials: credentials)
         }
         await selectPendingInitialSite()
+        isRestoringSession = false
       }
 
       if let testSiteKey = environment["FIREPICK_TEST_SITE_KEY"],
@@ -442,6 +466,17 @@ final class AppModel {
     }
     if let value = persistence?.danmakuSpeed {
       danmakuSpeed = min(2, max(0.5, value))
+    }
+    if let value = persistence?.danmakuAutoMatch {
+      danmakuAutoMatch = value
+    }
+    if let value = persistence?.danmakuCustomAPIBase {
+      danmakuCustomAPIBase = value
+    }
+    if let raw = persistence?.danmakuDisplayArea,
+      let area = DanmakuDisplayArea(rawValue: raw)
+    {
+      danmakuDisplayArea = area
     }
     if let raw = persistence?.videoOutputPreference,
       let value = VideoOutputPreference(rawValue: raw)
@@ -506,14 +541,15 @@ final class AppModel {
   }
 
   /// CMS providers aggregated inside firepick_cms (keep in sync with firepick-cms.js).
+  /// Keep in sync with firepick-cms.js DEFAULT_PROVIDERS (probe: scripts/probe-cms-providers.mjs).
   static let firepickCMSProviders: [(key: String, name: String, api: String)] = [
-    ("sdzy", "索尼", "https://sdzyapi.com/api.php/provide/vod"),
-    ("guangsu", "光速", "https://api.guangsuapi.com/api.php/provide/vod"),
-    ("lzi", "量子", "https://cj.lziapi.com/api.php/provide/vod"),
+    ("maoyan", "猫眼", "https://api.maoyanapi.top/api.php/provide/vod"),
     ("bfzy", "暴风", "https://bfzyapi.com/api.php/provide/vod"),
-    ("ffzy_cj", "非凡", "https://cj.ffzyapi.com/api.php/provide/vod"),
-    ("ruyi", "如意", "https://cj.rycjapi.com/api.php/provide/vod"),
-    ("iqiyi", "爱奇艺", "https://iqiyizyapi.com/api.php/provide/vod"),
+    ("subo", "速播", "https://subocaiji.com/api.php/provide/vod"),
+    ("zuid", "最大", "https://api.zuidapi.com/api.php/provide/vod"),
+    ("lzi", "量子", "https://cj.lziapi.com/api.php/provide/vod"),
+    ("jinying", "金鹰", "https://jyzyapi.com/provide/vod/from/jinyingyun/at/json"),
+    ("huya", "虎牙", "https://www.huyaapi.com/api.php/provide/vod"),
   ]
 
   /// Settings row summary for 采集站管理.
@@ -899,6 +935,26 @@ final class AppModel {
     persistence?.saveSkipMarks(skipMarks)
   }
 
+  /// Clear only intro or only outro; drop the key when both are empty.
+  func clearSkipMarkPart(
+    sourceKey: String?,
+    vodId: String,
+    flag: String?,
+    intro: Bool = false,
+    outro: Bool = false
+  ) {
+    let key = skipMarkKey(sourceKey: sourceKey, vodId: vodId, flag: flag)
+    guard var mark = skipMarks[key] else { return }
+    if intro { mark.introEnd = nil }
+    if outro { mark.outroStart = nil }
+    if mark.introEnd == nil, mark.outroStart == nil {
+      skipMarks.removeValue(forKey: key)
+    } else {
+      skipMarks[key] = mark
+    }
+    persistence?.saveSkipMarks(skipMarks)
+  }
+
   func clearAllFavorites() async {
     for entry in favorites {
       await removeFavorite(entry)
@@ -938,8 +994,15 @@ final class AppModel {
 
   func probeConnectionLatency(_ connection: SourceConnection) async {
     guard let url = URL(string: connection.url) else { return }
-    probingConnectionURLs.insert(connection.url)
-    defer { probingConnectionURLs.remove(connection.url) }
+    // @Observable does not publish in-place Dictionary/Set mutations — reassign.
+    var probing = probingConnectionURLs
+    probing.insert(connection.url)
+    probingConnectionURLs = probing
+    defer {
+      var probing = probingConnectionURLs
+      probing.remove(connection.url)
+      probingConnectionURLs = probing
+    }
     let started = Date()
     var request = URLRequest(
       url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 8)
@@ -947,14 +1010,15 @@ final class AppModel {
     do {
       let (_, response) = try await URLSession.shared.data(for: request)
       let ms = Int(Date().timeIntervalSince(started) * 1000)
-      if let http = response as? HTTPURLResponse, (200..<400).contains(http.statusCode) {
-        connectionLatencyMS[connection.url] = ms
-      } else {
-        connectionLatencyMS[connection.url] = ms
-      }
+      _ = response
+      var next = connectionLatencyMS
+      next[connection.url] = ms
+      connectionLatencyMS = next
       persistence?.saveConnectionLatencies(connectionLatencyMS)
     } catch {
-      connectionLatencyMS.removeValue(forKey: connection.url)
+      var next = connectionLatencyMS
+      next.removeValue(forKey: connection.url)
+      connectionLatencyMS = next
     }
   }
 
@@ -978,6 +1042,10 @@ final class AppModel {
 
   func probeCollectionStationLatencies() async {
     let stations = collectionStations
+    guard !stations.isEmpty else {
+      didProbeCollectionStations = true
+      return
+    }
     await withTaskGroup(of: Void.self) { group in
       var index = 0
       let limit = min(4, stations.count)
@@ -992,12 +1060,21 @@ final class AppModel {
         enqueue()
       }
     }
+    didProbeCollectionStations = true
   }
 
   func probeCollectionStationLatency(_ station: CollectionStation) async {
     guard let raw = station.probeURL, let base = URL(string: raw) else { return }
-    probingCollectionStationIDs.insert(station.id)
-    defer { probingCollectionStationIDs.remove(station.id) }
+    // @Observable does not publish in-place Dictionary/Set mutations — reassign
+    // or the 采集站管理 badges stay stuck on "—".
+    var probing = probingCollectionStationIDs
+    probing.insert(station.id)
+    probingCollectionStationIDs = probing
+    defer {
+      var probing = probingCollectionStationIDs
+      probing.remove(station.id)
+      probingCollectionStationIDs = probing
+    }
     var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
     var items = components?.queryItems ?? []
     if !items.contains(where: { $0.name == "ac" }) {
@@ -1005,6 +1082,18 @@ final class AppModel {
     }
     components?.queryItems = items
     guard let url = components?.url ?? Optional(base) else { return }
+    let ms = await Self.measureProbeLatency(url: url)
+    var next = collectionStationLatencyMS
+    if let ms {
+      next[station.id] = ms
+    } else {
+      next.removeValue(forKey: station.id)
+    }
+    collectionStationLatencyMS = next
+  }
+
+  /// Network wait off the main actor so concurrent probes actually overlap.
+  nonisolated private static func measureProbeLatency(url: URL) async -> Int? {
     let started = Date()
     var request = URLRequest(
       url: url,
@@ -1015,13 +1104,13 @@ final class AppModel {
     do {
       let (_, response) = try await URLSession.shared.data(for: request)
       let ms = Int(Date().timeIntervalSince(started) * 1000)
-      if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
-        collectionStationLatencyMS[station.id] = ms
-      } else {
-        collectionStationLatencyMS.removeValue(forKey: station.id)
+      if let http = response as? HTTPURLResponse {
+        if (200..<300).contains(http.statusCode) { return ms }
+        return nil
       }
+      return ms
     } catch {
-      collectionStationLatencyMS.removeValue(forKey: station.id)
+      return nil
     }
   }
 
@@ -1135,6 +1224,24 @@ final class AppModel {
     setDanmakuOpacity(0.9)
     setDanmakuFontScale(1)
     setDanmakuSpeed(1)
+    setDanmakuAutoMatch(true)
+    setDanmakuCustomAPIBase("")
+    setDanmakuDisplayArea(.full)
+  }
+
+  func setDanmakuAutoMatch(_ value: Bool) {
+    danmakuAutoMatch = value
+    persistence?.saveDanmakuAutoMatch(value)
+  }
+
+  func setDanmakuCustomAPIBase(_ value: String) {
+    danmakuCustomAPIBase = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    persistence?.saveDanmakuCustomAPIBase(danmakuCustomAPIBase)
+  }
+
+  func setDanmakuDisplayArea(_ value: DanmakuDisplayArea) {
+    danmakuDisplayArea = value
+    persistence?.saveDanmakuDisplayArea(value.rawValue)
   }
 
   func recordSearchHistory(_ keyword: String) {
@@ -1154,9 +1261,10 @@ final class AppModel {
     persistence?.saveSearchHistory(searchHistory)
   }
 
-  /// Drop shared URL responses left by playback. Poster memory cache stays.
+  /// Drop shared URL responses left by playback. Poster memory/disk cache stays.
   func releasePlaybackCache() {
-    URLCache.shared.removeAllCachedResponses()
+    // Intentionally do not touch RemoteImageCache or URLCache.shared — clearing
+    // shared cache made posters reload slowly on 收藏/历史/搜索 revisit.
   }
 
   func clearCache() {
@@ -1421,13 +1529,15 @@ final class AppModel {
     )
   }
 
-  func selectSite(_ site: SiteConfiguration) async {
+  func selectSite(_ site: SiteConfiguration, preserveBrowse: Bool = false) async {
     if !isOnDeviceCapable(site), bridgeHealth == nil {
       errorMessage =
         "「\(site.name)」需要 Android 运行时（Java/Python 等）。当前以本机 HTTP/JS 为主，请改选本机可用源，或使用自建 iOS 配置仓。"
       return
     }
     let siteChanged = selectedSite?.key != site.key
+    // Pull-to-refresh: keep posters on screen (avoid full-screen「正在加载中」).
+    let softRefresh = preserveBrowse && !siteChanged && homeResult?.list.isEmpty == false
     selectedSite = site
     if siteChanged {
       didRetryEmptyHome = false
@@ -1441,20 +1551,25 @@ final class AppModel {
       searchFailureCount = 0
     }
     sourceTestStatus = nil
-    selectedCategory = nil
+    if !softRefresh {
+      selectedCategory = nil
+      categoryFilters = []
+      filterSelections = [:]
+      filterSelectionsByCategory = [:]
+      homeResult = nil
+      detailResult = nil
+    }
     prefetchTask?.cancel()
     categoryCache = [:]
-    categoryFilters = []
-    filterSelections = [:]
     currentPage = 1
     persistence?.saveSelectedSiteKey(site.key)
-    homeResult = nil
-    detailResult = nil
     errorMessage = nil
     loadMoreFailed = false
     homeLoadGeneration += 1
+    categoryLoadGeneration += 1
     let generation = homeLoadGeneration
     // Only isLoadingHome — global isLoading would flash SearchView mid-navigation.
+    // Soft refresh keeps homeResult so BrowseView stays on the grid (system refresh spinner only).
     isLoadingHome = true
     defer {
       if generation == homeLoadGeneration {
@@ -1479,16 +1594,27 @@ final class AppModel {
           action: .reloadHome
         )
       }
-      if let first = homeResult?.classes.first {
+      if softRefresh, let current = selectedCategory,
+        result.classes.contains(where: { $0.typeId == current.typeId })
+      {
+        if current.typeId.contains("recommend") {
+          prefetchCategories(site: site, classes: result.classes)
+        } else {
+          await loadCategory(current, site: site)
+        }
+      } else if let first = homeResult?.classes.first {
         selectedCategory = first
         // 推荐首页不展示筛选；切到分类时再由 loadCategory 注入 filters。
-        categoryFilters = []
-        filterSelections = [:]
-        // Home already returns the 推荐 list; skip a redundant category fetch.
-        if !first.typeId.hasPrefix("bucket|recommend") {
-          await loadCategory(first, site: site)
-        } else {
+        if !softRefresh {
+          categoryFilters = []
+          filterSelections = [:]
+        }
+        // Home already returns the 推荐 list; skip a redundant category fetch
+        // (a second loadCategory here flashed another「正在加载中」).
+        if first.typeId.contains("recommend") {
           prefetchCategories(site: site, classes: result.classes)
+        } else {
+          await loadCategory(first, site: site)
         }
       }
     } catch {
@@ -1596,7 +1722,11 @@ final class AppModel {
 
   func loadCategory(_ category: FirepickCore.Category, site: SiteConfiguration? = nil) async {
     guard let site = site ?? selectedSite else { return }
-    let categoryChanged = selectedCategory?.typeId != category.typeId
+    let previousTypeId = selectedCategory?.typeId
+    let categoryChanged = previousTypeId != category.typeId
+    if categoryChanged, let previousTypeId {
+      filterSelectionsByCategory[previousTypeId] = filterSelections
+    }
     selectedCategory = category
     let keptSource = filterSelections["source"]
     if categoryChanged {
@@ -1605,19 +1735,31 @@ final class AppModel {
       } else {
         categoryFilters = Self.browseVisibleFilters(decodedFilters(category.filters))
       }
-      filterSelections = categoryFilters.reduce(into: [:]) { values, filter in
-        values[filter.key] = filter.initValue ?? filter.value.first?.value ?? ""
+      if let remembered = filterSelectionsByCategory[category.typeId], !remembered.isEmpty {
+        filterSelections = categoryFilters.reduce(into: remembered) { values, filter in
+          if values[filter.key] == nil {
+            values[filter.key] = filter.initValue ?? filter.value.first?.value ?? ""
+          }
+        }
+      } else {
+        filterSelections = categoryFilters.reduce(into: [:]) { values, filter in
+          values[filter.key] = filter.initValue ?? filter.value.first?.value ?? ""
+        }
       }
       // Keep source selection for CMS queries even though the chip row is hidden.
       if let keptSource, !keptSource.isEmpty {
         filterSelections["source"] = keptSource
       }
+      filterSelectionsByCategory[category.typeId] = filterSelections
     }
-    let filtersActive = hasActiveCategoryFilters
-    let cacheKey = categoryCacheKey(site: site, typeId: category.typeId)
-    if categoryChanged, !filtersActive, let cached = categoryCache[cacheKey],
-      !cached.list.isEmpty
-    {
+    let cacheKey = categoryCacheKey(
+      site: site,
+      typeId: category.typeId,
+      selections: filterSelections,
+      filters: categoryFilters
+    )
+    // Instant swap from memory — avoid re-hitting the CMS on 电视剧↔电影.
+    if categoryChanged, let cached = categoryCache[cacheKey], !cached.list.isEmpty {
       var shown = cached
       shown.classes = homeResult?.classes ?? cached.classes
       shown.filters = homeResult?.filters ?? cached.filters
@@ -1627,26 +1769,41 @@ final class AppModel {
       isLoadingHome = false
       return
     }
-    homeLoadGeneration += 1
-    let generation = homeLoadGeneration
+    // Do NOT bump homeLoadGeneration here — that cancels prefetchCategories.
+    categoryLoadGeneration += 1
+    let generation = categoryLoadGeneration
     loadMoreFailed = false
-    // Keep the previous grid on screen while fetching. The flag itself remains
-    // set so `loadMore` cannot race this category request.
+    // Keep the previous grid on screen (silent refresh). Clearing the list made every
+    // tab switch flash「正在加载中」; selectedCategory already updates the chip.
     isLoadingHome = true
     defer {
-      if generation == homeLoadGeneration {
+      if generation == categoryLoadGeneration {
         isLoadingHome = false
       }
     }
     do {
       let provider = try await provider(for: site)
-      var result = try await provider.categoryContent(
-        typeId: category.typeId,
-        page: 1,
-        filter: true,
-        extend: filterSelections
-      )
-      guard generation == homeLoadGeneration else { return }
+      let extend = filterSelections
+      var result = try await withThrowingTaskGroup(of: MediaResult.self) { group in
+        group.addTask {
+          try await provider.categoryContent(
+            typeId: category.typeId,
+            page: 1,
+            filter: true,
+            extend: extend
+          )
+        }
+        group.addTask {
+          try await Task.sleep(for: .seconds(20))
+          throw FirepickError.network("分类加载超时，请重试")
+        }
+        let first = try await group.next()!
+        group.cancelAll()
+        return first
+      }
+      guard generation == categoryLoadGeneration else { return }
+      // User already switched away — don't clobber the newer tab.
+      guard selectedCategory?.typeId == category.typeId else { return }
       if result.classes.isEmpty {
         result.classes = homeResult?.classes ?? []
       }
@@ -1654,26 +1811,31 @@ final class AppModel {
         result.filters = homeResult?.filters
       }
       attachSourceKey(site.key, to: &result)
-      if !filtersActive {
-        categoryCache[cacheKey] = result
-      }
+      categoryCache[cacheKey] = result
       homeResult = result
       currentPage = 1
       errorMessage = nil
     } catch {
-      guard generation == homeLoadGeneration else { return }
+      guard generation == categoryLoadGeneration else { return }
+      guard selectedCategory?.typeId == category.typeId else { return }
       presentRecoverableError(error.localizedDescription, action: .reloadHome)
     }
   }
 
   func selectFilter(_ filter: SourceFilter, value: FilterValue) async {
     filterSelections[filter.key] = value.value
+    if let typeId = selectedCategory?.typeId {
+      filterSelectionsByCategory[typeId] = filterSelections
+    }
     guard let selectedCategory else { return }
     await loadCategory(selectedCategory)
   }
 
   func applyFilters(_ selections: [String: String]) async {
     filterSelections = selections
+    if let typeId = selectedCategory?.typeId {
+      filterSelectionsByCategory[typeId] = filterSelections
+    }
     guard let selectedCategory else { return }
     await loadCategory(selectedCategory)
   }
@@ -1694,8 +1856,25 @@ final class AppModel {
     }
   }
 
-  private func categoryCacheKey(site: SiteConfiguration, typeId: String) -> String {
-    "\(site.key)|\(typeId)"
+  /// Default/empty filters share one key with prefetch (`extend: [:]`).
+  private func categoryCacheKey(
+    site: SiteConfiguration,
+    typeId: String,
+    selections: [String: String] = [:],
+    filters: [SourceFilter] = []
+  ) -> String {
+    let active = selections.filter { key, value in
+      if key == "source" { return false }
+      guard let filter = filters.first(where: { $0.key == key }) else {
+        return !value.isEmpty
+      }
+      let initial = filter.initValue ?? filter.value.first?.value ?? ""
+      return value != initial
+    }
+    let part = active.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(
+      separator: ","
+    )
+    return "\(site.key)|\(typeId)|\(part)"
   }
 
   func loadMore() async {
@@ -1708,7 +1887,8 @@ final class AppModel {
     else {
       return
     }
-    let generation = homeLoadGeneration
+    let generation = categoryLoadGeneration
+    let typeId = category.typeId
     isLoadingMore = true
     loadMoreFailed = false
     defer { isLoadingMore = false }
@@ -1720,7 +1900,9 @@ final class AppModel {
         filter: true,
         extend: filterSelections
       )
-      guard generation == homeLoadGeneration else { return }
+      guard generation == categoryLoadGeneration, selectedCategory?.typeId == typeId else {
+        return
+      }
       if result.classes.isEmpty {
         result.classes = homeResult?.classes ?? []
       }
@@ -1737,7 +1919,9 @@ final class AppModel {
       homeResult = result
       currentPage = nextPage
     } catch {
-      guard generation == homeLoadGeneration else { return }
+      guard generation == categoryLoadGeneration, selectedCategory?.typeId == typeId else {
+        return
+      }
       loadMoreFailed = true
       errorMessage = error.localizedDescription
     }
@@ -2013,12 +2197,15 @@ final class AppModel {
       }
       throw FirepickError.playback("来源没有返回可播放地址")
     }
-    let previous = history.first {
-      $0.sourceKey == sourceKey
-        && $0.item.vodId == item.vodId
-        && $0.episodeId == episode.value
-    }
-    let startPosition = startPositionOverride ?? previous?.position ?? 0
+    // Prefer historyEntry (id, then name) so 跨线路 value 漂移仍能续播.
+    let previous = historyEntry(for: item, episode: episode)
+    // 已看完（靠近片尾）再进该集 → 从 0 重看，不要卡在 51:xx。
+    let startPosition =
+      startPositionOverride
+      ?? Self.resumeStartPosition(
+        position: previous?.position ?? 0,
+        duration: previous?.duration ?? 0
+      )
     let baseURL = URL(string: site.api)
     let subtitles = (result.subs ?? []).compactMap { subtitle -> PlaybackSubtitle? in
       guard subtitle.flag != 0,
@@ -2030,11 +2217,39 @@ final class AppModel {
         language: subtitle.lang
       )
     }
-    let danmaku = (result.danmaku ?? []).compactMap { item -> PlaybackDanmaku? in
+    var danmaku = (result.danmaku ?? []).compactMap { item -> PlaybackDanmaku? in
       guard let url = URL(string: item.url, relativeTo: baseURL)?.absoluteURL else {
         return nil
       }
       return PlaybackDanmaku(url: url, name: item.name)
+    }
+    if danmaku.isEmpty, danmakuAutoMatch {
+      let custom = URL(string: danmakuCustomAPIBase)
+      danmaku = await DanmakuSourceResolver.resolve(
+        .init(
+          title: item.name,
+          episodeLabel: episode.name,
+          year: item.year,
+          customAPIBase: custom
+        )
+      )
+    }
+    var skips = (result.skips ?? []).filter { segment in
+      segment.end.map { $0 > segment.start } ?? (segment.start > 0)
+    }
+    if cloudAdSkipEnabled, HlsAdSkipDetector.looksLikeHLS(url) {
+      let detection = await HlsAdSkipDetector.detectResolvingMaster(
+        url: url,
+        headers: result.header ?? [:],
+        options: .init(adPatterns: configuration.ads ?? [])
+      )
+      for segment in detection.skips
+      where !skips.contains(where: {
+        abs($0.start - segment.start) < 0.35
+          && abs(($0.end ?? $0.start) - (segment.end ?? segment.start)) < 0.35
+      }) {
+        skips.append(segment)
+      }
     }
     return PlaybackRequest(
       url: url,
@@ -2042,7 +2257,8 @@ final class AppModel {
       formatHint: rawURL,
       startPosition: startPosition,
       subtitles: subtitles,
-      danmaku: danmaku
+      danmaku: danmaku,
+      skips: skips
     )
   }
 
@@ -2275,11 +2491,50 @@ final class AppModel {
     await persistCurrentConfiguration()
   }
 
+  /// Near the end — used for「已看完从 0 重看」and auto-next pause.
+  /// Short clips (<30s): last 3s or ≥90% counts as finished.
+  static func isNearEnd(position: Double, duration: Double) -> Bool {
+    let pos = max(0, position)
+    let dur = max(0, duration)
+    guard dur > 5, pos > 1 else { return false }
+    if dur <= 30 {
+      return pos >= dur - 3 || pos >= dur * 0.9
+    }
+    return pos >= dur - 15 || pos >= dur * 0.92
+  }
+
+  /// Manual open of a finished episode → start at 0. Auto-next passes raw override instead.
+  static func resumeStartPosition(position: Double, duration: Double) -> Double {
+    if isNearEnd(position: position, duration: duration) { return 0 }
+    return max(0, position)
+  }
+
+  /// Match by episodeId first; fall back to episode name when 线路 value drifts.
+  func historyEntry(for item: MediaItem, episode: Episode) -> HistoryEntry? {
+    let key = item.sourceKey ?? selectedSite?.key
+    let matchesTitle: (HistoryEntry) -> Bool = {
+      $0.sourceKey == key && $0.item.vodId == item.vodId
+    }
+    if let byId = history.first(where: {
+      matchesTitle($0) && $0.episodeId == episode.value
+    }) {
+      return byId
+    }
+    let name = episode.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty else { return nil }
+    return history.first(where: {
+      matchesTitle($0)
+        && $0.episodeName.trimmingCharacters(in: .whitespacesAndNewlines) == name
+    })
+  }
+
   func saveHistory(
     sourceKey: String, item: MediaItem, episode: Episode, position: Double, duration: Double
   ) async {
     guard !incognitoModeEnabled else { return }
     guard let library else { return }
+    // Keep raw progress (including near-end) so auto-next can land there and pause.
+    let storedPosition = max(0, position)
     do {
       try await library.saveHistory(
         HistoryEntry(
@@ -2287,7 +2542,7 @@ final class AppModel {
           item: item,
           episodeId: episode.value,
           episodeName: episode.name,
-          position: position,
+          position: storedPosition,
           duration: duration
         )
       )
@@ -2427,16 +2682,35 @@ final class AppModel {
       }
       var decoded = decodedConfiguration
       decoded.inheritGlobalSpider(router: router)
+      let newLocalDigest = (try? ConfigurationDigest.sha256(decoded)) ?? ""
+      // Background warehouse refresh often re-downloads the same JSON. Keep the
+      // already-painted home instead of clearing → second「正在加载中」flash.
+      let keepBrowse =
+        !localConfigDigest.isEmpty
+        && newLocalDigest == localConfigDigest
+        && selectedSite != nil
+        && homeResult?.list.isEmpty == false
+        && decoded.sites.contains(where: { $0.key == selectedSite?.key })
+
       configuration = decoded
       configurationBaseURL = baseURL
       availableDepots = []
       try persistence?.saveConfiguration(data, baseURL: baseURL)
-      configDigest = (try? ConfigurationDigest.sha256(decoded)) ?? ""
+      localConfigDigest = newLocalDigest
+      configDigest = newLocalDigest
       if let bridgeClient {
         configDigest = try await bridgeClient.uploadConfiguration(decoded)
       }
       await coordinator?.invalidate()
       coordinator = makeCoordinator(client: bridgeClient)
+      errorMessage = nil
+
+      if keepBrowse {
+        async let liveTask = loadLiveGroups(decoded.lives ?? [], baseURL: baseURL)
+        liveGroups = await liveTask
+        break
+      }
+
       selectedSite = nil
       homeResult = nil
       searchSections = []
@@ -2449,7 +2723,6 @@ final class AppModel {
       loadingEPGSources = []
       epgPrograms = [:]
       epgStatus = nil
-      errorMessage = nil
       let persistedKey = persistence?.selectedSiteKey
       pendingInitialSiteKey = persistedKey
       async let liveTask = loadLiveGroups(decoded.lives ?? [], baseURL: baseURL)
@@ -2472,6 +2745,9 @@ final class AppModel {
       loadEmptyConfiguration()
       return
     }
+
+    isRestoringSession = true
+    defer { isRestoringSession = false }
 
     if let currentURL = persistence.currentConnectionURL {
       currentConnection = sourceConnections.first { $0.url == currentURL && $0.enabled }
@@ -2510,31 +2786,40 @@ final class AppModel {
       )
     }
 
-    // Official warehouse behind ?v= → auto-update first (avoids racing a
-    // stale refresh that would overwrite the versioned URL afterward).
-    if officialSourceNeedsUpdate {
+    // Pin official ?v= before first home paint; routine warehouse refresh is
+    // deferred so cold start is not blocked on a second config download.
+    let needsOfficialPin = officialSourceNeedsUpdate
+    if needsOfficialPin {
       await maybeAutoUpdateOfficialSource()
-    } else if let connection = currentConnection {
-      // The saved copy can be an older warehouse. Refresh from the address so
-      // the title and script match the file that is actually being served.
-      let keptError = errorMessage
-      let refreshed = await applyConfiguration(
-        urlString: connection.url,
-        selectInitialSite: false,
-        displayURL: connection.displayAddress
-      )
-      if !refreshed {
-        // Local warehouse (127.0.0.1) often dies between sessions — fall back
-        // to a reachable remote/official line instead of leaving an empty home.
-        if await restoreFallbackWarehouse(excluding: connection.url) {
+    }
+
+    // First paint as soon as disk (or pinned) config is ready.
+    await selectPendingInitialSite()
+    if homeResult?.list.isEmpty == false {
+      errorMessage = nil
+    }
+
+    if !needsOfficialPin, let connection = currentConnection {
+      let connectionURL = connection.url
+      let display = connection.displayAddress
+      Task { @MainActor in
+        errorMessage = nil
+        let refreshed = await applyConfiguration(
+          urlString: connectionURL,
+          selectInitialSite: false,
+          displayURL: display
+        )
+        if refreshed {
+          // Same warehouse JSON keeps browse via keepBrowse — do not reload.
+          if selectedSite == nil || homeResult?.list.isEmpty != false {
+            await reloadHome()
+          }
+        } else if await restoreFallbackWarehouse(excluding: connectionURL) {
           errorMessage = nil
-        } else {
-          errorMessage = keptError
+          await reloadHome()
         }
       }
     }
-
-    await selectPendingInitialSite()
   }
 
   /// Prefer official COS, then any non-loopback saved line.
@@ -2568,7 +2853,8 @@ final class AppModel {
   /// configuration address is applied — including when the user is still on Settings.
   func ensureHomeContentLoaded() async {
     guard currentConnection != nil else { return }
-    if isLoadingHome { return }
+    // restorePersistentState owns the first home load; racing it shows a second spinner.
+    if isRestoringSession || isLoadingHome { return }
     if selectedSite == nil {
       await selectPendingInitialSite()
       return
@@ -2590,13 +2876,8 @@ final class AppModel {
       await maybeAutoUpdateOfficialSource()
     }
     if let site = selectedSite {
-      let category = selectedCategory
-      await selectSite(site)
-      if let category, !category.typeId.contains("recommend"),
-        homeResult?.list.isEmpty == false
-      {
-        await loadCategory(category)
-      }
+      // Soft refresh keeps the grid; selectSite reloads the active category when preserved.
+      await selectSite(site, preserveBrowse: homeResult?.list.isEmpty == false)
     } else {
       await selectPendingInitialSite()
     }
@@ -2957,7 +3238,8 @@ final class AppModel {
       encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
       let data = try encoder.encode(configuration)
       try persistence?.saveConfiguration(data, baseURL: configurationBaseURL)
-      configDigest = try ConfigurationDigest.sha256(configuration)
+      localConfigDigest = try ConfigurationDigest.sha256(configuration)
+      configDigest = localConfigDigest
     } catch {
       errorMessage = error.localizedDescription
       return false
@@ -2990,6 +3272,8 @@ final class AppModel {
 
   private func loadEmptyConfiguration() {
     configuration = .empty
+    localConfigDigest = ""
+    configDigest = ""
     clearSelectedVodState()
     coordinator = makeCoordinator(client: bridgeClient)
   }
