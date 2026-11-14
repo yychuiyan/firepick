@@ -1,4 +1,5 @@
 import FirepickBridge
+import FirepickCore
 import Foundation
 import Security
 
@@ -17,6 +18,7 @@ final class AppPersistence {
     static let danmakuDisplayArea = "danmakuDisplayArea"
     static let sourceConnections = "sourceConnections"
     static let currentConnectionURL = "currentConnectionURL"
+    static let liveGroupsCacheDigest = "liveGroupsCacheDigest"
     static let searchHistory = "searchHistory"
     static let simulatorBridgeCredentials = "simulatorBridgeCredentials"
     static let videoOutputPreference = "videoOutputPreference"
@@ -44,6 +46,7 @@ final class AppPersistence {
   private let fileManager = FileManager.default
   private let directory: URL
   private let configurationURL: URL
+  private let liveGroupsCacheURL: URL
 
   init() throws {
     let support = try FileManager.default.url(
@@ -58,6 +61,7 @@ final class AppPersistence {
       withIntermediateDirectories: true
     )
     configurationURL = directory.appending(path: "configuration.json")
+    liveGroupsCacheURL = directory.appending(path: "live-groups-cache.json")
   }
 
   var configurationData: Data? {
@@ -168,6 +172,24 @@ final class AppPersistence {
     try? fileManager.removeItem(at: configurationURL)
     defaults.removeObject(forKey: Key.configurationBaseURL)
     defaults.removeObject(forKey: Key.selectedSiteKey)
+  }
+
+  func loadLiveGroupsCache(for configurationDigest: String) -> [LiveGroup]? {
+    guard !configurationDigest.isEmpty,
+      defaults.string(forKey: Key.liveGroupsCacheDigest) == configurationDigest,
+      let data = try? Data(contentsOf: liveGroupsCacheURL),
+      let groups = try? JSONDecoder().decode([LiveGroup].self, from: data)
+    else {
+      return nil
+    }
+    return groups
+  }
+
+  func saveLiveGroupsCache(_ groups: [LiveGroup], configurationDigest: String) throws {
+    guard !configurationDigest.isEmpty else { return }
+    let data = try JSONEncoder().encode(groups)
+    try data.write(to: liveGroupsCacheURL, options: .atomic)
+    defaults.set(configurationDigest, forKey: Key.liveGroupsCacheDigest)
   }
 
   func saveSelectedSiteKey(_ key: String?) {

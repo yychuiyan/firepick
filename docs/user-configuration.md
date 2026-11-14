@@ -74,7 +74,7 @@ https://raw.githubusercontent.com/gaotianliuyun/gao/master/js.json
 拾萤自建的聚合配置地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/ios-sources.json?v=14
+https://dl.yychuiyan.com/firepick/ios-sources.json?v=15
 ```
 
 该地址提供一个聚合点播站「拾萤」（当前聚合七路 AppleCMS 采集接口：量子 / 暴风 /

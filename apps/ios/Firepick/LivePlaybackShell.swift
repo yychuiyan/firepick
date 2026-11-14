@@ -448,7 +448,10 @@ struct LivePlaybackShell: View {
                 select(channel: item, groupHint: nil)
               } label: {
                 HStack(spacing: 12) {
-                  CachedRemoteImage(url: item.logo.flatMap(URL.init(string:))) {
+                  CachedRemoteImage(
+                    url: item.logo.flatMap(URL.init(string:)),
+                    maxPixelSize: 96
+                  ) {
                     Image(systemName: "tv")
                       .foregroundStyle(.secondary)
                   }
@@ -610,7 +613,7 @@ struct LivePlaybackShell: View {
 
   private func bootstrap() async {
     if model.liveGroups.isEmpty {
-      await model.refreshLiveSources()
+      await model.ensureLiveSourcesLoaded()
     }
     guard let initial = model.resolveInitialLiveChannel() else { return }
     groupName = initial.group.name

@@ -410,8 +410,8 @@ async function findCMSMatchForTitle(entry, providers, accept) {
   const title = entry.title;
   let best = null;
   let bestScore = 0;
-  // First few fast hosts are enough — full 7× search is too slow for chart resolve.
-  const hosts = providers.slice(0, 3);
+  // Two hosts are enough for chart matching; more fan-out starves the first paint.
+  const hosts = providers.slice(0, 2);
   await Promise.all(
     hosts.map(async function (provider) {
       const data = await requestJSON(
@@ -464,7 +464,7 @@ async function cachedDoubanEntries(bucket, count) {
   return entries;
 }
 
-async function resolveDoubanHotList(bucket, providers, accept) {
+async function resolveDoubanHotList(bucket, providers, accept, options) {
   const now = Date.now();
   if (
     doubanResolveCache.at
@@ -474,7 +474,10 @@ async function resolveDoubanHotList(bucket, providers, accept) {
   ) {
     return doubanResolveCache.byBucket[bucket].slice();
   }
-  const entries = await cachedDoubanEntries(bucket, 16);
+  // Cold-start home uses CMS immediately. Douban matching resumes when the
+  // user opens a category or when a later request reaches this helper.
+  if (options && options.allowNetwork === false) return null;
+  const entries = await cachedDoubanEntries(bucket, 12);
   if (!entries.length) return null;
   const out = [];
   const used = {};
@@ -503,27 +506,38 @@ async function resolveDoubanHotList(bucket, providers, accept) {
 }
 
 /// CMS first screen, then Douban order on top when chart resolves in time.
-async function doubanOrCMSList(bucket, providers, accept, cmsFetcher) {
+async function doubanOrCMSList(bucket, providers, accept, cmsFetcher, allowNetwork) {
   const cmsPromise = cmsFetcher();
-  const doubanPromise = resolveDoubanHotList(bucket, providers, accept).catch(function () {
-    return null;
-  });
-  // Don't block first paint forever on Douban — prefer CMS if chart is slow.
-  const raced = await Promise.race([
-    doubanPromise.then(function (list) {
-      return { kind: 'douban', list: list };
-    }),
-    new Promise(function (resolve) {
-      setTimeout(function () {
-        resolve({ kind: 'timeout', list: null });
-      }, 2800);
-    }),
-  ]);
-  let douban = raced.kind === 'douban' ? raced.list : null;
-  const cmsList = await cmsPromise;
-  if (!douban) {
-    douban = await doubanPromise;
+  let douban = null;
+  if (allowNetwork !== false) {
+    const doubanPromise = resolveDoubanHotList(bucket, providers, accept).catch(function () {
+      return null;
+    });
+    // Don't block first paint forever on Douban — prefer CMS if chart is slow.
+    const raced = await Promise.race([
+      doubanPromise.then(function (list) {
+        return { kind: 'douban', list: list };
+      }),
+      new Promise(function (resolve) {
+        setTimeout(function () {
+          resolve({ kind: 'timeout', list: null });
+        }, 1800);
+      }),
+    ]);
+    douban = raced.kind === 'douban' ? raced.list : null;
+  } else {
+    // Reuse an in-memory chart if one is already ready, but never fan out
+    // Douban or CMS title matches during cold home.
+    douban = await resolveDoubanHotList(
+      bucket,
+      providers,
+      accept,
+      { allowNetwork: false }
+    ).catch(function () {
+      return null;
+    });
   }
+  const cmsList = await cmsPromise;
   if (douban && douban.length >= 6) {
     const used = {};
     const merged = [];
@@ -1063,9 +1077,15 @@ export default class extends Spider {
       }
       return mediaItem(provider, Object.assign({}, row));
     }
-    const packed = await doubanOrCMSList('recommend', providers, acceptHome, function () {
-      return collectProviderLists(providers, 1, FIRST_SCREEN * 2, null, acceptHome);
-    });
+    const packed = await doubanOrCMSList(
+      'recommend',
+      providers,
+      acceptHome,
+      function () {
+        return collectProviderLists(providers, 1, FIRST_SCREEN, null, acceptHome);
+      },
+      false
+    );
     const list = packed.fromDouban
       ? packed.list.slice(0, FIRST_SCREEN)
       : sortByHotRecent(packed.list).slice(0, FIRST_SCREEN);
@@ -1186,7 +1206,7 @@ export default class extends Spider {
     const filtered = extendRequestsStrictOrder(extend);
 
     if (wantDouban && requestedPage === 1 && !filtered) {
-      const want = bucket === 'tv' ? FIRST_SCREEN * 3 : FIRST_SCREEN;
+      const want = bucket === 'tv' ? FIRST_SCREEN * 2 : FIRST_SCREEN;
       const packed = await doubanOrCMSList(bucket, providers, acceptRow, function () {
         return collectProviderLists(providers, 1, want, extra, acceptRow);
       });

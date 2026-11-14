@@ -217,7 +217,10 @@ struct SearchView: View {
               model.playLiveFromSearch(channel)
             } label: {
               HStack(spacing: 12) {
-                CachedRemoteImage(url: channel.logo.flatMap(URL.init(string:))) {
+                CachedRemoteImage(
+                  url: channel.logo.flatMap(URL.init(string:)),
+                  maxPixelSize: 96
+                ) {
                   Image(systemName: "tv")
                     .foregroundStyle(.secondary)
                 }

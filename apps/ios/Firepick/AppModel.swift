@@ -227,8 +227,8 @@ final class AppModel {
   var liveShowsTabBarInFullscreen = false
   var configuration: VodConfiguration = .empty
   var selectedSite: SiteConfiguration?
-  static let officialSourceVersion = "14"
-  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=14"
+  static let officialSourceVersion = "15"
+  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=15"
   var selectedCategory: FirepickCore.Category?
   var homeResult: MediaResult?
   var detailResult: MediaResult?
@@ -261,7 +261,10 @@ final class AppModel {
   var isRestoringSession = true
   private var categoryCache: [String: MediaResult] = [:]
   private var prefetchTask: Task<Void, Never>?
-  private var didRetryEmptyHome = false
+  private var cacheSizeTask: Task<Void, Never>?
+  private var liveRefreshTask: Task<[LiveGroup], Never>?
+  private var liveLoadGeneration = 0
+  private var activeLiveCacheDigest = ""
   private var didAutoUpdateOfficialSource = false
   var isLoadingDetail = false
   var isLoadingSearch = false
@@ -537,7 +540,6 @@ final class AppModel {
     if let currentURL = persistence?.currentConnectionURL {
       currentConnection = sourceConnections.first { $0.url == currentURL && $0.enabled }
     }
-    refreshCacheSize()
   }
 
   /// CMS providers aggregated inside firepick_cms (keep in sync with firepick-cms.js).
@@ -773,6 +775,11 @@ final class AppModel {
     configurationBaseURL = nil
     availableDepots = []
     configurationCandidates = []
+    liveLoadGeneration += 1
+    liveRefreshTask?.cancel()
+    liveRefreshTask = nil
+    isLoadingLive = false
+    activeLiveCacheDigest = ""
     liveGroups = []
     loadEmptyConfiguration()
   }
@@ -1270,52 +1277,79 @@ final class AppModel {
   func clearCache() {
     URLCache.shared.removeAllCachedResponses()
     RemoteImageCache.clear()
-    if let cacheDirectory = FileManager.default.urls(
-      for: .cachesDirectory,
-      in: .userDomainMask
-    ).first,
-      let contents = try? FileManager.default.contentsOfDirectory(
-        at: cacheDirectory,
-        includingPropertiesForKeys: nil
-      )
-    {
-      for item in contents {
-        try? FileManager.default.removeItem(at: item)
-      }
+    cacheSizeTask?.cancel()
+    cacheStatus = "正在清理网络与临时缓存…"
+    cacheSizeText = "计算中"
+    Task {
+      await Task.detached(priority: .utility) {
+        guard
+          let cacheDirectory = FileManager.default.urls(
+            for: .cachesDirectory,
+            in: .userDomainMask
+          ).first,
+          let contents = try? FileManager.default.contentsOfDirectory(
+            at: cacheDirectory,
+            includingPropertiesForKeys: nil
+          )
+        else {
+          return
+        }
+        for item in contents {
+          try? FileManager.default.removeItem(at: item)
+        }
+      }.value
+      cacheStatus = "已清理网络与临时缓存"
+      cacheSizeText = "0 KB"
+      refreshCacheSize()
     }
-    cacheStatus = "已清理网络与临时缓存"
-    cacheSizeText = "0 KB"
   }
 
   func refreshCacheSize() {
+    cacheSizeTask?.cancel()
+    cacheSizeTask = Task {
+      let total = await Task.detached(priority: .utility) {
+        Self.cacheDirectorySize()
+      }.value
+      guard !Task.isCancelled else { return }
+      guard let total else {
+        cacheSizeText = "未知"
+        return
+      }
+      cacheSizeText = ByteCountFormatter.string(
+        fromByteCount: total,
+        countStyle: .file
+      )
+    }
+  }
+
+  nonisolated private static func cacheDirectorySize() -> Int64? {
     guard
       let cacheDirectory = FileManager.default.urls(
         for: .cachesDirectory,
         in: .userDomainMask
       ).first
     else {
-      cacheSizeText = "未知"
-      return
+      return nil
     }
-    let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
-    var total: Int64 = 0
-    if let enumerator = FileManager.default.enumerator(
-      at: cacheDirectory,
-      includingPropertiesForKeys: keys,
-      options: [.skipsHiddenFiles]
-    ) {
-      for case let url as URL in enumerator {
-        if let values = try? url.resourceValues(forKeys: Set(keys)),
-          values.isRegularFile == true
-        {
-          total += Int64(values.fileSize ?? 0)
-        }
+    let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey]
+    guard
+      let enumerator = FileManager.default.enumerator(
+        at: cacheDirectory,
+        includingPropertiesForKeys: Array(keys),
+        options: [.skipsHiddenFiles]
+      )
+    else {
+      return 0
+    }
+    var bytes: Int64 = 0
+    for case let url as URL in enumerator {
+      if let values = try? url.resourceValues(forKeys: keys),
+        values.isRegularFile == true
+      {
+        bytes += Int64(values.fileSize ?? 0)
       }
     }
-    cacheSizeText = ByteCountFormatter.string(
-      fromByteCount: total,
-      countStyle: .file
-    )
+    return bytes
   }
 
   @discardableResult
@@ -1538,10 +1572,8 @@ final class AppModel {
     let siteChanged = selectedSite?.key != site.key
     // Pull-to-refresh: keep posters on screen (avoid full-screen「正在加载中」).
     let softRefresh = preserveBrowse && !siteChanged && homeResult?.list.isEmpty == false
+    let previousHome = softRefresh ? homeResult : nil
     selectedSite = site
-    if siteChanged {
-      didRetryEmptyHome = false
-    }
     if siteChanged {
       // Keep search results when re-selecting the same site (avoids flash on back).
       searchSections = []
@@ -1578,17 +1610,38 @@ final class AppModel {
     }
     do {
       let provider = try await provider(for: site)
-      var result = try await provider.homeContent()
+      var result: MediaResult?
+      var lastError: Error?
+      for attempt in 0..<2 {
+        if attempt > 0 {
+          try? await Task.sleep(for: .milliseconds(350))
+        }
+        guard generation == homeLoadGeneration else { return }
+        do {
+          let loaded = try await provider.homeContent()
+          result = loaded
+          if !loaded.list.isEmpty { break }
+        } catch {
+          lastError = error
+        }
+      }
+      guard generation == homeLoadGeneration else { return }
+      guard var result else {
+        throw lastError ?? FirepickError.network("首页加载失败")
+      }
       guard generation == homeLoadGeneration else { return }
       attachSourceKey(site.key, to: &result)
+      if result.list.isEmpty, let previousHome, !previousHome.list.isEmpty {
+        // Pull-to-refresh failure must not replace readable posters with an error page.
+        homeResult = previousHome
+        errorMessage = nil
+        return
+      }
       homeResult = result
       errorMessage = nil
       categoryCache = [:]
-      if !result.list.isEmpty {
-        didRetryEmptyHome = false
-      }
       if result.list.isEmpty, !result.classes.isEmpty {
-        // Classes come from the spider menu even when every provider timed out.
+        // Only after all transparent retries failed.
         presentRecoverableError(
           "采集站响应较慢或暂时不可用，请下拉刷新重试。",
           action: .reloadHome
@@ -1619,6 +1672,11 @@ final class AppModel {
       }
     } catch {
       guard generation == homeLoadGeneration else { return }
+      if let previousHome, !previousHome.list.isEmpty {
+        homeResult = previousHome
+        errorMessage = nil
+        return
+      }
       let text = error.localizedDescription
       if text.contains("Bridge") || text.contains("不可达") {
         presentRecoverableError(
@@ -1698,6 +1756,11 @@ final class AppModel {
     prefetchTask?.cancel()
     let generation = homeLoadGeneration
     prefetchTask = Task {
+      // Let first-screen covers use the connection before warming category tabs.
+      try? await Task.sleep(for: .seconds(2.5))
+      if Task.isCancelled || generation != homeLoadGeneration || selectedTab != .vod {
+        return
+      }
       for category in classes where !category.typeId.contains("recommend") {
         if Task.isCancelled || generation != homeLoadGeneration { return }
         let cacheKey = categoryCacheKey(site: site, typeId: category.typeId)
@@ -2368,22 +2431,44 @@ final class AppModel {
     }
   }
 
+  /// Restore cached channels when entering TV, without loading M3U feeds on app launch.
+  func ensureLiveSourcesLoaded() async {
+    guard liveGroups.isEmpty else { return }
+    if !activeLiveCacheDigest.isEmpty,
+      let cached = persistence?.loadLiveGroupsCache(for: activeLiveCacheDigest),
+      !cached.isEmpty
+    {
+      liveGroups = cached
+      liveRefreshStatus = "已读取 \(cached.count) 组 · \(liveChannelCount) 频道缓存"
+      return
+    }
+    await refreshLiveSources()
+  }
+
   func refreshLiveSources() async {
-    isLoadingLive = true
-    defer { isLoadingLive = false }
     guard let lives = configuration.lives, !lives.isEmpty else { return }
-    isLoading = true
-    defer { isLoading = false }
+    let generation = liveLoadGeneration
+    let baseURL = configurationBaseURL
+    let task =
+      liveRefreshTask
+      ?? Task {
+        await self.loadLiveGroups(lives, baseURL: baseURL)
+      }
+    liveRefreshTask = task
+    isLoadingLive = true
     liveRefreshStatus = "正在刷新直播源…"
-    let groups = await loadLiveGroups(
-      lives,
-      baseURL: configurationBaseURL
-    )
+    let groups = await task.value
+    guard generation == liveLoadGeneration else { return }
+    liveRefreshTask = nil
+    isLoadingLive = false
     if groups.isEmpty {
       liveRefreshStatus = "直播源刷新失败"
-    } else {
-      liveGroups = groups
-      liveRefreshStatus = "已刷新 \(groups.count) 组 · \(liveChannelCount) 频道"
+      return
+    }
+    liveGroups = groups
+    liveRefreshStatus = "已刷新 \(groups.count) 组 · \(liveChannelCount) 频道"
+    if !activeLiveCacheDigest.isEmpty {
+      try? persistence?.saveLiveGroupsCache(groups, configurationDigest: activeLiveCacheDigest)
     }
   }
 
@@ -2689,7 +2774,6 @@ final class AppModel {
         !localConfigDigest.isEmpty
         && newLocalDigest == localConfigDigest
         && selectedSite != nil
-        && homeResult?.list.isEmpty == false
         && decoded.sites.contains(where: { $0.key == selectedSite?.key })
 
       configuration = decoded
@@ -2698,6 +2782,7 @@ final class AppModel {
       try persistence?.saveConfiguration(data, baseURL: baseURL)
       localConfigDigest = newLocalDigest
       configDigest = newLocalDigest
+      activeLiveCacheDigest = newLocalDigest
       if let bridgeClient {
         configDigest = try await bridgeClient.uploadConfiguration(decoded)
       }
@@ -2706,11 +2791,15 @@ final class AppModel {
       errorMessage = nil
 
       if keepBrowse {
-        async let liveTask = loadLiveGroups(decoded.lives ?? [], baseURL: baseURL)
-        liveGroups = await liveTask
         break
       }
 
+      liveLoadGeneration += 1
+      liveRefreshTask?.cancel()
+      liveRefreshTask = nil
+      isLoadingLive = false
+      liveGroups = []
+      liveRefreshStatus = nil
       selectedSite = nil
       homeResult = nil
       searchSections = []
@@ -2725,12 +2814,15 @@ final class AppModel {
       epgStatus = nil
       let persistedKey = persistence?.selectedSiteKey
       pendingInitialSiteKey = persistedKey
-      async let liveTask = loadLiveGroups(decoded.lives ?? [], baseURL: baseURL)
       if selectInitialSite {
         await selectPendingInitialSite()
       }
-      liveGroups = await liveTask
     case .live(let name, let groups):
+      liveLoadGeneration += 1
+      liveRefreshTask?.cancel()
+      liveRefreshTask = nil
+      isLoadingLive = false
+      activeLiveCacheDigest = ""
       liveGroups = groups
       availableDepots = []
       configurationBaseURL = baseURL
@@ -2803,6 +2895,9 @@ final class AppModel {
       let connectionURL = connection.url
       let display = connection.displayAddress
       Task { @MainActor in
+        // Keep cold start focused on the first home paint and poster requests.
+        try? await Task.sleep(for: .seconds(2.5))
+        guard currentConnection?.url == connectionURL else { return }
         errorMessage = nil
         let refreshed = await applyConfiguration(
           urlString: connectionURL,
@@ -2860,12 +2955,8 @@ final class AppModel {
       return
     }
     if let list = homeResult?.list, !list.isEmpty { return }
-    // Categories-without-list usually means the last fetch timed out on a slow link.
-    if let home = homeResult, !home.classes.isEmpty, home.list.isEmpty {
-      guard !didRetryEmptyHome else { return }
-      didRetryEmptyHome = true
-      await reloadHome()
-    } else if homeResult == nil {
+    // selectSite already performed bounded transparent retries for an empty home.
+    if homeResult == nil {
       await reloadHome()
     }
   }

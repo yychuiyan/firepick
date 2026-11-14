@@ -20,7 +20,7 @@ struct LiveView: View {
     .animation(.easeInOut(duration: 0.28), value: model.liveShowsTabBarInFullscreen)
     .task {
       if model.liveGroups.isEmpty {
-        await model.refreshLiveSources()
+        await model.ensureLiveSourcesLoaded()
       }
     }
   }
