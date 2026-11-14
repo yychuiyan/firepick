@@ -138,13 +138,13 @@ private struct PosterSizeModifier: ViewModifier {
   }
 }
 
-private extension View {
+extension View {
   func shimmering() -> some View {
     modifier(ShimmerModifier())
   }
 }
 
-private struct ShimmerModifier: ViewModifier {
+struct ShimmerModifier: ViewModifier {
   @State private var phase: CGFloat = -1
 
   func body(content: Content) -> some View {

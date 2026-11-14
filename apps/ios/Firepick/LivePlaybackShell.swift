@@ -5,18 +5,14 @@ import SwiftUI
 
 /// 央视频式电视页：上 16:9 播放器 + 下浅色频道区；全屏为独立沉浸态。
 struct LivePlaybackShell: View {
-  private enum PlayPauseGlyph {
-    case play
-    case pause
-  }
-
   @Environment(AppModel.self) private var model
   @Environment(\.scenePhase) private var scenePhase
 
   @State private var channel: LiveChannel?
   @State private var groupName: String?
   @State private var urlIndex = 0
-  @State private var showHUD = true
+  /// Chrome only after a single tap — never auto-shown on enter/zap.
+  @State private var showHUD = false
   @State private var showLines = false
   @State private var zapHint: String?
   @State private var failure: String?
@@ -24,18 +20,19 @@ struct LivePlaybackShell: View {
   @State private var mpvEngine = MPVPlayerEngine()
   @State private var engineKind: PlaybackEngineKind = .avPlayer
   @State private var hideTask: Task<Void, Never>?
-  @State private var singleTapTask: Task<Void, Never>?
-  @State private var glyphHideTask: Task<Void, Never>?
   @State private var bitrateText = "0 KB/s"
   @State private var selectedShelfID = "cctv"
   @State private var isFullscreen = false
   @State private var reachableIDs: Set<String> = []
   @State private var checkedIDs: Set<String> = []
-  @State private var playPauseGlyph: PlayPauseGlyph?
+  /// Best probe RTT (ms) by channel name — shown on each shelf card.
+  @State private var channelLatencyMS: [String: Int] = [:]
   /// Bumps on leave / new load so late `loadCurrent` cannot restart audio after 点播.
   @State private var liveLoadGeneration = 0
   /// Keep the 16:9 stage black (and muted) until a real video plane is confirmed.
   @State private var holdBlackUntilVideo = false
+  /// Bumps on orientation change so fullscreen can switch to local landscape layout.
+  @State private var orientationTick = 0
 
   private let liveShelves: [LiveShelf] = [
     LiveShelf(id: "cctv", title: "央视", keywords: ["央视", "cctv"]),
@@ -44,13 +41,6 @@ struct LivePlaybackShell: View {
 
   private var playbackEngine: any PlaybackEngine {
     engineKind == .mpv ? mpvEngine : avEngine
-  }
-
-  private var isPlaying: Bool {
-    if engineKind == .avPlayer {
-      return avEngine.isActivelyPlaying
-    }
-    return mpvEngine.state == .playing
   }
 
   private var liveProbeToken: String {
@@ -107,15 +97,26 @@ struct LivePlaybackShell: View {
       }
     }
     .onChange(of: scenePhase) { _, phase in
-      // Leaving the app while on 电视: stop unless 后台播放 (avoids 串音 into other apps).
-      if phase != .active, model.selectedTab == .live, !model.backgroundPlaybackEnabled {
-        stopAllLiveEngines()
+      guard model.selectedTab == .live else { return }
+      switch phase {
+      case .inactive:
+        // Control Center / 通知中心 / 亮度条 — must NOT tear down. Treating this as
+        // leave-app caused 真机下拉黑屏且无法恢复.
+        break
+      case .background:
+        // Truly backgrounded: stop unless 后台播放 (avoids 串音 into other apps).
+        if !model.backgroundPlaybackEnabled {
+          stopAllLiveEngines()
+        }
+      case .active:
+        // Returning from background (or after a mistaken stop): reload if idle/black.
+        resumeLiveIfNeededAfterForeground()
+      @unknown default:
+        break
       }
     }
     .onDisappear {
       hideTask?.cancel()
-      singleTapTask?.cancel()
-      glyphHideTask?.cancel()
       persistLiveMemory()
       stopAllLiveEngines()
       if isFullscreen {
@@ -145,9 +146,16 @@ struct LivePlaybackShell: View {
     .background(Color(.systemBackground))
   }
 
+  /// Simulator / delayed rotate: window stays portrait — paint landscape locally.
+  private var fullscreenNeedsLocalLandscape: Bool {
+    _ = orientationTick
+    return isFullscreen && OrientationBridge.isPortraitInterface
+  }
+
   private func liveStage(channel: LiveChannel) -> some View {
     GeometryReader { geo in
       let portraitVideoH = geo.size.width * 9 / 16
+      let localLandscape = fullscreenNeedsLocalLandscape
       ZStack(alignment: .top) {
         // Video plane — must sit above any page background (白屏 was systemBackground
         // painted on the full-height VStack covering this hole).
@@ -158,22 +166,30 @@ struct LivePlaybackShell: View {
           )
           .frame(maxHeight: isFullscreen ? .infinity : nil)
 
-        playerStage(channel: channel, fullscreenChrome: isFullscreen)
-          .frame(
-            width: geo.size.width,
-            height: isFullscreen ? geo.size.height : portraitVideoH
-          )
-          .frame(maxHeight: isFullscreen ? .infinity : nil)
-
         if isFullscreen {
-          fullscreenBackChrome()
+          fullscreenPlayerStage(
+            channel: channel,
+            container: geo.size,
+            localLandscape: localLandscape
+          )
+          if showHUD {
+            // Keep chrome in window coords (not rotated with the local-landscape stage).
+            fullscreenBackChrome()
+              .transition(.opacity)
+          }
         } else {
+          playerStage(channel: channel, fullscreenChrome: false)
+            .frame(width: geo.size.width, height: portraitVideoH)
+
           VStack(spacing: 0) {
             Color.clear
               .frame(height: portraitVideoH)
               .allowsHitTesting(false)
               .overlay(alignment: .bottomTrailing) {
-                fullscreenEntryButton
+                if showHUD {
+                  fullscreenEntryButton
+                    .transition(.opacity)
+                }
               }
             channelPanel(current: channel)
               .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -196,6 +212,33 @@ struct LivePlaybackShell: View {
     .ignoresSafeArea(isFullscreen ? .all : [])
     .statusBarHidden(isFullscreen)
     .persistentSystemOverlays(isFullscreen ? .hidden : .automatic)
+    .onReceive(
+      NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)
+    ) { _ in
+      orientationTick &+= 1
+    }
+    // Touch orientationTick so SwiftUI re-evaluates local-landscape when the scene rotates.
+    .onChange(of: orientationTick) { _, _ in }
+  }
+
+  @ViewBuilder
+  private func fullscreenPlayerStage(
+    channel: LiveChannel,
+    container: CGSize,
+    localLandscape: Bool
+  ) -> some View {
+    let stage = playerStage(channel: channel, fullscreenChrome: true)
+    if localLandscape {
+      // Portrait window + landscape intent (Simulator): rotate a landscape frame into place.
+      stage
+        .frame(width: container.height, height: container.width)
+        .rotationEffect(.degrees(90))
+        .frame(width: container.width, height: container.height)
+    } else {
+      stage
+        .frame(width: container.width, height: container.height)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
   }
 
   private var fullscreenEntryButton: some View {
@@ -215,7 +258,7 @@ struct LivePlaybackShell: View {
     .accessibilityLabel("全屏")
   }
 
-  /// Single top-leading 返回 — no duplicate bottom「收起」control.
+  /// Single top-leading 返回 — shown with HUD on tap only.
   private func fullscreenBackChrome() -> some View {
     VStack {
       HStack {
@@ -233,8 +276,9 @@ struct LivePlaybackShell: View {
         .accessibilityLabel("返回")
         Spacer()
       }
-      .padding(.leading, 4)
-      .padding(.top, 4)
+      .padding(.leading, 16)
+      .padding(.trailing, 20)
+      .padding(.top, 12)
       Spacer()
     }
   }
@@ -253,23 +297,19 @@ struct LivePlaybackShell: View {
           .transition(.opacity)
       }
 
-      if playbackEngine.state == .loading || holdBlackUntilVideo {
+      // Recovering / probing mirrors: only spinner — never error copy or「换线路」chrome.
+      if playbackEngine.state == .loading || holdBlackUntilVideo || failure != nil {
         VStack(spacing: 10) {
           ProgressView()
             .controlSize(.large)
             .tint(.white)
-          if !holdBlackUntilVideo || failure == nil {
+          if failure == nil {
             Text(bitrateText)
               .font(.subheadline.monospacedDigit())
               .foregroundStyle(.white)
           }
         }
         .allowsHitTesting(false)
-      }
-
-      if let playPauseGlyph {
-        playPauseFlash(playPauseGlyph)
-          .allowsHitTesting(false)
       }
 
       if let zapHint {
@@ -280,20 +320,6 @@ struct LivePlaybackShell: View {
           .padding(.vertical, 10)
           .background(.black.opacity(0.55), in: Capsule())
           .allowsHitTesting(false)
-      }
-
-      if let failure {
-        VStack(spacing: 12) {
-          Text(failure)
-            .foregroundStyle(.white)
-            .multilineTextAlignment(.center)
-          Button("换线路重试") {
-            Task { await advanceLine(autoplay: true) }
-          }
-          .buttonStyle(.borderedProminent)
-          .tint(.orange)
-        }
-        .padding()
       }
     }
     .contentShape(Rectangle())
@@ -309,20 +335,11 @@ struct LivePlaybackShell: View {
           }
         }
     )
-    .onTapGesture(count: 2) {
-      singleTapTask?.cancel()
-      flashPlayPause()
-    }
-    .onTapGesture(count: 1) {
-      singleTapTask?.cancel()
-      singleTapTask = Task {
-        try? await Task.sleep(for: .milliseconds(280))
-        guard !Task.isCancelled else { return }
-        withAnimation(.easeInOut(duration: 0.18)) {
-          showHUD.toggle()
-        }
-        if showHUD { scheduleHideHUD() }
+    .onTapGesture {
+      withAnimation(.easeInOut(duration: 0.18)) {
+        showHUD.toggle()
       }
+      if showHUD { scheduleHideHUD() }
     }
   }
 
@@ -338,64 +355,29 @@ struct LivePlaybackShell: View {
   }
 
   private func playerChrome(channel: LiveChannel, fullscreenChrome: Bool) -> some View {
-    ZStack {
-      VStack {
-        HStack {
-          if fullscreenChrome {
-            // Room for top-leading 返回 outside the HUD.
-            Spacer(minLength: 56)
-          } else {
-            Spacer()
-          }
-          if channel.urls.count > 1 {
-            Button("线路") { showLines = true }
-              .font(.caption.weight(.semibold))
-              .foregroundStyle(.white)
-              .padding(.horizontal, 10)
-              .padding(.vertical, 6)
-              .background(.black.opacity(0.4), in: Capsule())
-          }
-          Button {
-            model.toggleLiveFavorite(channel)
-            scheduleHideHUD()
-          } label: {
-            Image(systemName: model.isLiveFavorite(channel) ? "star.fill" : "star")
-              .foregroundStyle(.white)
-              .frame(width: 40, height: 40)
-              .background(.black.opacity(0.4), in: Circle())
-          }
-          .buttonStyle(.plain)
+    VStack {
+      HStack {
+        if fullscreenChrome {
+          // Room for top-leading 返回.
+          Spacer(minLength: 72)
+        } else {
+          Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.top, fullscreenChrome ? 12 : 10)
-
-        Spacer()
-      }
-
-      if playPauseGlyph == nil {
-        Button {
-          togglePlayPause(flash: false)
-        } label: {
-          Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-            .font(.system(size: 28, weight: .bold))
+        if channel.urls.count > 1 {
+          Button("线路") { showLines = true }
+            .font(.caption.weight(.semibold))
             .foregroundStyle(.white)
-            .offset(x: isPlaying ? 0 : 2)
-            .frame(width: 68, height: 68)
-            .background(.black.opacity(0.5), in: Circle())
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.black.opacity(0.4), in: Capsule())
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(isPlaying ? "暂停" : "播放")
       }
-    }
-  }
+      .padding(.leading, fullscreenChrome ? 16 : 12)
+      .padding(.trailing, fullscreenChrome ? 20 : 12)
+      .padding(.top, fullscreenChrome ? 12 : 10)
 
-  private func playPauseFlash(_ glyph: PlayPauseGlyph) -> some View {
-    Image(systemName: glyph == .pause ? "pause.fill" : "play.fill")
-      .font(.system(size: 34, weight: .bold))
-      .foregroundStyle(.white)
-      .offset(x: glyph == .play ? 2 : 0)
-      .frame(width: 76, height: 76)
-      .background(.black.opacity(0.5), in: Circle())
+      Spacer()
+    }
   }
 
   private func channelPanel(current: LiveChannel) -> some View {
@@ -473,11 +455,20 @@ struct LivePlaybackShell: View {
                     }
                     .frame(width: 36, height: 36)
                     .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    .allowsHitTesting(false)
 
                     VStack(alignment: .leading, spacing: 2) {
-                      Text(item.name)
-                        .font(.body.weight(isCurrent ? .semibold : .regular))
-                        .foregroundStyle(isCurrent ? Color.orange : Color.primary)
+                      HStack(spacing: 6) {
+                        Text(item.name)
+                          .font(.body.weight(isCurrent ? .semibold : .regular))
+                          .foregroundStyle(isCurrent ? Color.orange : Color.primary)
+                          .lineLimit(1)
+                        if isCurrent {
+                          Image(systemName: "waveform")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.orange)
+                        }
+                      }
                       if let program = model.currentProgram(for: item) {
                         Text(program.title)
                           .font(.caption)
@@ -486,14 +477,20 @@ struct LivePlaybackShell: View {
                       }
                     }
                     Spacer(minLength: 0)
-                    if isCurrent {
-                      Image(systemName: "waveform")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.orange)
+                    if let ms = channelLatencyMS[item.name] {
+                      Text("\(ms)ms")
+                        .font(.caption.monospacedDigit().weight(.medium))
+                        .foregroundStyle(liveLatencyColor(ms))
+                    } else if shelfPending {
+                      Text("…")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.tertiary)
                     }
                   }
                   .padding(.horizontal, 16)
                   .padding(.vertical, 12)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                  .contentShape(Rectangle())
                   .background(
                     isCurrent ? Color.orange.opacity(0.08) : Color.clear
                   )
@@ -588,8 +585,9 @@ struct LivePlaybackShell: View {
     }
     return order.compactMap { name -> LiveChannel? in
       let variants = byName[name] ?? []
+      // Don't wait on probe — show the shelf immediately from cache; probe only fills ms.
       let reachable = variants.filter { reachableIDs.contains($0.id) }
-      guard let primary = reachable.first else { return nil }
+      guard let primary = reachable.first ?? variants.first else { return nil }
       // Merge mirrors from all sources so 湖南卫视 can fail over past a bad 4K/HEVC line.
       var urls: [String] = []
       var headers = primary.headers
@@ -607,10 +605,27 @@ struct LivePlaybackShell: View {
         logo: primary.logo,
         epg: primary.epg,
         tvgId: primary.tvgId,
-        urls: urls,
+        urls: Self.preferredLiveURLOrder(urls),
         headers: headers
       )
     }
+  }
+
+  /// Prefer non-4K / non-HEVC mirrors first — AVPlayer often gets audio-only on 湖南卫视 4K.
+  private static func preferredLiveURLOrder(_ urls: [String]) -> [String] {
+    urls.sorted { a, b in
+      liveURLDifficulty(a) < liveURLDifficulty(b)
+    }
+  }
+
+  private static func liveURLDifficulty(_ raw: String) -> Int {
+    let text = raw.lowercased()
+    var score = 0
+    if text.contains("4k") || text.contains("2160") || text.contains("uhd") { score += 20 }
+    if text.contains("hevc") || text.contains("h265") || text.contains("h.265") { score += 12 }
+    if text.contains("hdr") { score += 6 }
+    if text.contains("1080") { score += 2 }
+    return score
   }
 
   private func shelfIsPending(id: String) -> Bool {
@@ -654,6 +669,21 @@ struct LivePlaybackShell: View {
     holdBlackUntilVideo = false
   }
 
+  /// After Control Center / background return: restart if the surface was torn down.
+  private func resumeLiveIfNeededAfterForeground() {
+    guard channel != nil else { return }
+    let state = playbackEngine.state
+    let failed: Bool = {
+      if case .failed = state { return true }
+      return false
+    }()
+    let playingOrLoading = state == .playing || state == .loading || state == .ready
+    let hasAVItem = engineKind != .avPlayer || avEngine.player.currentItem != nil
+    // Still on-air with a live item — Control Center path; leave it alone.
+    if playingOrLoading, hasAVItem, !holdBlackUntilVideo, !failed { return }
+    Task { await loadCurrent(autoplay: true) }
+  }
+
   private func leaveLiveTab() {
     persistLiveMemory()
     stopAllLiveEngines()
@@ -681,38 +711,52 @@ struct LivePlaybackShell: View {
     model.rememberLiveShelf(shelfID)
   }
 
+  private func liveLatencyColor(_ ms: Int) -> Color {
+    if ms < 400 { return .green }
+    if ms < 900 { return .orange }
+    return .red
+  }
+
   private func probeShelfChannels() async {
     let channels = uniqueShelfCandidates()
     reachableIDs = []
     checkedIDs = []
+    channelLatencyMS = [:]
     guard !channels.isEmpty else { return }
     let width = 20
     var cursor = 0
-    await withTaskGroup(of: (String, Bool).self) { group in
-      while cursor < channels.count && cursor < width {
-        let channel = channels[cursor]
-        cursor += 1
+    await withTaskGroup(of: (id: String, name: String, ok: Bool, ms: Int?).self) { group in
+      func enqueue(_ channel: LiveChannel) {
         group.addTask {
-          let ok = await LiveShelfProbe.responds(channel)
-          return (channel.id, ok)
+          let probed = await LiveShelfProbe.probe(channel)
+          return (channel.id, channel.name, probed.ok, probed.ms)
         }
+      }
+      while cursor < channels.count && cursor < width {
+        enqueue(channels[cursor])
+        cursor += 1
       }
       for await result in group {
         if Task.isCancelled {
           group.cancelAll()
           break
         }
-        if result.1 {
-          reachableIDs.insert(result.0)
-        }
-        checkedIDs.insert(result.0)
-        if cursor < channels.count {
-          let channel = channels[cursor]
-          cursor += 1
-          group.addTask {
-            let ok = await LiveShelfProbe.responds(channel)
-            return (channel.id, ok)
+        if result.ok {
+          reachableIDs.insert(result.id)
+          if let ms = result.ms {
+            var next = channelLatencyMS
+            if let prev = next[result.name] {
+              next[result.name] = min(prev, ms)
+            } else {
+              next[result.name] = ms
+            }
+            channelLatencyMS = next
           }
+        }
+        checkedIDs.insert(result.id)
+        if cursor < channels.count {
+          enqueue(channels[cursor])
+          cursor += 1
         }
       }
     }
@@ -808,32 +852,33 @@ struct LivePlaybackShell: View {
     holdBlackUntilVideo = true
     silenceLiveOutput()
     model.rememberLiveChannel(channel, groupName: groupName, urlIndex: urlIndex)
-    let urls = channel.urls.compactMap(URL.init(string:))
+    let urls = Self.preferredLiveURLOrder(channel.urls).compactMap(URL.init(string:))
     guard !urls.isEmpty else {
-      failure = "该频道没有可播放地址"
-      holdBlackUntilVideo = false
+      failure = "retry"
+      holdBlackUntilVideo = true
       return
     }
-    let index = min(urlIndex, urls.count - 1)
-    urlIndex = index
-    let request = PlaybackRequest(url: urls[index], headers: channel.headers)
+    let startIndex = min(max(0, urlIndex), urls.count - 1)
 
     func stillActive() -> Bool {
       generation == liveLoadGeneration && model.selectedTab == .live
     }
 
-    do {
-      try await playbackEngine.load(request)
-      // Newer load owns the engines — do NOT stopAll here (that raced and flashed).
-      guard stillActive() else { return }
-      failure = nil
-      // Probe muted: never let audio-only 湖南卫视 blast while we wait for video.
-      if autoplay {
-        silenceLiveOutput()
-        playbackEngine.play()
-      }
-      if engineKind == .avPlayer, autoplay {
-        let hasVideo = await waitForLiveVideo(seconds: 2.8)
+    // Pass 1: AVPlayer across mirrors (skip heavy 4K/HEVC first via URL order).
+    engineKind = .avPlayer
+    for offset in 0..<urls.count {
+      let index = (startIndex + offset) % urls.count
+      urlIndex = index
+      let request = PlaybackRequest(url: urls[index], headers: channel.headers)
+      do {
+        try await avEngine.load(request)
+        guard stillActive() else { return }
+        failure = nil
+        if autoplay {
+          silenceLiveOutput()
+          avEngine.play()
+        }
+        let hasVideo = await waitForLiveVideo(seconds: 3.6)
         guard stillActive() else { return }
         if hasVideo {
           unmuteLiveOutput()
@@ -841,81 +886,56 @@ struct LivePlaybackShell: View {
           failure = nil
           return
         }
-        // No video plane — stop sound before trying the next mirror.
         silenceLiveOutput()
-        if index + 1 < urls.count {
-          failure = "无画面，正在换线路…"
-          urlIndex = index + 1
-          await loadCurrent(autoplay: autoplay)
-          return
-        }
-        // Last AV line: try MPV once (HEVC). Stay muted until video-params confirm a plane.
         avEngine.stop()
-        engineKind = .mpv
-        failure = "无画面，正在用兼容解码…"
+      } catch {
+        guard stillActive() else { return }
+        silenceLiveOutput()
+        avEngine.stop()
+      }
+    }
+
+    // Pass 2: MPV for HEVC / odd codecs (湖南卫视 4K often lands here).
+    engineKind = .mpv
+    for offset in 0..<urls.count {
+      let index = (startIndex + offset) % urls.count
+      urlIndex = index
+      let request = PlaybackRequest(url: urls[index], headers: channel.headers)
+      do {
         try await mpvEngine.load(request)
         guard stillActive() else { return }
+        failure = nil
         if autoplay {
           silenceLiveOutput()
           mpvEngine.play()
         }
-        let mpvHasVideo = await waitForMPVVideo(seconds: 2.5)
+        let hasVideo = await waitForMPVVideo(seconds: 3.2)
         guard stillActive() else { return }
-        if mpvHasVideo {
-          failure = nil
+        if hasVideo {
           unmuteLiveOutput()
           holdBlackUntilVideo = false
-        } else {
-          // Still radio-like — stop completely, don't leave soundtrack running.
-          silenceLiveOutput()
-          mpvEngine.stop()
-          failure = "无画面，请换线路重试"
-          holdBlackUntilVideo = false
+          failure = nil
+          return
         }
-      } else {
-        unmuteLiveOutput()
-        holdBlackUntilVideo = false
+        silenceLiveOutput()
+        mpvEngine.stop()
+      } catch {
+        guard stillActive() else { return }
+        silenceLiveOutput()
+        mpvEngine.stop()
       }
-    } catch {
-      guard stillActive() else { return }
-      silenceLiveOutput()
-      if index + 1 < urls.count {
-        failure = "线路失败，正在换线…"
-        urlIndex = index + 1
-        await loadCurrent(autoplay: autoplay)
-      } else if engineKind == .avPlayer {
-        engineKind = .mpv
-        avEngine.stop()
-        failure = "无画面，正在用兼容解码…"
-        do {
-          try await mpvEngine.load(request)
-          guard stillActive() else { return }
-          if autoplay {
-            silenceLiveOutput()
-            mpvEngine.play()
-          }
-          let mpvHasVideo = await waitForMPVVideo(seconds: 2.5)
-          guard stillActive() else { return }
-          if mpvHasVideo {
-            failure = nil
-            unmuteLiveOutput()
-            holdBlackUntilVideo = false
-          } else {
-            silenceLiveOutput()
-            mpvEngine.stop()
-            failure = "无画面，请换线路重试"
-            holdBlackUntilVideo = false
-          }
-        } catch {
-          failure = error.localizedDescription
-          stopAllLiveEngines()
-          holdBlackUntilVideo = false
-        }
-      } else {
-        failure = error.localizedDescription
-        stopAllLiveEngines()
-        holdBlackUntilVideo = false
-      }
+    }
+
+    guard stillActive() else { return }
+    // Keep spinner and quietly retry from the next mirror after a short pause.
+    failure = "retry"
+    holdBlackUntilVideo = true
+    engineKind = .avPlayer
+    urlIndex = (startIndex + 1) % urls.count
+    Task {
+      try? await Task.sleep(for: .seconds(2.5))
+      guard generation == liveLoadGeneration, model.selectedTab == .live else { return }
+      await loadCurrent(autoplay: true)
     }
   }
 
@@ -978,8 +998,6 @@ struct LivePlaybackShell: View {
       try? await Task.sleep(for: .seconds(1.2))
       if zapHint == target.name { zapHint = nil }
     }
-    showHUD = true
-    scheduleHideHUD()
   }
 
   private func toggleFullscreen() {
@@ -995,83 +1013,24 @@ struct LivePlaybackShell: View {
     model.liveFullscreenActive = true
     model.liveShowsTabBarInFullscreen = false
     OrientationBridge.enterLandscape()
-    showHUD = true
-    scheduleHideHUD()
+    showHUD = false
+    // Re-check after the scene settles — Simulator often stays portrait.
+    Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(500))
+      orientationTick &+= 1
+    }
   }
 
   private func exitFullscreen() {
     isFullscreen = false
     clearFullscreenTabBarState()
     OrientationBridge.enterPortraitThenUnlock()
-    showHUD = true
-    scheduleHideHUD()
+    showHUD = false
   }
 
   private func clearFullscreenTabBarState() {
     model.liveFullscreenActive = false
     model.liveShowsTabBarInFullscreen = false
-  }
-
-  private func togglePlayPause(flash: Bool) {
-    let wasPlaying = isPlaying
-    if wasPlaying {
-      playbackEngine.pause()
-    } else {
-      // Live TV: resume at the live edge, not the paused DVR buffer.
-      Task { await resumeLiveFromEdge() }
-    }
-    if flash {
-      revealPlayPauseGlyph(wasPlaying ? .pause : .play)
-    }
-    showHUD = true
-    scheduleHideHUD()
-  }
-
-  /// Seek to the HLS live edge (seekable range end), then play.
-  private func resumeLiveFromEdge() async {
-    if engineKind == .avPlayer, let item = avEngine.player.currentItem {
-      let ranges = item.seekableTimeRanges
-      if let range = ranges.last?.timeRangeValue,
-        range.duration.seconds.isFinite,
-        range.duration.seconds > 2
-      {
-        let live = CMTimeRangeGetEnd(range)
-        let target = CMTimeSubtract(live, CMTime(seconds: 1.2, preferredTimescale: 600))
-        await avEngine.player.seek(
-          to: target,
-          toleranceBefore: .positiveInfinity,
-          toleranceAfter: .positiveInfinity
-        )
-      } else {
-        // No DVR window — reload so we don't stay stuck on a stale buffer.
-        await loadCurrent(autoplay: true)
-        return
-      }
-    }
-    playbackEngine.play()
-  }
-
-  private func flashPlayPause() {
-    guard playbackEngine.state != .loading else { return }
-    togglePlayPause(flash: true)
-  }
-
-  private func revealPlayPauseGlyph(_ glyph: PlayPauseGlyph) {
-    var hideCenter = Transaction()
-    hideCenter.disablesAnimations = true
-    withTransaction(hideCenter) {
-      playPauseGlyph = glyph
-    }
-    glyphHideTask?.cancel()
-    glyphHideTask = Task {
-      try? await Task.sleep(for: .seconds(1.0))
-      guard !Task.isCancelled else { return }
-      var clear = Transaction()
-      clear.disablesAnimations = true
-      withTransaction(clear) {
-        playPauseGlyph = nil
-      }
-    }
   }
 
   private func scheduleHideHUD() {
@@ -1103,17 +1062,19 @@ private enum LiveShelfProbe {
     return URLSession(configuration: config)
   }()
 
-  static func responds(_ channel: LiveChannel) async -> Bool {
+  static func probe(_ channel: LiveChannel) async -> (ok: Bool, ms: Int?) {
     for raw in channel.urls.prefix(5) {
       guard let url = URL(string: raw),
         url.scheme == "http" || url.scheme == "https"
       else { continue }
-      if await responds(url: url, headers: channel.headers) { return true }
+      if let ms = await latencyMS(url: url, headers: channel.headers) {
+        return (true, ms)
+      }
     }
-    return false
+    return (false, nil)
   }
 
-  private static func responds(url: URL, headers: [String: String]) async -> Bool {
+  private static func latencyMS(url: URL, headers: [String: String]) async -> Int? {
     var request = URLRequest(url: url, timeoutInterval: 3.5)
     request.httpMethod = "GET"
     request.setValue("bytes=0-512", forHTTPHeaderField: "Range")
@@ -1123,32 +1084,40 @@ private enum LiveShelfProbe {
     if request.value(forHTTPHeaderField: "User-Agent") == nil {
       request.setValue("AppleCoreMedia/1.0.0.20", forHTTPHeaderField: "User-Agent")
     }
+    let started = Date()
     do {
       let (bytes, response) = try await session.bytes(for: request)
       defer { bytes.task.cancel() }
       let http = response as? HTTPURLResponse
       let code = http?.statusCode ?? 0
-      guard (200..<400).contains(code) else { return false }
+      guard (200..<400).contains(code) else { return nil }
       let type = http?.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
-      if type.contains("mpegurl") || type.contains("mp2t") || type.contains("video")
+      let okType = type.contains("mpegurl") || type.contains("mp2t") || type.contains("video")
         || type.contains("octet-stream") || type.isEmpty
-      {
-        return true
+      if okType {
+        return Int(Date().timeIntervalSince(started) * 1000)
       }
       var sample = Data()
       for try await byte in bytes {
         sample.append(byte)
         if sample.count >= 48 { break }
       }
-      if sample.first == 0x47 { return true }
-      let text = String(data: sample, encoding: .utf8)?.lowercased() ?? ""
-      if text.contains("#extm3u") || text.contains("#extinf") { return true }
-      if text.contains("<html") || text.contains("<!doctype") || text.contains("{\"code\"") {
-        return false
+      if sample.first == 0x47 {
+        return Int(Date().timeIntervalSince(started) * 1000)
       }
-      return !sample.isEmpty && !type.contains("text/html") && !type.contains("json")
+      let text = String(data: sample, encoding: .utf8)?.lowercased() ?? ""
+      if text.contains("#extm3u") || text.contains("#extinf") {
+        return Int(Date().timeIntervalSince(started) * 1000)
+      }
+      if text.contains("<html") || text.contains("<!doctype") || text.contains("{\"code\"") {
+        return nil
+      }
+      guard !sample.isEmpty, !type.contains("text/html"), !type.contains("json") else {
+        return nil
+      }
+      return Int(Date().timeIntervalSince(started) * 1000)
     } catch {
-      return false
+      return nil
     }
   }
 }

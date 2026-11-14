@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 /**
- * Probe AppleCMS provide/vod candidates.
+ * Probe AppleCMS provide/vod candidates from sources/cms-candidates.json.
  * Writes:
  *   - sources/providers.whitelist.json
  *   - sources/providers.probe-report.json
+ * With --write-defaults also rewrites:
  *   - DEFAULT_PROVIDERS in Packages/.../Resources/firepick-cms.js + sources/firepick-cms.js
  *   - AppModel.firepickCMSProviders (keep in sync)
+ *
+ * Usage:
+ *   node scripts/probe-cms-providers.mjs
+ *   node scripts/probe-cms-providers.mjs --write-defaults
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,39 +18,18 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
+const writeDefaults = process.argv.includes('--write-defaults');
 
-const CANDIDATES = [
-  { key: 'iqiyi', name: '爱奇艺资源', api: 'https://iqiyizyapi.com/api.php/provide/vod' },
-  { key: 'ikun', name: 'iKun资源', api: 'https://ikunzyapi.com/api.php/provide/vod' },
-  { key: 'dytt', name: '电影天堂', api: 'https://caiji.dyttzyapi.com/api.php/provide/vod' },
-  { key: 'maoyan', name: '猫眼资源', api: 'https://api.maoyanapi.top/api.php/provide/vod' },
-  { key: 'lzcaiji', name: '量子资源', api: 'https://cj.lzcaiji.com/api.php/provide/vod' },
-  { key: 'lzi', name: '量子影视', api: 'https://cj.lziapi.com/api.php/provide/vod' },
-  { key: 'zy360', name: '360资源', api: 'https://360zyzz.com/api.php/provide/vod' },
-  { key: 'jisu', name: '极速资源', api: 'https://jszyapi.com/api.php/provide/vod' },
-  { key: 'modu', name: '魔都资源', api: 'https://www.mdzyapi.com/api.php/provide/vod' },
-  { key: 'ffzy', name: '非凡资源', api: 'https://api.ffzyapi.com/api.php/provide/vod' },
-  { key: 'bfzy', name: '暴风资源', api: 'https://bfzyapi.com/api.php/provide/vod' },
-  { key: 'zuid', name: '最大资源', api: 'https://api.zuidapi.com/api.php/provide/vod' },
-  { key: 'wujin', name: '无尽资源', api: 'https://api.wujinapi.me/api.php/provide/vod' },
-  { key: 'xinlang', name: '新浪资源', api: 'https://api.xinlangapi.com/xinlangapi.php/provide/vod' },
-  { key: 'subo', name: '速播资源', api: 'https://subocaiji.com/api.php/provide/vod' },
-  { key: 'jinying', name: '金鹰点播', api: 'https://jyzyapi.com/provide/vod/from/jinyingyun/at/json' },
-  { key: 'uku', name: 'U酷影视', api: 'https://api.ukuapi88.com/api.php/provide/vod' },
-  { key: 'guangsu', name: '光速资源', api: 'https://api.guangsuapi.com/api.php/provide/vod' },
-  { key: 'hongniu', name: '红牛资源', api: 'https://www.hongniuzy2.com/api.php/provide/vod' },
-  { key: 'moduanime', name: '魔都动漫', api: 'https://caiji.moduapi.cc/api.php/provide/vod' },
-  { key: 'ruyi', name: '如意资源', api: 'https://cj.rycjapi.com/api.php/provide/vod' },
-  { key: 'haohua', name: '豪华资源', api: 'https://hhzyapi.com/api.php/provide/vod' },
-  { key: 'yzzy', name: '优质资源', api: 'https://api.yzzy-api.com/inc/apijson.php' },
-  { key: 'huya', name: '虎牙资源', api: 'https://www.huyaapi.com/api.php/provide/vod' },
-  { key: 'wolong', name: '卧龙资源', api: 'https://wolongzyw.com/api.php/provide/vod' },
-  { key: 'maotai', name: '茅台资源', api: 'https://caiji.maotaizy.cc/api.php/provide/vod' },
-  { key: 'ffzy_cj', name: '非凡采集', api: 'https://cj.ffzyapi.com/api.php/provide/vod' },
-  { key: 'movie_legacy', name: '影视资源', api: 'https://dy.7772888.xyz/api.php/tvbox' },
-];
+const CANDIDATES_PATH = path.join(root, 'sources/cms-candidates.json');
+const catalog = JSON.parse(fs.readFileSync(CANDIDATES_PATH, 'utf8'));
+const CANDIDATES = Array.isArray(catalog.providers) ? catalog.providers : [];
+if (!CANDIDATES.length) {
+  console.error(`No providers in ${path.relative(root, CANDIDATES_PATH)}`);
+  process.exit(1);
+}
 
-const KEYWORDS = ['庆余年', '三体', '进击的巨人', '绝命毒师'];
+/** Mix drama + anime so active pool keeps 国漫/日漫 coverage. */
+const KEYWORDS = ['庆余年', '三体', '进击的巨人', '绝命毒师', '斗破苍穹', '沧元图'];
 const TIMEOUT_MS = 8000;
 const CONCURRENCY = 4;
 const ACTIVE_POOL = 10;
@@ -61,24 +45,51 @@ const SHORT_NAMES = {
   jisu: '极速',
   dytt: '天堂',
   zuid: '最大',
+  zuid_me: '最大',
   guangsu: '光速',
   ruyi: '如意',
   iqiyi: '爱奇艺',
   xinlang: '新浪',
   uku: 'U酷',
+  uku_alt: 'U酷',
   maoyan: '猫眼',
   zy360: '360',
+  zy360zz: '360',
   modu: '魔都',
   wujin: '无尽',
+  wujin_com: '无尽',
   hongniu: '红牛',
+  hongniu3: '红牛',
   wolong: '卧龙',
+  wolong_web: '卧龙',
   haohua: '豪华',
   yzzy: '优质',
+  zy1080: '1080',
   huya: '虎牙',
   maotai: '茅台',
   jinying: '金鹰',
+  jinyingzy: '金鹰',
   ikun: 'iKun',
   moduanime: '魔都漫',
+  baidu: '百度',
+  douban: '豆瓣',
+  piaoling: '飘零',
+  suoni: '索尼',
+  heimuer: '木耳',
+  niuniu: '牛牛',
+  yaya: '丫丫',
+  yinghua: '樱花',
+  sdzy: '闪电',
+  kuaiche: '快车',
+  feisu: '飞速',
+  kuaikan: '快看',
+  xiongzhang: '熊掌',
+  qihu: '奇虎',
+  kuaiyun: '快云',
+  wwzy: '旺旺',
+  hw8: '华为吧',
+  okzy: 'OK',
+  taopian: '淘片',
   movie_legacy: '影视',
 };
 
@@ -195,7 +206,7 @@ async function mapPool(items, limit, fn) {
 function shortName(candidate) {
   if (SHORT_NAMES[candidate.key]) return SHORT_NAMES[candidate.key];
   return String(candidate.name || candidate.key)
-    .replace(/(资源|采集|影视|点播|网)$/u, '')
+    .replace(/(资源|采集|影视|点播|网|备)$/u, '')
     .slice(0, 4);
 }
 
@@ -266,6 +277,10 @@ function rewriteAppModelProviders(filePath, providers) {
   fs.writeFileSync(filePath, next);
 }
 
+console.log(
+  `Probing ${CANDIDATES.length} candidates from ${path.relative(root, CANDIDATES_PATH)}`
+);
+
 const results = await mapPool(CANDIDATES, CONCURRENCY, probeOne);
 const passed = results.filter((r) => r.pass);
 const seenHost = new Set();
@@ -286,6 +301,7 @@ const active = pickActiveProviders(passed);
 
 const report = {
   probedAt: new Date().toISOString(),
+  source: path.relative(root, CANDIDATES_PATH),
   keywords: KEYWORDS,
   total: results.length,
   passed: passed.length,
@@ -309,7 +325,14 @@ const report = {
 fs.writeFileSync(
   path.join(root, 'sources/providers.whitelist.json'),
   JSON.stringify(
-    { providers: whitelist, meta: { probedAt: report.probedAt, keywords: KEYWORDS } },
+    {
+      providers: whitelist,
+      meta: {
+        probedAt: report.probedAt,
+        source: report.source,
+        keywords: KEYWORDS,
+      },
+    },
     null,
     2
   ) + '\n'
@@ -318,6 +341,23 @@ fs.writeFileSync(
   path.join(root, 'sources/providers.probe-report.json'),
   JSON.stringify(report, null, 2) + '\n'
 );
+
+console.log(`Passed ${whitelist.length}/${results.length}; active pool ${active.length}`);
+for (const w of active) {
+  console.log(
+    `  ★ ${w.key} ${w.name} score=${Math.round(w.score)} list=${w.listMs}ms hits=${w.hitCount}`
+  );
+}
+for (const f of report.failures) {
+  console.log(`  ✗ ${f.key} list=${f.listOk} search=${f.searchable} ${f.listError || ''}`);
+}
+
+if (!writeDefaults) {
+  console.log(
+    'Report only (pass --write-defaults to rewrite DEFAULT_PROVIDERS / firepickCMSProviders).'
+  );
+  process.exit(0);
+}
 
 if (!active.length) {
   console.error('No passing providers — refusing to rewrite DEFAULT_PROVIDERS');
@@ -330,13 +370,3 @@ for (const cmsPath of CMS_JS_PATHS) {
 }
 rewriteAppModelProviders(APP_MODEL_PATH, active);
 console.log(`Updated firepickCMSProviders → ${path.relative(root, APP_MODEL_PATH)}`);
-
-console.log(`Passed ${whitelist.length}/${results.length}; active pool ${active.length}`);
-for (const w of active) {
-  console.log(
-    `  ★ ${w.key} ${w.name} score=${Math.round(w.score)} list=${w.listMs}ms hits=${w.hitCount}`
-  );
-}
-for (const f of report.failures) {
-  console.log(`  ✗ ${f.key} list=${f.listOk} search=${f.searchable} ${f.listError || ''}`);
-}

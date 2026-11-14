@@ -12,7 +12,6 @@ struct DetailView: View {
   @State private var resolvingEpisodeID: Episode.ID?
   @State private var playbackError: String?
   @State private var showingSourcePicker = false
-  @State private var showingSourceStationPicker = false
   @State private var selectedFlag: String?
   @State private var reverseEpisodes = false
   /// 更多：展开导演 / 演员 / 简介（默认隐藏）。
@@ -24,11 +23,21 @@ struct DetailView: View {
   @State private var orderedPlayableStations: [AppModel.CollectionStation]?
   /// Stations dropped after unplayable / stuck — survives until probe finishes.
   @State private var droppedProviderKeys: Set<String> = []
+  /// One soft recycle when every station was dropped — avoids sticky「暂无可用」.
+  @State private var didRecyclePlayableStations = false
+  /// One background 测速淘金 when the playable pool is exhausted.
+  @State private var didSilentRefineStations = false
   /// User picked 来源 manually — skip auto optimal until stuck / episode change.
   @State private var userLockedSource = false
+  /// User scrubbed / mid-watch — stop silent 换站 thrashing.
+  @State private var playbackSettled = false
   @State private var lastPlaybackTime: Double = 0
   @State private var sourceSwitchHandoff: (position: Double, episodeName: String?)?
   @State private var isSwitchingSource = false
+  /// Bumped before silent 换站 network work so PlayerView can freeze the live frame first.
+  @State private var silentHandoffPulse = 0
+  /// Hold 当前来源 label during seamless handoff so the chip doesn't flash a new站名.
+  @State private var frozenSourceLabel: String?
   /// Keep 选集 highlight stable across source switches (episode `value` changes per站).
   @State private var focusEpisodeName: String?
   /// Bumped on each play() so rapid 切集 only applies the latest resolve.
@@ -123,6 +132,9 @@ struct DetailView: View {
     .onDisappear {
       // Returning from detail/player can leave the tab bar without its material.
       TabBarChrome.restore()
+      // Drop the playback binding so a sticky navigationDestination cannot keep
+      // a live PlayerView (and audio) after popping back to 最近观看/搜索.
+      playback = nil
     }
     .alert(
       "无法开始播放",
@@ -167,21 +179,27 @@ struct DetailView: View {
         vodId: currentItem.vodId
       )
       droppedProviderKeys = []
+      didRecyclePlayableStations = false
+      didSilentRefineStations = false
+      playbackSettled = false
       orderedPlayableStations = nil
-      // Station probe must not block first play — movies should start in seconds.
-      async let stationsReady: Void = preparePlayableStationsIfNeeded()
+      // Seed from 采集站管理 current best pool immediately — don't wait on re-probe.
+      seedPlayableStationsFromBestPool()
+      async let bestThenStations: Void = refreshBestStationsAndUpgrade()
       await model.loadDetail(currentItem)
       if let name = focusEpisodeName, let match = matchEpisode(named: name) {
         selectedFlag = match.line.name
       } else if selectedFlag == nil || !lines.contains(where: { $0.name == selectedFlag }) {
         selectedFlag = lines.first?.name
       }
+      // Prefer the management-page best node for first paint when different.
       if playback == nil, !lines.isEmpty {
-        await playPrimary()
+        let started = await autoSelectOptimalSourceIfNeeded()
+        if !started {
+          await playPrimary()
+        }
       }
-      await stationsReady
-      // Upgrade to faster 来源 only while still early / buffering.
-      _ = await autoSelectOptimalSourceIfNeeded()
+      await bestThenStations
     }
     .onChange(of: selectedFlag) { oldFlag, flag in
       guard let flag else { return }
@@ -245,14 +263,24 @@ struct DetailView: View {
           }
         },
         onPlaybackTimeChange: { time in
+          // Large jump ⇒ user scrubbed — lock station so silent 测速 can't reset progress.
+          if lastPlaybackTime > 2, abs(time - lastPlaybackTime) > 12 {
+            playbackSettled = true
+            userLockedSource = true
+          }
+          if time >= 5 { playbackSettled = true }
           lastPlaybackTime = time
         },
         onUnplayable: {
           guard let key = playbackProviderKey else { return false }
-          // Stuck: unlock manual choice and resume auto optimal failover.
+          // Mid-watch / after scrub: never cascade 换站 (was black + progress→0).
+          if playbackSettled || lastPlaybackTime >= 8 || userLockedSource {
+            return false
+          }
           userLockedSource = false
           return failoverToNextStation(from: key)
-        }
+        },
+        silentHandoffPulse: silentHandoffPulse
       )
       // Stable within one DetailView — soft-reload keeps progress chrome on 来源 switch.
       .id("firepick-player")
@@ -478,6 +506,8 @@ struct DetailView: View {
     "ruyi": "如意",
     "haohua": "豪华",
     "yzzy": "优质",
+    "zy1080": "1080",
+    "hongniu3": "红牛备",
     "huya": "虎牙",
     "wolong": "卧龙",
     "maotai": "茅台",
@@ -513,19 +543,45 @@ struct DetailView: View {
     return hasDirector || hasActor || hasContent
   }
 
+  /// Instant seed: 采集站管理里已经排好的最佳节点顺序（不等待重新测速）.
+  private func seedPlayableStationsFromBestPool() {
+    guard orderedPlayableStations == nil else { return }
+    let all = model.collectionStations
+    orderedPlayableStations = all.filter {
+      !droppedProviderKeys.contains(stationProviderKey($0))
+    }
+  }
+
+  /// Background 获取最佳线路；仅在开播很早且用户未拖动时才静默换站。
+  private func refreshBestStationsAndUpgrade() async {
+    seedPlayableStationsFromBestPool()
+    // Rank by cached latency + title hits; skip if user already scrubbed / watching.
+    if !playbackSettled, lastPlaybackTime < 5 {
+      await preparePlayableStationsIfNeeded(forceRebuild: true)
+      _ = await autoSelectOptimalSourceIfNeeded()
+    }
+    guard model.configuration.sites.contains(where: { $0.key == "firepick_cms" }) else {
+      return
+    }
+    // Silent re-detect in background — updates pool for next entry; upgrade only if still early.
+    await model.ensureBestCMSLinesOnEnter(maxAge: 10 * 60)
+    guard !playbackSettled, !userLockedSource, lastPlaybackTime < 5 else { return }
+    await preparePlayableStationsIfNeeded(forceRebuild: true)
+    _ = await autoSelectOptimalSourceIfNeeded()
+  }
+
   /// Probe title hits + latency + episode completeness, then freeze playable list
   /// (完整最新集/期优先，同档再按延迟：最快的为默认最优).
-  private func preparePlayableStationsIfNeeded() async {
-    guard orderedPlayableStations == nil else { return }
+  private func preparePlayableStationsIfNeeded(forceRebuild: Bool = false) async {
+    if !forceRebuild, orderedPlayableStations != nil { return }
     let all = model.collectionStations
     guard all.count > 1 else {
       orderedPlayableStations = all
       return
     }
     async let keysTask = model.providerKeysHavingTitle(detail.name)
-    // Reuse cached latency badges when already probed (avoid full pool re-measure).
-    let needsLatency = !model.didProbeCollectionStations
-      || model.collectionStationLatencyMS.isEmpty
+    // Prefer cached badges from 获取最佳线路; only ping if still empty.
+    let needsLatency = model.collectionStationLatencyMS.isEmpty
     async let latencyTask: Void = {
       if needsLatency {
         await model.probeActivePoolLatenciesOnly()
@@ -619,13 +675,16 @@ struct DetailView: View {
     return counts
   }
 
-  /// Auto-pick the fastest playable station. Skipped while the user locked a manual pick.
+  /// Auto-pick the fastest playable station while still loading / early playback.
   @discardableResult
   private func autoSelectOptimalSourceIfNeeded(force: Bool = false) async -> Bool {
     if userLockedSource && !force { return false }
-    if force { userLockedSource = false }
-    // First paint plays immediately; only upgrade while still early / buffering.
-    if !force, playback != nil, lastPlaybackTime >= 2.5 {
+    if force {
+      userLockedSource = false
+      playbackSettled = false
+    }
+    // Once watching / scrubbed — never silent-upgrade (resets progress + black loading).
+    if !force, playbackSettled || (playback != nil && lastPlaybackTime >= 5) {
       return false
     }
     guard let stations = orderedPlayableStations, let best = stations.first else { return false }
@@ -637,6 +696,11 @@ struct DetailView: View {
 
   @discardableResult
   private func failoverToNextStation(from failedKey: String) -> Bool {
+    // Mid-watch: don't cascade stations after a stall / seek.
+    if playbackSettled || lastPlaybackTime >= 8 {
+      dropUnplayableStation(failedKey)
+      return false
+    }
     userLockedSource = false
     dropUnplayableStation(failedKey)
     if let next = orderedPlayableStations?.first(where: {
@@ -662,7 +726,57 @@ struct DetailView: View {
       }
       return true
     }
+    // All chips dropped — recycle once so UI is not stuck on「暂无可用」and playback can retry.
+    if !didRecyclePlayableStations {
+      didRecyclePlayableStations = true
+      droppedProviderKeys = [failedKey]
+      orderedPlayableStations = nil
+      Task {
+        await preparePlayableStationsIfNeeded()
+        if let next = orderedPlayableStations?.first(where: {
+          stationProviderKey($0) != failedKey
+        }) ?? orderedPlayableStations?.first {
+          await switchCollectionStation(
+            stationProviderKey(next),
+            silent: true,
+            userInitiated: false
+          )
+          return
+        }
+        // Still empty — silently re-probe CMS pool for a fresher best line.
+        await silentlyRefineBestStations(excluding: failedKey)
+      }
+      return true
+    }
+    if !didSilentRefineStations {
+      Task { await silentlyRefineBestStations(excluding: failedKey) }
+      return true
+    }
     return false
+  }
+
+  /// Background 测速淘金 + rebuild playable order, then switch to the new best station.
+  private func silentlyRefineBestStations(excluding failedKey: String) async {
+    guard !didSilentRefineStations else { return }
+    didSilentRefineStations = true
+    // Already mid-watch — refresh badges only, don't interrupt playback.
+    if playbackSettled || lastPlaybackTime >= 8 {
+      await model.probeCollectionStationLatencies()
+      return
+    }
+    await model.probeCollectionStationLatencies()
+    droppedProviderKeys = [failedKey]
+    await preparePlayableStationsIfNeeded(forceRebuild: true)
+    guard !playbackSettled, lastPlaybackTime < 8 else { return }
+    guard let next = orderedPlayableStations?.first(where: {
+      stationProviderKey($0) != failedKey
+    }) ?? orderedPlayableStations?.first
+    else { return }
+    await switchCollectionStation(
+      stationProviderKey(next),
+      silent: true,
+      userInitiated: false
+    )
   }
 
   private func dropUnplayableStation(_ providerKey: String) {
@@ -672,111 +786,47 @@ struct DetailView: View {
     orderedPlayableStations = stations
   }
 
-  /// 与「选集」左对齐：标签 + 浅胶囊标识。
+  /// 只读：展示当前站名；更快站在后台测完后静默切换，不提供手动点选。
   private var sourceStatusRow: some View {
     HStack(alignment: .center, spacing: 8) {
       Text("当前来源")
         .font(.subheadline)
         .foregroundStyle(.secondary)
-      if canChooseSourceStation {
-        Button {
-          showingSourceStationPicker = true
-        } label: {
-          sourceStatusCapsule(showsChevron: true)
-        }
-        .buttonStyle(.plain)
-        .sheet(isPresented: $showingSourceStationPicker) {
-          sourceStationPickerSheet
-        }
-      } else {
-        sourceStatusCapsule(showsChevron: false)
-      }
+      Text(sourceStatusValue)
+        .font(.subheadline.weight(.medium))
+        .foregroundStyle(.primary)
+        .lineLimit(1)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(Color.secondary.opacity(0.10), in: Capsule())
       Spacer(minLength: 0)
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel("当前来源 \(sourceStatusValue)")
   }
 
-  private var canChooseSourceStation: Bool {
-    (orderedPlayableStations?.count ?? 0) > 1
-  }
-
-  private func sourceStatusCapsule(showsChevron: Bool) -> some View {
-    HStack(spacing: 5) {
-      Text(sourceStatusValue)
-        .font(.subheadline.weight(.medium))
-        .foregroundStyle(.primary)
-        .lineLimit(1)
-      if showsChevron {
-        Image(systemName: "chevron.up.chevron.down")
-          .font(.caption2.weight(.semibold))
-          .foregroundStyle(.secondary)
-      }
-    }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 4)
-    .background(Color.secondary.opacity(0.10), in: Capsule())
-    .contentShape(Capsule())
-  }
-
-  private var sourceStationPickerSheet: some View {
-    let stations = orderedPlayableStations ?? []
-    return NavigationStack {
-      List {
-        ForEach(stations) { station in
-          let providerKey = stationProviderKey(station)
-          let selected = playbackProviderKey == providerKey
-          Button {
-            showingSourceStationPicker = false
-            guard !selected else { return }
-            userLockedSource = true
-            Task {
-              await switchCollectionStation(
-                providerKey,
-                silent: true,
-                userInitiated: true
-              )
-            }
-          } label: {
-            HStack(spacing: 12) {
-              Text(station.name)
-                .foregroundStyle(.primary)
-              Spacer(minLength: 8)
-              if let ms = model.collectionStationLatencyMS[station.id] {
-                Text("\(ms)ms")
-                  .font(.caption.monospacedDigit())
-                  .foregroundStyle(.secondary)
-              }
-              Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(selected ? Color.orange : Color.secondary.opacity(0.35))
-            }
-            .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-        }
-      }
-      .listStyle(.plain)
-      .navigationTitle("切换来源")
-      .navigationBarTitleDisplayMode(.inline)
-    }
-    .presentationDetents([.height(min(520, 72 + CGFloat(max(stations.count, 1)) * 52))])
-    .presentationDragIndicator(.visible)
-  }
-
   private var sourceStatusValue: String {
+    // Seamless 换站: keep the old chip until handoff finishes so users don't "feel" the swap.
+    if let frozenSourceLabel, !frozenSourceLabel.isEmpty {
+      return frozenSourceLabel
+    }
     if model.collectionStations.count > 1 {
-      if let stations = orderedPlayableStations, stations.isEmpty {
-        return "暂无可用"
-      }
-      if let stations = orderedPlayableStations {
+      if let stations = orderedPlayableStations, !stations.isEmpty {
         let selected =
           stations.first(where: { stationProviderKey($0) == playbackProviderKey })
           ?? stations.first
-        let selectedName = selected?.name ?? playbackSourceName
-        return userLockedSource ? selectedName : "最优·\(selectedName)"
+        return selected?.name ?? playbackSourceName
       }
-      // Probe still running — show current station, not a stuck「加载中」.
-      return playbackSourceName
+      // Empty pool / recycle / silent 淘金 — keep the last known站名;「暂无可用」only when
+      // recycle+refine both finished and still nothing.
+      let name = playbackSourceName.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !name.isEmpty { return name }
+      if orderedPlayableStations?.isEmpty == true,
+        didRecyclePlayableStations, didSilentRefineStations
+      {
+        return "暂无可用"
+      }
+      return name.isEmpty ? "拾萤精选" : name
     }
     if model.onDeviceSites.count > 1 {
       return model.selectedSite?.name ?? "拾萤精选"
@@ -1108,7 +1158,7 @@ struct DetailView: View {
 
   private func switchSource(to site: SiteConfiguration) async {
     let previousSite = model.selectedSite
-    beginSourceHandoff()
+    beginSourceHandoff(seamless: playback != nil)
     await model.selectSite(site)
     do {
       guard let replacement = try await model.findItem(named: detail.name, in: site) else {
@@ -1119,7 +1169,7 @@ struct DetailView: View {
         playbackError = "「\(site.name)」没有找到《\(detail.name)》"
         return
       }
-      await applyReplacement(replacement)
+      await applyReplacement(replacement, seamless: lastPlaybackTime > 1)
     } catch {
       if let previousSite {
         await model.selectSite(previousSite)
@@ -1141,7 +1191,7 @@ struct DetailView: View {
       // Manual pick: honor this station; don't bounce to auto-optimal afterward.
       userLockedSource = true
     }
-    beginSourceHandoff()
+    beginSourceHandoff(seamless: silent && playback != nil)
     do {
       guard
         let replacement = try await model.findItem(
@@ -1164,7 +1214,7 @@ struct DetailView: View {
         }
         return
       }
-      await applyReplacement(replacement)
+      await applyReplacement(replacement, seamless: silent && lastPlaybackTime > 1)
     } catch {
       clearSourceHandoff()
       if silent, !userInitiated, failoverToNextStation(from: providerKey) {
@@ -1179,29 +1229,38 @@ struct DetailView: View {
     }
   }
 
-  private func beginSourceHandoff() {
+  private func beginSourceHandoff(seamless: Bool = false) {
     isSwitchingSource = true
     seedFocusFromHistory()
     let episodeName = playbackEpisode?.name ?? focusEpisodeName ?? titleHistoryHint?.name
     if let episodeName { focusEpisodeName = episodeName }
+    // Prefer live clock; never fall back to 0 when we already had progress.
+    let live = max(lastPlaybackTime, sourceSwitchHandoff?.position ?? 0)
     let position =
-      lastPlaybackTime > 1
-      ? lastPlaybackTime
+      live > 1
+      ? live
       : (historyEntry?.position ?? titleHistoryHint?.position ?? 0)
     sourceSwitchHandoff = (position, episodeName)
+    if seamless {
+      // Freeze live frame + 来源 chip before network work so the swap feels invisible.
+      frozenSourceLabel = sourceStatusValue
+      silentHandoffPulse += 1
+    }
   }
 
   private func clearSourceHandoff() {
     sourceSwitchHandoff = nil
     isSwitchingSource = false
+    frozenSourceLabel = nil
   }
 
-  private func applyReplacement(_ replacement: MediaItem) async {
+  private func applyReplacement(_ replacement: MediaItem, seamless: Bool = false) async {
     // Keep 选集 highlight + handoff; only swap the stream once new detail is ready.
+    // Do not clear `playback` — PlayerView soft-reloads so the picture stays up.
     let keepEpisodeName = sourceSwitchHandoff?.episodeName ?? focusEpisodeName
     showingEpisodeDrawer = false
-    currentItem = replacement
     await model.loadDetail(replacement)
+    currentItem = replacement
     if let keepEpisodeName, let match = matchEpisode(named: keepEpisodeName) {
       selectedFlag = match.line.name
       focusEpisodeName = match.episode.name
@@ -1213,6 +1272,15 @@ struct DetailView: View {
       await playPrimary()
     }
     isSwitchingSource = false
+    if seamless {
+      // Reveal new 来源 after the stream has had a beat to settle.
+      Task { @MainActor in
+        try? await Task.sleep(for: .milliseconds(1200))
+        frozenSourceLabel = nil
+      }
+    } else {
+      frozenSourceLabel = nil
+    }
   }
 
   private func playPrimary() async {

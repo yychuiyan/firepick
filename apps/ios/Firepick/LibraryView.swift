@@ -18,6 +18,8 @@ struct LibraryView: View {
   @Environment(AppModel.self) private var model
   let mode: Mode
   @State private var selectedItem: MediaItem?
+  /// Kept across pop so destination does not become EmptyView mid-transition (闪白).
+  @State private var detailDestination: MediaItem?
   @State private var showingClearConfirmation = false
   @State private var isClearing = false
 
@@ -28,10 +30,11 @@ struct LibraryView: View {
 
   var body: some View {
     posterGrid
-    .background(FirepickBackdrop())
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(Color(.systemBackground).ignoresSafeArea())
     .overlay {
-      if mode == .history && model.history.isEmpty
-        || mode == .favorites && model.favorites.isEmpty
+      if mode == .history && model.libraryHistoryPrograms.isEmpty
+        || mode == .favorites && model.libraryFavoritePrograms.isEmpty
       {
         ContentUnavailableView(
           emptyTitle,
@@ -42,6 +45,8 @@ struct LibraryView: View {
     }
     .navigationTitle(mode.title)
     .toolbar(.visible, for: .navigationBar)
+    .toolbarBackground(.visible, for: .navigationBar)
+    .toolbarBackground(Color(.systemBackground), for: .navigationBar)
     .toolbar {
       if canClear {
         ToolbarItem(placement: .topBarTrailing) {
@@ -63,30 +68,54 @@ struct LibraryView: View {
     } message: {
       Text(clearMessage)
     }
+    .task(id: mode) {
+      // Warm covers immediately — favorites/history pics are often cold CDN URLs.
+      let items: [MediaItem] = {
+        switch mode {
+        case .favorites:
+          return model.libraryFavoritePrograms.map { model.libraryDisplayItem(from: $0.item) }
+        case .history:
+          return model.libraryHistoryPrograms.map { model.libraryDisplayItem(from: $0.item) }
+        }
+      }()
+      PosterPrefetch.warm(items: items, limit: 24)
+    }
     .navigationDestination(
       isPresented: Binding(
         get: { selectedItem != nil },
-        set: { if !$0 { selectedItem = nil } }
+        set: { presented in
+          if !presented { selectedItem = nil }
+        }
       )
     ) {
-      if let selectedItem {
-        DetailView(item: selectedItem)
+      // Never clear detailDestination here — empty destination paints white during pop.
+      if let detailDestination {
+        DetailView(item: detailDestination)
+      } else {
+        FirepickBackdrop()
       }
     }
+  }
+
+  private func openDetail(_ item: MediaItem) {
+    detailDestination = item
+    selectedItem = item
   }
 
   private var posterGrid: some View {
     ScrollView {
       LazyVGrid(columns: columns, spacing: 12) {
         if mode == .history {
-          ForEach(model.history) { entry in
+          // One card per programme — not per 线路 / 每一集.
+          ForEach(model.libraryHistoryPrograms) { entry in
+            let display = model.libraryDisplayItem(from: entry.item)
             Button {
               // Same Detail + inline player as browse — not RootView fullScreenCover.
               model.detailResult = nil
-              selectedItem = entry.item
+              openDetail(entry.item)
             } label: {
               MediaCardView(
-                item: entry.item,
+                item: display,
                 progress: entry.duration > 0
                   ? min(1, max(0, entry.position / entry.duration))
                   : nil,
@@ -97,7 +126,7 @@ struct LibraryView: View {
             .contextMenu {
               Button("打开详情") {
                 model.detailResult = nil
-                selectedItem = entry.item
+                openDetail(entry.item)
               }
               Button("删除", role: .destructive) {
                 Task { await model.removeHistory(entry) }
@@ -105,12 +134,13 @@ struct LibraryView: View {
             }
           }
         } else {
-          ForEach(model.favorites) { entry in
+          ForEach(model.libraryFavoritePrograms) { entry in
+            let display = model.libraryDisplayItem(from: entry.item)
             Button {
               model.detailResult = nil
-              selectedItem = entry.item
+              openDetail(entry.item)
             } label: {
-              MediaCardView(item: entry.item)
+              MediaCardView(item: display)
             }
             .buttonStyle(.plain)
             .contextMenu {
@@ -127,8 +157,8 @@ struct LibraryView: View {
 
   private var canClear: Bool {
     switch mode {
-    case .favorites: !model.favorites.isEmpty
-    case .history: !model.history.isEmpty
+    case .favorites: !model.libraryFavoritePrograms.isEmpty
+    case .history: !model.libraryHistoryPrograms.isEmpty
     }
   }
 

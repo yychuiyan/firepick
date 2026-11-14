@@ -3,17 +3,19 @@ import { Spider, net } from 'catvod';
 // Active pool from scripts/probe-cms-providers.mjs (re-run when stale).
 // Ranked by search breadth + latency; same-catalog mirrors collapsed to one host.
 // Faster hosts first so collectProviderLists fills the first screen sooner.
+// Prefer hosts with healthy cover CDNs first (jisu/guangsu/haohua/bfzy); dead
+ // cover CDNs (ffzy/fffgood, zuid/zuidapic, maoyan) stay later for playback only.
 const DEFAULT_PROVIDERS = [
-  { key: 'zuid', name: '最大', api: 'https://api.zuidapi.com/api.php/provide/vod' },
-  { key: 'lzcaiji', name: '量子', api: 'https://cj.lzcaiji.com/api.php/provide/vod' },
-  { key: 'haohua', name: '豪华', api: 'https://hhzyapi.com/api.php/provide/vod' },
   { key: 'maoyan', name: '猫眼', api: 'https://api.maoyanapi.top/api.php/provide/vod' },
-  { key: 'guangsu', name: '光速', api: 'https://api.guangsuapi.com/api.php/provide/vod' },
-  { key: 'subo', name: '速播', api: 'https://subocaiji.com/api.php/provide/vod' },
-  { key: 'jisu', name: '极速', api: 'https://jszyapi.com/api.php/provide/vod' },
-  { key: 'lzi', name: '量子', api: 'https://cj.lziapi.com/api.php/provide/vod' },
   { key: 'ruyi', name: '如意', api: 'https://cj.rycjapi.com/api.php/provide/vod' },
-  { key: 'ffzy', name: '非凡', api: 'https://api.ffzyapi.com/api.php/provide/vod' },
+  { key: 'haohua', name: '豪华', api: 'https://hhzyapi.com/api.php/provide/vod' },
+  { key: 'subo', name: '速播', api: 'https://subocaiji.com/api.php/provide/vod' },
+  { key: 'huya', name: '虎牙', api: 'https://www.huyaapi.com/api.php/provide/vod' },
+  { key: 'jinying', name: '金鹰', api: 'https://jyzyapi.com/provide/vod/from/jinyingyun/at/json' },
+  { key: 'lzi', name: '量子', api: 'https://cj.lziapi.com/api.php/provide/vod' },
+  { key: 'lzcaiji', name: '量子', api: 'https://cj.lzcaiji.com/api.php/provide/vod' },
+  { key: 'ffzy_cj', name: '非凡', api: 'https://cj.ffzyapi.com/api.php/provide/vod' },
+  { key: 'zuid_me', name: '最大', api: 'https://zuidazy.me/api.php/provide/vod' },
 ];
 
 const MENU = [
@@ -452,19 +454,98 @@ const DOUBAN_CACHE_MS = 10 * 60 * 1000;
 
 async function cachedDoubanEntries(bucket, count) {
   const now = Date.now();
+  const cached = doubanEntryCache.byBucket[bucket];
   if (
     doubanEntryCache.at
     && now - doubanEntryCache.at < DOUBAN_CACHE_MS
-    && doubanEntryCache.byBucket[bucket]
+    && cached
+    && cached.length
   ) {
-    return doubanEntryCache.byBucket[bucket];
+    return cached;
   }
-  const entries = await fetchDoubanHotEntries(bucket, count);
+  let entries = [];
+  try {
+    entries = await fetchDoubanHotEntries(bucket, count);
+  } catch (e) {
+    entries = [];
+  }
   if (entries.length) {
     doubanEntryCache.at = now;
     doubanEntryCache.byBucket[bucket] = entries;
+    return entries;
   }
-  return entries;
+  // Douban hung — keep last good chart past TTL (stale-while-revalidate).
+  if (cached && cached.length) return cached;
+  return [];
+}
+
+function staleDoubanResolved(bucket) {
+  const cached = doubanResolveCache.byBucket[bucket];
+  return cached && cached.length >= 4 ? cached.slice() : null;
+}
+
+/// Recommend: when Douban hotest is down, stitch last-good 剧/影/综/漫 charts.
+function stitchStaleCategoryCharts() {
+  const parts = ['tv', 'movie', 'variety', 'anime'];
+  const lists = parts.map(function (key) {
+    return doubanResolveCache.byBucket[key] || [];
+  });
+  const max = Math.max.apply(
+    null,
+    lists.map(function (rows) {
+      return rows.length;
+    }).concat([0])
+  );
+  if (!max) return null;
+  const merged = [];
+  const used = {};
+  for (let i = 0; i < max && merged.length < FIRST_SCREEN * 2; i++) {
+    for (let j = 0; j < lists.length; j++) {
+      const item = lists[j][i];
+      if (!item) continue;
+      const key = normalizeTitle(item.vod_name);
+      if (!key || used[key]) continue;
+      used[key] = true;
+      merged.push(item);
+    }
+  }
+  return merged.length >= 4 ? merged : null;
+}
+
+function roughContentBucket(item) {
+  const blob = [
+    item && item.type_name,
+    item && item.vod_class,
+    item && item.vod_tag,
+    item && item.vod_name,
+  ].join('');
+  if (/综艺|晚会|脱口秀|真人秀/.test(blob)) return 'variety';
+  if (/动漫|动画|国漫|日漫|番剧/.test(blob)) return 'anime';
+  if (/电影|影片|院线|剧场版/.test(blob)) return 'movie';
+  return 'tv';
+}
+
+/// Mix types so CMS-only 推荐 is not one dump flood.
+function interleaveByRoughBucket(list) {
+  const buckets = { tv: [], movie: [], variety: [], anime: [] };
+  for (let i = 0; i < (list || []).length; i++) {
+    const item = list[i];
+    buckets[roughContentBucket(item)].push(item);
+  }
+  const out = [];
+  const max = Math.max(
+    buckets.tv.length,
+    buckets.movie.length,
+    buckets.variety.length,
+    buckets.anime.length
+  );
+  for (let i = 0; i < max; i++) {
+    if (buckets.tv[i]) out.push(buckets.tv[i]);
+    if (buckets.movie[i]) out.push(buckets.movie[i]);
+    if (buckets.variety[i]) out.push(buckets.variety[i]);
+    if (buckets.anime[i]) out.push(buckets.anime[i]);
+  }
+  return out.length ? out : list || [];
 }
 
 async function resolveDoubanHotList(bucket, providers, accept, options) {
@@ -477,14 +558,17 @@ async function resolveDoubanHotList(bucket, providers, accept, options) {
   ) {
     return doubanResolveCache.byBucket[bucket].slice();
   }
-  // Cold-start home uses CMS immediately. Douban matching resumes when the
-  // user opens a category or when a later request reaches this helper.
-  if (options && options.allowNetwork === false) return null;
+  // Cold-start / cache-only: still serve last good resolved list.
+  if (options && options.allowNetwork === false) {
+    return staleDoubanResolved(bucket);
+  }
   // Wall-clock budget (JSC setTimeout is blocking — do not race with it).
   const budgetMs = options && options.budgetMs != null ? options.budgetMs : 3200;
   const deadline = now + budgetMs;
   const entries = await cachedDoubanEntries(bucket, 8);
-  if (!entries.length) return null;
+  if (!entries.length) {
+    return staleDoubanResolved(bucket);
+  }
   const out = [];
   const used = {};
   for (let i = 0; i < entries.length; i += 4) {
@@ -508,7 +592,11 @@ async function resolveDoubanHotList(bucket, providers, accept, options) {
   if (out.length >= 4) {
     doubanResolveCache.at = Date.now();
     doubanResolveCache.byBucket[bucket] = out.slice();
+    return out;
   }
+  // Thin / timed-out resolve — prefer last good over CMS junk.
+  const stale = staleDoubanResolved(bucket);
+  if (stale) return stale;
   return out.length ? out : null;
 }
 
@@ -520,25 +608,74 @@ function stableHotFallback(list) {
   for (let i = 0; i < deduped.length; i++) {
     const item = deduped[i];
     if (looksShortDrama(item)) continue;
+    if (looksFranchiseDump(item)) continue;
     soft.push(item);
     const rank = majorPlatformRank(item);
     const year = Number(String(item.vod_year || '').slice(0, 4));
     const hasCast = String(item.vod_actor || '').trim().length > 1;
     const remarks = String(item.vod_remarks || item.vod_note || '');
     const updating = /更新/.test(remarks);
-    if (rank >= 2 || (hasCast && Number.isFinite(year) && year >= 2020) || (updating && hasCast)) {
+    const score = parseScore(item.vod_douban_score) || parseScore(item.vod_score);
+    if (
+      rank >= 2
+      || score >= 6
+      || (hasCast && Number.isFinite(year) && year >= 2020)
+      || (updating && hasCast)
+    ) {
       strong.push(item);
     }
   }
   // Always try to fill a screen — strong-only was leaving ~6–8 sparse rows.
-  let pool = strong.length >= 12 ? strong : soft.concat(strong);
-  if (pool.length < 12) {
+  let pool = strong.length >= FIRST_SCREEN ? strong : soft.concat(strong);
+  if (pool.length < FIRST_SCREEN) {
+    pool = deduped.filter(function (item) {
+      return !looksShortDrama(item) && !looksFranchiseDump(item);
+    });
+  }
+  if (!pool.length) {
     pool = deduped.filter(function (item) {
       return !looksShortDrama(item);
     });
   }
   if (!pool.length) pool = deduped;
-  return sortByHotRecent(dedupeByTitle(pool));
+  return diversifyBySeriesFamily(
+    diversifyByProvider(sortByHotRecent(dedupeByTitle(pool)), 3),
+    1
+  );
+}
+
+/// CMS-only compensation when Douban is down and no stale chart exists.
+function compensatedCMSFallback(bucket, list) {
+  let cleaned = stableHotFallback(list);
+  const preferred = [];
+  const rest = [];
+  for (let i = 0; i < cleaned.length; i++) {
+    const item = cleaned[i];
+    const score = parseScore(item.vod_douban_score) || parseScore(item.vod_score);
+    const rank = majorPlatformRank(item);
+    const hasCast = String(item.vod_actor || '').trim().length > 1;
+    const year = Number(String(item.vod_year || '').slice(0, 4));
+    if (
+      score >= 6
+      || rank >= 2
+      || (hasCast && Number.isFinite(year) && year >= 2022)
+    ) {
+      preferred.push(item);
+    } else {
+      rest.push(item);
+    }
+  }
+  if (preferred.length >= Math.min(8, FIRST_SCREEN)) {
+    cleaned = preferred.concat(rest);
+  }
+  cleaned = diversifyBySeriesFamily(
+    diversifyByProvider(sortByHotRecent(cleaned), 2),
+    1
+  );
+  if (bucket === 'recommend') {
+    cleaned = interleaveByRoughBucket(cleaned);
+  }
+  return cleaned;
 }
 
 /// CMS first screen, then Douban order on top when chart resolves.
@@ -561,8 +698,10 @@ async function doubanOrCMSList(bucket, providers, accept, cmsFetcher, allowNetwo
   const cmsList = settled[0];
   let douban = settled[1];
   if (!douban || douban.length < 4) {
-    const cached = doubanResolveCache.byBucket[bucket];
-    if (cached && cached.length >= 4) douban = cached.slice();
+    douban = staleDoubanResolved(bucket);
+  }
+  if ((!douban || douban.length < 4) && bucket === 'recommend') {
+    douban = stitchStaleCategoryCharts();
   }
   const cms = stableHotFallback(cmsList || []);
   if (douban && douban.length >= 4) {
@@ -580,9 +719,12 @@ async function doubanOrCMSList(bucket, providers, accept, cmsFetcher, allowNetwo
       used[key] = true;
       merged.push(cms[i]);
     }
-    return { list: merged, fromDouban: true };
+    return { list: preferHealthyPics(healPicsByTitle(merged)), fromDouban: true };
   }
-  return { list: cms, fromDouban: false };
+  return {
+    list: preferHealthyPics(healPicsByTitle(compensatedCMSFallback(bucket, cmsList || []))),
+    fromDouban: false,
+  };
 }
 
 /// True when the user narrowed or re-sorted — keep that order (no platform shuffle).
@@ -602,7 +744,8 @@ const REQUEST_TIMEOUT_MS = 12000;
 // First-paint list fetch — don't let one slow host hold the grid for 12s.
 const FIRST_PAINT_TIMEOUT_MS = 3500;
 // Smaller first screen → stop waiting on slow CMS hosts sooner.
-const FIRST_SCREEN = 16;
+// First paint: 12 cards (~4 rows × 3). Smaller grids load covers faster.
+const FIRST_SCREEN = 12;
 const ADULT_PATTERN = /伦理|福利|里番|无码|有码|SWAG|色情|成人|黄游|性爱|口交|三级片/i;
 
 function encode(value) {
@@ -796,6 +939,46 @@ function looksAdult(item) {
 }
 
 /// 短剧 / 竖屏微短剧 — keep out of 电视剧 & 推荐 (they flood CMS “最新”).
+/// Local franchise dumps (戏说台湾 / 同一【系列】刷屏) — keep ≤1 on 推荐.
+function looksFranchiseDump(item) {
+  if (!item) return false;
+  const name = String(item.vod_name || '');
+  if (/戏说台湾|台灣奇案|台湾奇案|民间剧场|民間劇場/.test(name)) return true;
+  // 【xxx】title pattern flooding CMS “最新” with dozens of near-identical cards.
+  if (/^[【\[][^】\]]{2,12}[】\]]/.test(name.trim()) && !/独播|腾讯|爱奇艺|优酷|芒果|B站/.test(name)) {
+    const remarks = String(item.vod_remarks || item.vod_note || '');
+    if (/已完结|全集/.test(remarks) && !/更新/.test(remarks)) return true;
+  }
+  return false;
+}
+
+function seriesFamilyKey(name) {
+  const raw = String(name || '').trim();
+  const bracket = raw.match(/^[【\[]([^】\]]+)[】\]]/);
+  if (bracket) return normalizeTitle(bracket[1]);
+  return normalizeTitle(raw).slice(0, 8);
+}
+
+/// Cap near-identical franchise cards so one dump cannot fill the grid.
+function diversifyBySeriesFamily(list, perFamily) {
+  const cap = Math.max(1, perFamily || 1);
+  const counts = {};
+  const out = [];
+  for (let i = 0; i < (list || []).length; i++) {
+    const item = list[i];
+    const key = seriesFamilyKey(item && item.vod_name);
+    if (!key) {
+      out.push(item);
+      continue;
+    }
+    counts[key] = counts[key] || 0;
+    if (counts[key] >= cap) continue;
+    counts[key] += 1;
+    out.push(item);
+  }
+  return out;
+}
+
 function looksShortDrama(item) {
   if (!item) return true;
   const typeBlob = [item.type_name, item.vod_class, item.vod_tag].join('');
@@ -862,13 +1045,15 @@ function mediaItem(provider, item) {
   if (looksAdult(item)) return null;
   item.vod_id = providerID(provider, item.vod_id);
   if (!item.vod_pic && item.vod_pic_thumb) item.vod_pic = item.vod_pic_thumb;
+  if (item.vod_pic) item.vod_pic = rewritePicURL(item.vod_pic);
   if (!item.vod_remarks && item.vod_note) item.vod_remarks = item.vod_note;
   return enrichScores(item);
 }
 
 function itemScore(item) {
   let score = majorPlatformRank(item) * 10;
-  if (item.vod_pic) score += 2;
+  // Prefer healthy cover CDNs so first-screen grids are not dominated by dead hosts.
+  score += picQuality(item.vod_pic) * 3;
   if (item.vod_remarks || item.vod_note) score += 1;
   if (String(item.vod_actor || '').trim()) score += 1;
   return score;
@@ -893,6 +1078,13 @@ function dedupeByTitle(list) {
       continue;
     }
     if (platformDelta < 0) continue;
+    const picDelta = picQuality(item.vod_pic) - picQuality(prev.vod_pic);
+    // A working cover beats a slightly newer row with a dead CDN.
+    if (picDelta >= 2) {
+      best.set(key, item);
+      continue;
+    }
+    if (picDelta <= -2) continue;
     const newer = recency(item) > recency(prev);
     const sameTimeBetterPic = recency(item) === recency(prev) && itemScore(item) > itemScore(prev);
     if (newer || sameTimeBetterPic) {
@@ -930,6 +1122,162 @@ function dedupeByProviderTitle(list) {
   return order.map(function (key) {
     return best.get(key);
   });
+}
+
+/// Some AppleCMS hosts ignore `wd` and dump a generic videolist — drop those.
+function matchesSearchQuery(item, key) {
+  const q = normalizeTitle(key);
+  if (!q) return true;
+  const name = normalizeTitle(item && item.vod_name);
+  if (name && name.indexOf(q) >= 0) return true;
+  const actor = normalizeTitle(item && item.vod_actor);
+  if (actor && actor.indexOf(q) >= 0) return true;
+  const director = normalizeTitle(item && item.vod_director);
+  if (director && director.indexOf(q) >= 0) return true;
+  return false;
+}
+
+/// Hosts that currently return SSL/reset/timeout failures for covers (measured 2026-11-14).
+function looksBrokenPicHost(pic) {
+  // Measured flaky/dead cover CDNs — demote so heal/preferHealthy can pick alternatives.
+  return /ok\.zuidapic\.com|fffgood\.com|xl\.xltupian\.com|maoyanimg\.top|p\.lztutu\.com|lztutu\.com/i.test(
+    String(pic || '')
+  );
+}
+
+/// Dead cover CDNs that share `/cover/<hash>` with healthy mirrors (速播→极速/光速).
+const COVER_PIC_MIRRORS = [
+  'img.jisuimage.com',
+  'img.guangsuimage.com',
+  'hhmage.com',
+];
+
+function rewritePicURL(pic) {
+  const text = String(pic || '').trim();
+  if (!text) return text;
+  const brokenHost =
+    /xl\.xltupian\.com|ok\.zuidapic\.com|fffgood\.com|maoyanimg\.top|lztutu\.com|ukzy|wujin|lzimg|tu\.jisu/i.test(
+      text
+    );
+  if (!brokenHost) return text;
+  // Only /cover/<hash> is shared across CMS mirrors. /upload/ hashes are
+  // source-specific and rewriting them produces a 404 on the mirror.
+  if (/\/cover\//i.test(text)) {
+    return text.replace(/https?:\/\/[^/]+/i, 'https://' + COVER_PIC_MIRRORS[0]);
+  }
+  return text;
+}
+
+function picQuality(pic) {
+  const text = String(pic || '').trim();
+  if (!text) return 0;
+  if (looksBrokenPicHost(text)) return 1;
+  if (/img\.jisuimage\.com|img\.guangsuimage\.com|hhmage\.com|p\.bfp|doubanio\.com/i.test(text)) {
+    return 4;
+  }
+  if (/^https?:\/\//i.test(text)) return 3;
+  return 2;
+}
+
+/// 剧版 / 重制版 / 真人版 share a cover family with the main title prefix.
+function coverFamilyKey(name) {
+  let key = normalizeTitle(name);
+  if (!key) return '';
+  key = key.replace(
+    /(?:真人版|剧版|重制版|重置版|电影版|动画版|电视版|完整版|特别版|纪念版|导演剪辑版|未删减版|加长版|抢先版)$/g,
+    ''
+  );
+  return key || normalizeTitle(name);
+}
+
+/// Borrow a healthier cover: exact title first, then same family (凡人修仙传←重制版).
+function healPicsByTitle(list) {
+  const bestPic = new Map();
+  const bestFamilyPic = new Map();
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i];
+    const key = normalizeTitle(item.vod_name);
+    if (!key) continue;
+    const pic = rewritePicURL(String(item.vod_pic || '').trim());
+    if (pic && pic !== item.vod_pic) item.vod_pic = pic;
+    if (picQuality(pic) < 3) continue;
+    const prev = bestPic.get(key);
+    if (!prev || picQuality(pic) > picQuality(prev)) {
+      bestPic.set(key, pic);
+    }
+    const family = coverFamilyKey(item.vod_name);
+    if (!family) continue;
+    const prevFamily = bestFamilyPic.get(family);
+    // Healthier CDN wins; ties prefer the shorter/base title as donor.
+    if (
+      !prevFamily ||
+      picQuality(pic) > picQuality(prevFamily.pic) ||
+      (picQuality(pic) === picQuality(prevFamily.pic) && key.length < prevFamily.keyLength)
+    ) {
+      bestFamilyPic.set(family, { pic: pic, keyLength: key.length });
+    }
+  }
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i];
+    const key = normalizeTitle(item.vod_name);
+    if (!key) continue;
+    if (picQuality(item.vod_pic) >= 3) continue;
+    const exact = bestPic.get(key);
+    if (exact) {
+      item.vod_pic = exact;
+      continue;
+    }
+    const family = coverFamilyKey(item.vod_name);
+    const donor = family ? bestFamilyPic.get(family) : null;
+    if (donor) item.vod_pic = donor.pic;
+  }
+  return list;
+}
+
+/// Push broken-CDN rows down so first-screen grids fill with loadable posters first.
+function preferHealthyPics(list) {
+  const good = [];
+  const weak = [];
+  for (let i = 0; i < list.length; i++) {
+    if (picQuality(list[i].vod_pic) >= 3) good.push(list[i]);
+    else weak.push(list[i]);
+  }
+  return good.concat(weak);
+}
+
+// Search must finish under ProviderCoordinator's budget (~5–10s). Slow hosts
+// used to hold mapInBatches for 12s each and the whole search was cancelled empty.
+const SEARCH_TIMEOUT_MS = 2800;
+
+async function searchProviders(providers, key, pg, timeoutMs) {
+  const budget = timeoutMs || SEARCH_TIMEOUT_MS;
+  let responded = 0;
+  // All hosts in parallel — do not wait on batch N before starting batch N+1.
+  const results = await Promise.all(providers.map(async function (provider) {
+    const data = await requestJSON(provider.api, {
+      ac: 'videolist',
+      wd: key,
+      pg: String(pg || 1),
+    }, budget);
+    if (data && Array.isArray(data.list)) responded += 1;
+    return { provider: provider, data: data };
+  }));
+  const list = [];
+  for (let index = 0; index < results.length; index++) {
+    const result = results[index];
+    const items = result.data && Array.isArray(result.data.list)
+      ? result.data.list
+      : [];
+    for (let j = 0; j < items.length; j++) {
+      if (!matchesSearchQuery(items[j], key)) continue;
+      const item = mediaItem(result.provider, Object.assign({}, items[j]));
+      if (item) list.push(item);
+    }
+  }
+  return {
+    list: preferHealthyPics(healPicsByTitle(dedupeByProviderTitle(list))),
+    responded: responded,
+  };
 }
 
 function classifyTypeName(name) {
@@ -1103,24 +1451,52 @@ export default class extends Spider {
     const self = this;
     function acceptHome(provider, row) {
       if (looksShortDrama(row)) return null;
+      if (looksFranchiseDump(row)) return null;
       const bucket = self.classifyItem(provider, row);
       if (bucket !== 'tv' && bucket !== 'movie' && bucket !== 'variety' && bucket !== 'anime') {
         return null;
       }
       return mediaItem(provider, Object.assign({}, row));
     }
+    // Allow Douban network — `false` left 推荐 stuck on CMS “最新” dumps (戏说台湾刷屏).
     const packed = await doubanOrCMSList(
       'recommend',
       providers,
       acceptHome,
       function () {
-        return collectProviderLists(providers, 1, FIRST_SCREEN, null, acceptHome);
+        return collectProviderLists(providers, 1, FIRST_SCREEN * 3, null, acceptHome);
       },
-      false
+      true
     );
-    const list = packed.fromDouban
-      ? packed.list.slice(0, FIRST_SCREEN)
-      : sortByHotRecent(packed.list).slice(0, FIRST_SCREEN);
+    let list = packed.fromDouban
+      ? packed.list
+      : diversifyBySeriesFamily(
+          diversifyByProvider(sortByHotRecent(packed.list), 3),
+          1
+        );
+    list = preferHealthyPics(healPicsByTitle(list));
+    if (list.length < FIRST_SCREEN) {
+      const cmsMore = await collectProviderLists(
+        providers,
+        1,
+        FIRST_SCREEN * 2,
+        null,
+        acceptHome
+      );
+      const used = {};
+      for (let i = 0; i < list.length; i++) {
+        const key = normalizeTitle(list[i].vod_name);
+        if (key) used[key] = true;
+      }
+      for (let i = 0; i < cmsMore.length && list.length < FIRST_SCREEN; i++) {
+        const key = normalizeTitle(cmsMore[i].vod_name);
+        if (!key || used[key]) continue;
+        used[key] = true;
+        list.push(cmsMore[i]);
+      }
+      list = preferHealthyPics(healPicsByTitle(list));
+    }
+    list = list.slice(0, FIRST_SCREEN);
     return {
       class: menuClasses(),
       list: list,
@@ -1207,6 +1583,9 @@ export default class extends Spider {
       if ((bucket === 'tv' || bucket === 'recommend') && looksShortDrama(row)) {
         return null;
       }
+      if (bucket === 'recommend' && looksFranchiseDump(row)) {
+        return null;
+      }
       const found = self.classifyItem(provider, row);
       if (bucket === 'recommend') {
         if (found !== 'tv' && found !== 'movie' && found !== 'variety' && found !== 'anime') return null;
@@ -1237,12 +1616,56 @@ export default class extends Spider {
     if (wantDouban && requestedPage === 1 && !filtered) {
       const want = FIRST_SCREEN;
       const packed = await doubanOrCMSList(bucket, providers, acceptRow, function () {
-        return collectProviderLists(providers, 1, want, extra, acceptRow);
+        return collectProviderLists(providers, 1, want * 2, extra, acceptRow);
       });
       if (packed.list.length) {
-        const ordered = packed.fromDouban
+        let ordered = packed.fromDouban
           ? packed.list
-          : sortByHotRecent(packed.list);
+          : diversifyByProvider(sortByHotRecent(packed.list), 4);
+        ordered = preferHealthyPics(healPicsByTitle(ordered));
+        function padOrdered(fromList) {
+          const used = {};
+          for (let i = 0; i < ordered.length; i++) {
+            const key = normalizeTitle(ordered[i].vod_name);
+            if (key) used[key] = true;
+          }
+          for (let i = 0; i < (fromList || []).length && ordered.length < FIRST_SCREEN; i++) {
+            const key = normalizeTitle(fromList[i].vod_name);
+            if (!key || used[key]) continue;
+            used[key] = true;
+            ordered.push(fromList[i]);
+          }
+        }
+        // Douban / CMS first paint often resolves <12 — pad until a full screen.
+        if (ordered.length < FIRST_SCREEN) {
+          const cmsMore = await collectProviderLists(
+            providers,
+            1,
+            FIRST_SCREEN * 4,
+            extra,
+            acceptRow
+          );
+          padOrdered(cmsMore);
+        }
+        // Still thin: pull typed 电影/剧 leaves (videolist “最新” is mostly noise).
+        if (ordered.length < FIRST_SCREEN && bucket !== 'recommend') {
+          await this.ensureCatalogs();
+          let targets = this.leafTargets(bucket).filter(function (target) {
+            return providerKeys.has(target.provider.key);
+          });
+          targets = this.preferredLeafTargets(bucket, targets);
+          if (targets.length) {
+            const typed = await collectTypedLists(
+              targets,
+              1,
+              FIRST_SCREEN * 3,
+              extra,
+              acceptRow
+            );
+            padOrdered(typed.list || []);
+          }
+        }
+        ordered = preferHealthyPics(healPicsByTitle(ordered));
         // Keep pagecount open so loadMore can pull CMS pages 2+.
         return {
           page: 1,
@@ -1262,10 +1685,39 @@ export default class extends Spider {
       list = await collectProviderLists(
         providers,
         1,
-        want,
+        want * 2,
         extra,
         acceptRow
       );
+      // videolist “最新” rarely yields 12 in-bucket hits — fall through to typed leaves.
+      if (list.length < FIRST_SCREEN && bucket !== 'recommend') {
+        await this.ensureCatalogs();
+        let targets = this.leafTargets(bucket).filter(function (target) {
+          return providerKeys.has(target.provider.key);
+        });
+        targets = this.preferredLeafTargets(bucket, targets);
+        if (targets.length) {
+          const typed = await collectTypedLists(
+            targets,
+            1,
+            FIRST_SCREEN * 3,
+            extra,
+            acceptRow
+          );
+          const used = {};
+          for (let i = 0; i < list.length; i++) {
+            const key = normalizeTitle(list[i].vod_name);
+            if (key) used[key] = true;
+          }
+          for (let i = 0; i < (typed.list || []).length && list.length < FIRST_SCREEN; i++) {
+            const key = normalizeTitle(typed.list[i].vod_name);
+            if (!key || used[key]) continue;
+            used[key] = true;
+            list.push(typed.list[i]);
+          }
+          reportedPages = Math.max(reportedPages, typed.pagecount || 1, 2);
+        }
+      }
     } else if (bucket !== 'recommend') {
       await this.ensureCatalogs();
       let targets = this.leafTargets(bucket).filter(function (target) {
@@ -1323,15 +1775,21 @@ export default class extends Spider {
       );
     }
     let deduped = applyExtend(dedupeByTitle(list), extend, bucket);
-    // Do not diversify after sort — it scrambled 上映时间 / 豆瓣热门 / 最新更新.
-    // Mixing hosts belongs upstream (collect) or on 推荐 only.
-    const hasMore = reportedPages > requestedPage || deduped.length >= 12;
+    // Heal covers on every bucket path — movie/TV CMS rows often ship dead CDNs.
+    deduped = preferHealthyPics(healPicsByTitle(deduped));
+    if (bucket === 'recommend' && !filtered) {
+      deduped = diversifyBySeriesFamily(diversifyByProvider(deduped, 3), 1);
+    }
+    // Do not diversify after explicit sort — it scrambled 上映时间 / 豆瓣热门 / 最新更新.
+    const hasMore = reportedPages > requestedPage || deduped.length >= FIRST_SCREEN;
     return {
       page: requestedPage,
       pagecount: hasMore ? requestedPage + 1 : requestedPage,
       limit: deduped.length,
       total: deduped.length,
-      list: deduped,
+      list: requestedPage === 1 && !filtered
+        ? deduped.slice(0, FIRST_SCREEN)
+        : deduped,
     };
   }
 
@@ -1369,27 +1827,29 @@ export default class extends Spider {
   }
 
   async searchContent(key, quick, pg) {
-    const providers = this.providers || DEFAULT_PROVIDERS;
-    const results = await mapInBatches(providers, BATCH_SIZE, async function (provider) {
-      const data = await requestJSON(provider.api, {
-        ac: 'videolist',
-        wd: key,
-        pg: String(pg || 1),
-      });
-      return { provider: provider, data: data };
-    });
-    const list = [];
-    for (let index = 0; index < results.length; index++) {
-      const result = results[index];
-      const items = result.data && Array.isArray(result.data.list)
-        ? result.data.list
-        : [];
-      for (let j = 0; j < items.length; j++) {
-        const item = mediaItem(result.provider, Object.assign({}, items[j]));
-        if (item) list.push(item);
+    const configured = this.providers || DEFAULT_PROVIDERS;
+    // Wave 1: only the first few (already ordered for healthy/fast hosts).
+    const wave1 = configured.slice(0, Math.min(4, configured.length));
+    let packed = await searchProviders(wave1, key, pg, 2500);
+    // Wave 2: rest of the active pool if wave 1 missed.
+    if (packed.list.length === 0 && configured.length > wave1.length) {
+      packed = await searchProviders(configured, key, pg, SEARCH_TIMEOUT_MS);
+    }
+    // Wave 3: bundled defaults when the 测速 pool is empty/flaky.
+    if (
+      packed.list.length === 0
+      && configured !== DEFAULT_PROVIDERS
+      && configured.length
+    ) {
+      const fallback = await searchProviders(DEFAULT_PROVIDERS, key, pg, SEARCH_TIMEOUT_MS);
+      if (fallback.list.length || fallback.responded > packed.responded) {
+        packed = fallback;
       }
     }
-    return { list: dedupeByProviderTitle(list) };
+    if (packed.list.length === 0 && packed.responded === 0) {
+      throw new Error('采集站暂时不可用，请稍后重试或重新测速');
+    }
+    return { list: packed.list };
   }
 
   async detailContent(ids) {

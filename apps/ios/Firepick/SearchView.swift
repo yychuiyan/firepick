@@ -5,6 +5,8 @@ struct SearchView: View {
   @Environment(AppModel.self) private var model
   @FocusState private var searchFocused: Bool
   @State private var selectedItem: MediaItem?
+  /// Kept across pop so destination does not become EmptyView mid-transition (闪白).
+  @State private var detailDestination: MediaItem?
   @State private var selectedHistory = Set<String>()
   @State private var isEditingHistory = false
   @State private var showingDeleteConfirmation = false
@@ -21,24 +23,18 @@ struct SearchView: View {
         resultsContent
       }
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(Color(.systemBackground).ignoresSafeArea())
     .navigationTitle("搜索")
     .navigationBarTitleDisplayMode(.inline)
+    .toolbarBackground(.visible, for: .navigationBar)
+    .toolbarBackground(Color(.systemBackground), for: .navigationBar)
     .scrollDismissesKeyboard(.interactively)
     .dismissKeyboardOnBackgroundTap()
     .task {
       if !model.searchHasRun, model.searchText.isEmpty {
         try? await Task.sleep(for: .milliseconds(250))
         searchFocused = true
-      }
-    }
-    .toolbar {
-      if model.searchHasRun || !model.searchText.isEmpty {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button("清除") {
-            resetForNewSearch()
-            searchFocused = true
-          }
-        }
       }
     }
     .navigationDestination(
@@ -51,8 +47,10 @@ struct SearchView: View {
         }
       )
     ) {
-      if let selectedItem {
-        DetailView(item: selectedItem)
+      if let detailDestination {
+        DetailView(item: detailDestination)
+      } else {
+        FirepickBackdrop()
       }
     }
     .alert("删除选中的查询记录？", isPresented: $showingDeleteConfirmation) {
@@ -248,6 +246,7 @@ struct SearchView: View {
             ForEach(section.result.list) { item in
               Button {
                 model.detailResult = nil
+                detailDestination = item
                 selectedItem = item
               } label: {
                 MediaCardView(item: item)
@@ -313,15 +312,6 @@ struct SearchView: View {
     Task {
       await model.search()
     }
-  }
-
-  private func resetForNewSearch() {
-    model.searchText = ""
-    model.searchHasRun = false
-    model.searchSections = []
-    model.liveSearchResults = []
-    selectedHistory.removeAll()
-    isEditingHistory = false
   }
 
   private func toggleHistorySelection(_ keyword: String) {

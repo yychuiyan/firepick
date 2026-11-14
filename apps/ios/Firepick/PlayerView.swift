@@ -50,6 +50,8 @@ struct PlayerView: View {
   var onPlaybackTimeChange: ((Double) -> Void)? = nil
   /// All candidate URLs failed — return true if parent will switch 来源.
   var onUnplayable: (() -> Bool)? = nil
+  /// Detail bumps this before silent 换站 network work — freeze the live frame early.
+  var silentHandoffPulse: Int = 0
 
   @State private var avEngine = AVPlayerEngine()
   @State private var mpvEngine = MPVPlayerEngine()
@@ -134,6 +136,8 @@ struct PlayerView: View {
   @State private var lastProgressMediaTime: Double = -1
   @State private var stallRecoveryInFlight = false
   @State private var recoverInFlight = false
+  /// Caps cold-start「首帧过慢」station hops so we do not thrash the whole pool.
+  @State private var firstFrameFailoverCount = 0
   /// Stall / auto-line switch: keep chrome + last frame, no center spinner.
   @State private var silentHandoff = false
   /// User intent to keep playing across half/full screen transitions.
@@ -210,7 +214,8 @@ struct PlayerView: View {
     onCollapse: (() -> Void)? = nil,
     onPlayEpisode: ((Episode, String, Double?) -> Void)? = nil,
     onPlaybackTimeChange: ((Double) -> Void)? = nil,
-    onUnplayable: (() -> Bool)? = nil
+    onUnplayable: (() -> Bool)? = nil,
+    silentHandoffPulse: Int = 0
   ) {
     self.request = request
     self.item = item
@@ -226,6 +231,7 @@ struct PlayerView: View {
     self.onPlayEpisode = onPlayEpisode
     self.onPlaybackTimeChange = onPlaybackTimeChange
     self.onUnplayable = onUnplayable
+    self.silentHandoffPulse = silentHandoffPulse
     let kind =
       (try? PlayerSelector().select(
         request,
@@ -362,6 +368,11 @@ struct PlayerView: View {
 
   var body: some View {
     attachPlayerLifecycle(to: playerWithSheets)
+      .onChange(of: silentHandoffPulse) { _, pulse in
+        // Detail freezes the live picture before findItem/loadDetail — keeps 换站无感.
+        guard pulse > 0 else { return }
+        beginSilentVisualHandoff(refreshFreeze: true)
+      }
   }
 
   private var playerWithSheets: some View {
@@ -439,6 +450,7 @@ struct PlayerView: View {
         isPlayerMounted = true
         teardownTask?.cancel()
         teardownTask = nil
+        // Expand remount resumes; real dismiss already cleared wantsPlaying in teardown.
         if wantsPlaying {
           configureAudioSession()
           playbackEngine.play()
@@ -474,6 +486,10 @@ struct PlayerView: View {
           }
         }
       }
+      // Cold start / 换源: API 快不等于开播快。无首帧约 7.5s → 换下一站。
+      .task(id: (activeRequest?.url ?? request.url).absoluteString) {
+        await watchSlowFirstFrame()
+      }
       .onChange(of: selectedSubtitleIndex) { _, index in
         applySubtitleSelection(index)
       }
@@ -486,13 +502,22 @@ struct PlayerView: View {
           failure = nil
           Task { await recover(from: message) }
         }
-        if state == .playing { scheduleHideControls() }
+        if state == .playing {
+          clearFailureIfRenderable()
+          scheduleHideControls()
+        }
+      }
+      .onChange(of: avEngine.isReadyForDisplay) { _, ready in
+        if ready { clearFailureIfRenderable() }
       }
       .onChange(of: mpvEngine.state) { _, state in
         handlePlaybackEnded(state)
         if case .failed(let message) = state {
           failure = nil
           Task { await recover(from: message) }
+        }
+        if state == .playing || state == .ready {
+          clearFailureIfRenderable()
         }
         if state == .playing { scheduleHideControls() }
       }
@@ -524,18 +549,22 @@ struct PlayerView: View {
       .onDisappear {
         isPlayerMounted = false
         hideTask?.cancel()
+        nextEpisodeCountdownTask?.cancel()
         UIApplication.shared.isIdleTimerDisabled = false
         // Capture BEFORE any stop — layout remounts on expand must not wipe progress.
         persistWatchProgress(force: true)
         let resumeAt = max(observedTime, stickyTime, lastReportedTime)
         stickyTime = max(stickyTime, resumeAt)
+        // Silence immediately on back — delayed stop alone left ghost audio on 最近观看.
+        silenceAllEngines()
         teardownTask?.cancel()
         teardownTask = Task { @MainActor in
           // Half↔full can briefly disappear the representable; wait before killing AV.
           try? await Task.sleep(for: .milliseconds(450))
           guard !Task.isCancelled, !isPlayerMounted else { return }
+          wantsPlaying = false
           clearNowPlaying()
-          playbackEngine.stop()
+          stopAllEngines()
           removeRemoteCommands()
           if orientationLocked {
             orientationLocked = false
@@ -544,6 +573,17 @@ struct PlayerView: View {
           model.releasePlaybackCache()
         }
       }
+  }
+
+  /// Pause both engines so AV↔MPV handoff / dismiss never leaves a second soundtrack.
+  private func silenceAllEngines() {
+    avEngine.pause()
+    mpvEngine.pause()
+  }
+
+  private func stopAllEngines() {
+    avEngine.stop()
+    mpvEngine.stop()
   }
 
   /// Parent `PlayerFrameModifier` owns half-screen 16:9. Fullscreen stage must
@@ -782,13 +822,16 @@ struct PlayerView: View {
   }
 
   private var shouldHideLivePlayer: Bool {
-    freezeFrame != nil || mediaTransitionInFlight
+    if freezeFrame != nil { return true }
+    // Silent 换源 without a freeze frame: keep the live surface (avoid black).
+    if mediaTransitionInFlight && !(silentHandoff || keepLastFrame) { return true }
+    return false
   }
 
   /// Capture the current picture, then keep silent chrome until the next frame.
   /// - Parameter refreshFreeze: 从仍可见的直播面重拍（seek/切集开始时）。
   private func beginSilentVisualHandoff(refreshFreeze: Bool = false) {
-    guard keepLastFrame || hasRenderableVideo || freezeFrame != nil else { return }
+    // Always mark silent — even before first frame — so 换源 never blacks out.
     keepLastFrame = true
     silentHandoff = true
     // Already frozen: keep that still — never re-snapshot a hidden/black AV surface.
@@ -867,10 +910,15 @@ struct PlayerView: View {
     showingRatePicker || showingResolutionPicker || showingEpisodes
   }
 
+  /// True when we still have a visible picture (freeze or live frame) to cover handoff.
+  private var hasVisibleHandoffPicture: Bool {
+    freezeFrame != nil || hasRenderableVideo
+  }
+
   /// Loading / failover / not-yet-ready — never show play/pause as if content is ready.
   private var isAwaitingPlayback: Bool {
-    // After the first frame: keep chrome + last picture; no “awaiting” blackout.
-    if keepLastFrame || silentHandoff { return false }
+    // Have a still/live picture: do not treat as empty awaiting blackout.
+    if hasVisibleHandoffPicture, keepLastFrame || silentHandoff { return false }
     if failingOver || isResolvingNext || stallRecoveryInFlight { return true }
     if failure != nil { return false }
     switch observedState {
@@ -892,7 +940,8 @@ struct PlayerView: View {
   /// Cold start / failover awaiting — feeds center play/pause loading only.
   private var showsLoadingSpinner: Bool {
     if displayFailure != nil { return false }
-    if keepLastFrame || silentHandoff { return false }
+    // Only hide spinner when a real picture covers the handoff — never bare black.
+    if hasVisibleHandoffPicture, keepLastFrame || silentHandoff { return false }
     if failingOver || isResolvingNext || stallRecoveryInFlight { return true }
     return isAwaitingPlayback
   }
@@ -901,6 +950,8 @@ struct PlayerView: View {
   private var isCenterLoading: Bool {
     if displayFailure != nil { return false }
     if seekHandoff { return true }
+    // Silent station upgrade with a freeze/live frame: keep picture, no center「加载」.
+    if hasVisibleHandoffPicture, silentHandoff || keepLastFrame { return false }
     if mediaTransitionInFlight || isResolvingNext || stallRecoveryInFlight || failingOver {
       return true
     }
@@ -1512,6 +1563,7 @@ struct PlayerView: View {
       lastReportedTime = target
       seekHandoff = true
       clearFinishedEpisodeChrome()
+      // Tell DetailView immediately so silent 换站 won't resume from 0 / thrash.
       pinLiveStartPosition(target)
       Task {
         await playbackEngine.seek(to: target)
@@ -1522,6 +1574,8 @@ struct PlayerView: View {
         mediaTransitionInFlight = false
         silentHandoff = false
         freezeFrame = nil
+        // Re-pin after seek settles (clock may have glitched to 0 mid-buffer).
+        pinLiveStartPosition(max(target, stickyTime, lastReportedTime))
       }
     } else if !editing {
       seekHandoff = false
@@ -1713,11 +1767,20 @@ struct PlayerView: View {
 
   private func failureOverlay(_ message: String) -> some View {
     VStack(spacing: 14) {
-      Text(message)
-        .foregroundStyle(.white)
-        .multilineTextAlignment(.center)
+      // Prefer spinner for recoveries; only show short copy for true hard stops.
+      if !Self.isTransientSourceSwitchMessage(message) {
+        Text(message)
+          .foregroundStyle(.white)
+          .multilineTextAlignment(.center)
+      } else {
+        ProgressView()
+          .controlSize(.large)
+          .tint(.white)
+      }
       HStack(spacing: 12) {
         Button("重试") {
+          failure = nil
+          failingOver = true
           Task { await loadAvailableSource() }
         }
         .buttonStyle(.borderedProminent)
@@ -1725,6 +1788,7 @@ struct PlayerView: View {
         .tint(.orange)
         if !alternateURLs.isEmpty {
           Button("换线路") {
+            failure = nil
             Task { await retryNextAlternate() }
           }
           .buttonStyle(.bordered)
@@ -1877,12 +1941,23 @@ struct PlayerView: View {
   }
 
   private var displayFailure: String? {
+    // Frame already on screen — never cover it with stale「切换来源 / 重试」.
+    if hasRenderableVideo { return nil }
     // Never surface engine `.failed` while we still auto-recover / 换源.
     if isAwaitingPlayback || failingOver || silentHandoff || stallRecoveryInFlight {
       return nil
     }
     guard let failure, !failure.isEmpty else { return nil }
+    // Mid-recovery copy must not become a hard error chrome.
+    if Self.isTransientSourceSwitchMessage(failure) { return nil }
     return Self.friendlyPlaybackError(failure)
+  }
+
+  private static func isTransientSourceSwitchMessage(_ message: String) -> Bool {
+    let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+    return text.contains("正在切换来源")
+      || text.contains("首帧过慢")
+      || text.contains("播放卡住")
   }
 
   private static func friendlyPlaybackError(_ message: String) -> String {
@@ -1924,10 +1999,26 @@ struct PlayerView: View {
       }
       return true
     }
-    failingOver = false
+    // No more stations: keep loading spinner — not a sticky error toast over a live frame.
+    if hasRenderableVideo {
+      failure = nil
+      failingOver = false
+      silentHandoff = false
+      return false
+    }
     silentHandoff = false
-    failure = text
+    failingOver = true
+    failure = Self.isTransientSourceSwitchMessage(text)
+      ? "暂时无法播放，请重试"
+      : text
     return false
+  }
+
+  private func clearFailureIfRenderable() {
+    guard hasRenderableVideo else { return }
+    if failure != nil { failure = nil }
+    if failingOver { failingOver = false }
+    if silentHandoff { endSilentVisualHandoffIfReady() }
   }
 
   private func engine(for url: URL) -> PlaybackEngineKind {
@@ -1982,6 +2073,9 @@ struct PlayerView: View {
       triedURLs.append(url)
       let kind = engine(for: url)
       if kind != engineKind {
+        // Stop the outgoing engine — otherwise AV+MPV can both keep audio after 换源.
+        silenceAllEngines()
+        playbackEngine.stop()
         engineKind = kind
       }
       var candidate = request
@@ -2104,7 +2198,8 @@ struct PlayerView: View {
   private func switchEngine(_ kind: PlaybackEngineKind) async {
     guard kind != engineKind else { return }
     let position = playbackEngine.currentTime
-    playbackEngine.pause()
+    silenceAllEngines()
+    playbackEngine.stop()
     engineKind = kind
     var candidate = activeRequest ?? request
     candidate.startPosition = position
@@ -2386,6 +2481,12 @@ struct PlayerView: View {
   /// Playback clock frozen while "playing" — try alternate URLs, then next 来源.
   private func recoverFromStall() async {
     guard !stallRecoveryInFlight, !failingOver, !silentHandoff else { return }
+    // Cold start / never had a frame: first-frame watchdog owns recovery — avoid
+    // thrashing 来源 every few seconds (间歇黑屏).
+    if !keepLastFrame, !hasRenderableVideo, freezeFrame == nil {
+      lastProgressWallclock = Date()
+      return
+    }
     stallRecoveryInFlight = true
     defer { stallRecoveryInFlight = false }
     // Never max with request.startPosition — scrub to mid then stall would jump to 片尾.
@@ -2403,6 +2504,56 @@ struct PlayerView: View {
       return
     }
     _ = handleExhaustedPlayback("播放卡住，正在切换来源", silent: true)
+  }
+
+  // Slow CMS opens often need >4.5s; hopping sooner caused black flashes every few seconds.
+  private static let firstFrameTimeoutSeconds: TimeInterval = 7.5
+  private static let maxFirstFrameFailovers = 3
+
+  /// No first picture after timeout → try mirrors, then silent 换源 (API ping ≠ 开播).
+  private func watchSlowFirstFrame() async {
+    // Wall clock includes load()+buffer — only pause for 切集/scrub, not for failingOver.
+    var anchor = Date()
+    while !Task.isCancelled {
+      if hasRenderableVideo { return }
+      if !wantsPlaying || failure != nil { return }
+      if firstFrameFailoverCount >= Self.maxFirstFrameFailovers { return }
+      if isResolvingNext || seekHandoff {
+        try? await Task.sleep(for: .milliseconds(250))
+        anchor = Date()
+        continue
+      }
+      if Date().timeIntervalSince(anchor) >= Self.firstFrameTimeoutSeconds {
+        // load / stall recover still running — wait, do not burn the watch.
+        if failingOver || stallRecoveryInFlight || recoverInFlight {
+          try? await Task.sleep(for: .milliseconds(250))
+          continue
+        }
+        await recoverFromSlowFirstFrame()
+        return
+      }
+      try? await Task.sleep(for: .milliseconds(200))
+    }
+  }
+
+  private func recoverFromSlowFirstFrame() async {
+    guard !hasRenderableVideo, wantsPlaying else { return }
+    guard !stallRecoveryInFlight, !recoverInFlight, !failingOver else { return }
+    guard firstFrameFailoverCount < Self.maxFirstFrameFailovers else { return }
+    stallRecoveryInFlight = true
+    defer { stallRecoveryInFlight = false }
+    lastProgressWallclock = Date()
+    let position = max(0, stickyTime, lastReportedTime, observedTime)
+    let pending = ([activeRequest?.url ?? request.url] + alternateURLs)
+      .filter { !triedURLs.contains($0) }
+    if !pending.isEmpty {
+      let silent = keepLastFrame || silentHandoff
+      await playCandidates(pending, startAt: position, silent: silent)
+      if hasRenderableVideo { return }
+    }
+    firstFrameFailoverCount += 1
+    let silent = keepLastFrame || hasRenderableVideo
+    _ = handleExhaustedPlayback("首帧过慢，正在切换来源", silent: silent)
   }
 
   /// Reload a new URL without remounting the player chrome.
@@ -2423,8 +2574,16 @@ struct PlayerView: View {
       if wantsPlaying { playbackEngine.play() }
       return
     }
-    // Freeze the CURRENT picture before tearing down the item (切集/换源).
-    beginSilentVisualHandoff(refreshFreeze: true)
+    // Same episode + new URL ⇒ 换源. Detect before tearing down.
+    let previousName = activeEpisode?.name ?? episode?.name
+    let incomingName = episode?.name
+    let sameEpisode =
+      previousName != nil
+      && previousName == incomingName
+    let isSourceHandoff = sameEpisode && activeRequest?.url != next.url
+    // Freeze before teardown. Source handoff may already have a pulse freeze — keep it.
+    beginSilentVisualHandoff(refreshFreeze: freezeFrame == nil)
+    let hasPicture = freezeFrame != nil || hasRenderableVideo
     mediaTransitionInFlight = true
     softReloadGeneration += 1
     let generation = softReloadGeneration
@@ -2435,18 +2594,10 @@ struct PlayerView: View {
     } else {
       persistWatchProgress(force: true)
     }
-    // Same episode + new URL ⇒ 换源. Keep clock. Visual silentHandoff must NOT
-    // steal the clock — that made 下一集 inherit 51:xx from the previous ep.
-    let previousName = activeEpisode?.name ?? episode?.name
-    let incomingName = episode?.name
-    let sameEpisode =
-      previousName != nil
-      && previousName == incomingName
-    let isSourceHandoff = sameEpisode && activeRequest?.url != next.url
     var resumeAt = max(0, next.startPosition)
     if isSourceHandoff {
       // 换源: stay where the user is now — never jump to stale 片尾 startPosition.
-      resumeAt = max(stickyTime, lastReportedTime, observedTime)
+      resumeAt = max(stickyTime, lastReportedTime, observedTime, next.startPosition)
       if resumeAt < 1 { resumeAt = max(0, next.startPosition) }
     } else {
       // New episode: honor request start，never sticky clock from ep3尾.
@@ -2471,6 +2622,10 @@ struct PlayerView: View {
     failure = nil
     didAutoSkipIntro = false
     skippedAdSegmentKeys = []
+    // New episode gets a fresh first-frame budget; 换源 keeps the hop cap.
+    if !sameEpisode {
+      firstFrameFailoverCount = 0
+    }
     // Reset quality gates so 换源 doesn't inherit the previous station's 4K/2K.
     detectedOutputHeight = 0
     streamPeakHeight = 0
@@ -2486,18 +2641,23 @@ struct PlayerView: View {
     await playCandidates(
       [next.url] + alternateURLs,
       startAt: resumeAt,
-      silent: true
+      silent: hasPicture || isSourceHandoff || resumeAt > 1
     )
     guard generation == softReloadGeneration else { return }
+    // Unlock 切集 immediately so rapid 1→130 taps are not blocked ~10s.
+    isResolvingNext = false
     await waitForRenderableFrame(near: resumeAt > 1 ? resumeAt : nil)
     endSilentVisualHandoffIfReady()
-    // Never leave 切集 chrome stuck (black + spinner) if the first frame is slow.
-    if mediaTransitionInFlight || silentHandoff || freezeFrame != nil {
+    // 换源 with progress: keep freeze/silent until a real frame — don't force black+spinner.
+    if hasRenderableVideo || !isSourceHandoff {
+      if mediaTransitionInFlight || silentHandoff || freezeFrame != nil {
+        mediaTransitionInFlight = false
+        silentHandoff = false
+        freezeFrame = nil
+      }
+    } else {
       mediaTransitionInFlight = false
-      silentHandoff = false
-      freezeFrame = nil
     }
-    isResolvingNext = false
     // Only auto-next sets this flag — never infer「已看完」from resumeAt on scrub/换源/切集.
     let landNearEnd = pauseAfterNearEndLanding
     pauseAfterNearEndLanding = false
@@ -2659,7 +2819,7 @@ struct PlayerView: View {
 
   /// 上一集 / 下一集共用：先落盘当前集，再按目标集历史进度续播（不再误从 0 起）。
   private func switchToEpisode(_ target: Episode, auto: Bool) async {
-    guard !isResolvingNext else { return }
+    // Allow superseding an in-flight 切集 (old guard dropped 130 while 1 was resolving).
     isResolvingNext = true
     let line = activeFlag ?? flag ?? ""
     // Flush CURRENT episode while sticky still belongs to it — playNext used to
@@ -2691,8 +2851,12 @@ struct PlayerView: View {
     mediaTransitionInFlight = true
     beginSilentVisualHandoff(refreshFreeze: true)
     if let onPlayEpisode {
-      // Detail softReload owns the rest; gate cleared when handoff ends.
+      // Detail softReload owns the rest; clear gate if handoff stalls.
       onPlayEpisode(target, line, resumeRaw)
+      Task {
+        try? await Task.sleep(for: .seconds(8))
+        if isResolvingNext { isResolvingNext = false }
+      }
       return
     }
     defer { isResolvingNext = false }

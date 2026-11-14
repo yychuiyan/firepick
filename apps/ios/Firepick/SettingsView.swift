@@ -67,6 +67,7 @@ struct SettingsView: View {
       .onChange(of: scenePhase) { _, phase in
         if phase == .active {
           model.refreshCacheSize()
+          Task { await model.maybeAutoProbeCollectionStations() }
         }
       }
     }

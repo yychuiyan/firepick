@@ -50,6 +50,15 @@ final class AppPersistence {
   private let directory: URL
   private let configurationURL: URL
   private let liveGroupsCacheURL: URL
+  private let browseCategoryCacheURL: URL
+
+  /// Disk snapshot of browse category lists (incl. Douban-ordered first screens).
+  struct BrowseCategoryCacheFile: Codable, Sendable {
+    var siteKey: String
+    var savedAt: Date
+    var pages: [String: Int]
+    var results: [String: MediaResult]
+  }
 
   init() throws {
     let support = try FileManager.default.url(
@@ -65,6 +74,8 @@ final class AppPersistence {
     )
     configurationURL = directory.appending(path: "configuration.json")
     liveGroupsCacheURL = directory.appending(path: "live-groups-cache.json")
+    // v2: discard cached CMS data produced by the broken /upload/ host rewrite.
+    browseCategoryCacheURL = directory.appending(path: "browse-category-cache-v2.json")
   }
 
   var configurationData: Data? {
@@ -375,6 +386,38 @@ final class AppPersistence {
   var activeCMSProvidersProbedAt: Date? {
     guard defaults.object(forKey: Key.activeCMSProvidersProbedAt) != nil else { return nil }
     return Date(timeIntervalSince1970: defaults.double(forKey: Key.activeCMSProvidersProbedAt))
+  }
+
+  /// Keep browse lists across launches (maxAge). Includes filter keys + Douban order.
+  func loadBrowseCategoryCache(maxAge: TimeInterval = 6 * 60 * 60) -> BrowseCategoryCacheFile? {
+    guard let data = try? Data(contentsOf: browseCategoryCacheURL),
+      let decoded = try? JSONDecoder().decode(BrowseCategoryCacheFile.self, from: data)
+    else {
+      return nil
+    }
+    guard Date().timeIntervalSince(decoded.savedAt) < maxAge else {
+      try? fileManager.removeItem(at: browseCategoryCacheURL)
+      return nil
+    }
+    return decoded
+  }
+
+  func saveBrowseCategoryCache(_ value: BrowseCategoryCacheFile) {
+    // Cap payload — keep newest ~24 tabs/filters.
+    var trimmed = value
+    if trimmed.results.count > 24 {
+      let keep = Array(trimmed.results.keys.sorted().suffix(24))
+      trimmed.results = Dictionary(uniqueKeysWithValues: keep.compactMap { key in
+        trimmed.results[key].map { (key, $0) }
+      })
+      trimmed.pages = trimmed.pages.filter { trimmed.results[$0.key] != nil }
+    }
+    guard let data = try? JSONEncoder().encode(trimmed) else { return }
+    try? data.write(to: browseCategoryCacheURL, options: .atomic)
+  }
+
+  func clearBrowseCategoryCache() {
+    try? fileManager.removeItem(at: browseCategoryCacheURL)
   }
 
   func saveLastLiveChannelID(_ value: String?) {

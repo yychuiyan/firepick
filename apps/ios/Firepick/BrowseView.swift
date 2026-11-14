@@ -4,6 +4,8 @@ import SwiftUI
 struct BrowseView: View {
   @Environment(AppModel.self) private var model
   @State private var selectedItem: MediaItem?
+  /// Kept across pop so destination does not become EmptyView mid-transition (闪白).
+  @State private var detailDestination: MediaItem?
   @State private var selectedFolder: MediaItem?
   @State private var showingSearch = false
   @State private var showingFavorites = false
@@ -44,6 +46,11 @@ struct BrowseView: View {
     model.homeResult?.list ?? []
   }
 
+  /// Chip/filters moved ahead of list — show skeleton instead of wrong-tab posters.
+  private var showsBrowseSkeleton: Bool {
+    model.isBrowseContentStale
+  }
+
   /// Full-screen loader only before the first grid appears — category/filter
   /// switches keep posters and refresh silently (no「正在加载中」flash).
   private var isInitialHomeLoading: Bool {
@@ -81,7 +88,13 @@ struct BrowseView: View {
                 .padding(.vertical)
                 .padding(.bottom, 72)
             }
-          } else if let items = model.homeResult?.list, !items.isEmpty {
+          } else if showsBrowseSkeleton {
+            ScrollView {
+              browseSkeletonGrid
+                .padding(.vertical)
+                .padding(.bottom, 72)
+            }
+          } else if !latestItems.isEmpty {
             ScrollView {
               LazyVStack(alignment: .leading, spacing: 28) {
                 catalogSection
@@ -127,7 +140,8 @@ struct BrowseView: View {
           .accessibilityLabel(fab.label)
         }
       }
-      .background(FirepickBackdrop())
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(Color(.systemBackground).ignoresSafeArea())
       .task(id: homeLoadToken) {
         guard hasActiveWarehouse else { return }
         await model.ensureHomeContentLoaded()
@@ -136,13 +150,37 @@ struct BrowseView: View {
       // Detail hides the tab bar; without an explicit restore the glass chrome can stay clear.
       .toolbar(isRootVisible ? .visible : .automatic, for: .tabBar)
       .toolbarBackground(.visible, for: .tabBar)
+      .toolbarBackground(Color(.systemBackground), for: .navigationBar)
       .onChange(of: isRootVisible) { _, visible in
         guard visible else { return }
         TabBarChrome.restore()
+        // Pop from 收藏/历史 remounts LazyVGrid — warm first-screen covers to avoid blank cards.
+        PosterPrefetch.warm(items: latestItems, limit: 18)
+      }
+      .onChange(of: latestItems.map(\.id)) { _, _ in
+        // Filter / tab swap — prefetch posters immediately for 秒级显示.
+        guard isRootVisible, !latestItems.isEmpty else { return }
+        PosterPrefetch.warm(items: latestItems, limit: 18)
       }
       .onAppear {
         if isRootVisible {
           TabBarChrome.restore()
+        }
+      }
+      .onChange(of: showingFavorites) { _, showing in
+        if showing {
+          PosterPrefetch.warm(
+            items: model.libraryFavoritePrograms.map(\.item),
+            limit: 24
+          )
+        }
+      }
+      .onChange(of: showingHistory) { _, showing in
+        if showing {
+          PosterPrefetch.warm(
+            items: model.libraryHistoryPrograms.map(\.item),
+            limit: 24
+          )
         }
       }
       .sheet(isPresented: $showingSourcePicker) {
@@ -150,12 +188,15 @@ struct BrowseView: View {
       }
       .navigationDestination(isPresented: $showingSearch) {
         SearchView()
+          .background(FirepickBackdrop())
       }
       .navigationDestination(isPresented: $showingFavorites) {
         LibraryView(mode: .favorites)
+          .background(FirepickBackdrop())
       }
       .navigationDestination(isPresented: $showingHistory) {
         LibraryView(mode: .history)
+          .background(FirepickBackdrop())
       }
       .navigationDestination(
         isPresented: Binding(
@@ -167,8 +208,10 @@ struct BrowseView: View {
           }
         )
       ) {
-        if let selectedItem {
-          DetailView(item: selectedItem)
+        if let detailDestination {
+          DetailView(item: detailDestination)
+        } else {
+          FirepickBackdrop()
         }
       }
       .navigationDestination(
@@ -179,6 +222,8 @@ struct BrowseView: View {
       ) {
         if let selectedFolder {
           FolderBrowseView(folder: selectedFolder)
+        } else {
+          FirepickBackdrop()
         }
       }
     }
@@ -262,32 +307,50 @@ struct BrowseView: View {
     }
   }
 
+  private var browseSkeletonGrid: some View {
+    LazyVGrid(columns: columns, spacing: 12) {
+      ForEach(0..<12, id: \.self) { _ in
+        VStack(spacing: 6) {
+          RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Color.secondary.opacity(0.12))
+            .aspectRatio(3.0 / 4.0, contentMode: .fit)
+            .shimmering()
+          RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(Color.secondary.opacity(0.10))
+            .frame(height: 12)
+            .padding(.horizontal, 2)
+        }
+      }
+    }
+    .padding(.horizontal)
+    .accessibilityLabel("正在加载分类")
+  }
+
   private var catalogSection: some View {
     VStack(alignment: .leading, spacing: 12) {
       LazyVGrid(columns: columns, spacing: 12) {
-          ForEach(Array(latestItems.enumerated()), id: \.element.id) { index, item in
-            posterButton(item)
-              .onAppear {
-                let threshold = max(0, latestItems.count - 6)
-                if index >= threshold {
-                  Task { await model.loadMore() }
-                }
+        ForEach(Array(latestItems.enumerated()), id: \.element.id) { index, item in
+          posterButton(item)
+            .onAppear {
+              // First screen stays at ~12. More pages only when the user scrolls
+              // to the last row — never prefetch mid-grid.
+              guard latestItems.count >= 12 else { return }
+              guard !model.isLoadingMore, !model.isLoadingHome else { return }
+              guard model.currentPage < (model.homeResult?.pagecount ?? 0) else { return }
+              let nearEnd = index >= latestItems.count - 2
+              if nearEnd {
+                Task { await model.loadMore() }
               }
-          }
+            }
         }
-        .padding(.horizontal)
+      }
+      .padding(.horizontal)
       if model.isLoadingMore {
         ProgressView()
           .frame(maxWidth: .infinity)
           .padding(.vertical, 8)
       } else if model.loadMoreFailed {
         Button("加载失败 · 重试") {
-          Task { await model.loadMore() }
-        }
-        .buttonStyle(.bordered)
-        .frame(maxWidth: .infinity)
-      } else if model.currentPage < (model.homeResult?.pagecount ?? 0) {
-        Button("加载更多") {
           Task { await model.loadMore() }
         }
         .buttonStyle(.bordered)
@@ -316,6 +379,7 @@ struct BrowseView: View {
       selectedFolder = item
     } else {
       model.detailResult = nil
+      detailDestination = item
       selectedItem = item
     }
   }

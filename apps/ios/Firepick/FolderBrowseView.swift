@@ -8,6 +8,8 @@ struct FolderBrowseView: View {
   @State private var result: MediaResult?
   @State private var isLoading = true
   @State private var selectedItem: MediaItem?
+  /// Kept across pop so destination does not become EmptyView mid-transition (闪白).
+  @State private var detailDestination: MediaItem?
   @State private var nestedFolder: MediaItem?
 
   private var columns: [GridItem] {
@@ -36,6 +38,7 @@ struct FolderBrowseView: View {
                   nestedFolder = item
                 } else {
                   model.detailResult = nil
+                  detailDestination = item
                   selectedItem = item
                 }
               }
@@ -72,8 +75,10 @@ struct FolderBrowseView: View {
         set: { if !$0 { selectedItem = nil } }
       )
     ) {
-      if let selectedItem {
-        DetailView(item: selectedItem)
+      if let detailDestination {
+        DetailView(item: detailDestination)
+      } else {
+        FirepickBackdrop()
       }
     }
     .navigationDestination(
@@ -84,6 +89,8 @@ struct FolderBrowseView: View {
     ) {
       if let nestedFolder {
         FolderBrowseView(folder: nestedFolder)
+      } else {
+        FirepickBackdrop()
       }
     }
   }

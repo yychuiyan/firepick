@@ -19,7 +19,7 @@ struct SourceManagementView: View {
   }
 
   private var isProbing: Bool {
-    !model.probingCollectionStationIDs.isEmpty
+    model.isCollectionProbeRunning || !model.probingCollectionStationIDs.isEmpty
   }
 
   var body: some View {
@@ -60,7 +60,7 @@ struct SourceManagementView: View {
               .foregroundStyle(.secondary)
               .textCase(nil)
           } else if usesFirepickCMS {
-            Text("展示测速后的活跃采集站。点右上角会重新测速并筛选候选站。概况请到「线路管理」打开具体线路查看。")
+            Text("展示获取到的最佳采集站。点右上角可重新获取最佳线路。概况请到「线路管理」打开具体线路查看。")
               .font(.caption)
               .foregroundStyle(.secondary)
               .textCase(nil)
@@ -78,7 +78,7 @@ struct SourceManagementView: View {
     .toolbar(.visible, for: .navigationBar)
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
-        Button(isProbing ? "测速中…" : "重新测速") {
+        Button(isProbing ? "获取中…" : "获取最佳线路") {
           Task { await model.probeCollectionStationLatencies() }
         }
         .disabled((stations.isEmpty && !usesFirepickCMS) || isProbing)
@@ -86,9 +86,9 @@ struct SourceManagementView: View {
     }
     .searchable(text: $query, prompt: "搜索采集站")
     .task(id: model.currentConnection?.id) {
-      // Silent latency check for current active pool only (no full refine on every enter).
+      // First enter: 获取最佳线路 (full candidate race). Fresh pool → badge-only refresh.
       if usesFirepickCMS {
-        await model.probeActivePoolLatenciesOnly()
+        await model.ensureBestCMSLinesOnEnter()
       } else {
         await model.probeCollectionStationLatencies()
       }

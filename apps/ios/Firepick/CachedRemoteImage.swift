@@ -210,9 +210,31 @@ enum RemoteImageCache {
       return nil
     }
     text = text.replacingOccurrences(of: " ", with: "%20")
-    if let url = URL(string: text) { return url }
+    // Preserve the source URL. It may be slower than a mirror, but it is
+    // often the only host that actually has this CMS's path.
+    if let url = URL(string: text) { return preferredTransportURL(url) }
     return text.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed)
       .flatMap(URL.init(string:))
+      .map(preferredTransportURL)
+  }
+
+  static func isBrokenPosterHost(_ host: String) -> Bool {
+    let h = host.lowercased()
+    return h.contains("xltupian") || h.contains("zuidapic") || h.contains("fffgood")
+      || h.contains("maoyanimg") || h.contains("lztutu") || h.contains("ukzy")
+      || h.contains("wujin") || h.contains("lzimg") || h.contains("tu.jisu")
+      || h.isEmpty
+  }
+
+  /// Rewrite known-dead cover CDNs to shared mirrors before the first request.
+  /// `/cover/<hash>` and other image paths both try 极速 first.
+  static func healPosterURL(_ url: URL) -> URL {
+    let host = (url.host ?? "").lowercased()
+    guard isBrokenPosterHost(host) else { return url }
+    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    components?.scheme = "https"
+    components?.host = "img.jisuimage.com"
+    return components?.url ?? url
   }
 
   /// Most CMS covers now support HTTPS; upgrading first avoids an extra 301.
@@ -258,15 +280,21 @@ enum RemoteImageCache {
     }
   }
 
+  /// Short request timeout — dead CDNs must fail fast so mirrors can win within ~1s.
+  static let posterRequestTimeout: TimeInterval = 2.2
+  /// A live but slow origin gets one final chance after mirror races fail.
+  static let posterFallbackTimeout: TimeInterval = 6
+
   static let session: URLSession = {
     let configuration = URLSessionConfiguration.default
     configuration.urlCache = URLCache(
-      memoryCapacity: 16 * 1024 * 1024,
-      diskCapacity: 128 * 1024 * 1024
+      memoryCapacity: 32 * 1024 * 1024,
+      diskCapacity: 160 * 1024 * 1024
     )
     configuration.requestCachePolicy = .returnCacheDataElseLoad
-    configuration.timeoutIntervalForRequest = 10
-    configuration.httpMaximumConnectionsPerHost = 8
+    configuration.timeoutIntervalForRequest = posterRequestTimeout
+    configuration.timeoutIntervalForResource = 10
+    configuration.httpMaximumConnectionsPerHost = 10
     configuration.waitsForConnectivity = false
     configuration.httpAdditionalHeaders = [
       "Accept": "image/*,*/*;q=0.8",
@@ -300,7 +328,8 @@ enum PosterPrefetch {
   static func warm(urls: [URL?], maxPixelSize: CGFloat = 720, limit: Int = 12) {
     let targets = urls.compactMap { $0 }.prefix(limit)
     guard !targets.isEmpty else { return }
-    Task(priority: .utility) {
+    // userInitiated so filter/tab swaps fill posters in ~1s, not behind utility work.
+    Task(priority: .userInitiated) {
       await withTaskGroup(of: Void.self) { group in
         for url in targets {
           group.addTask {
@@ -334,7 +363,8 @@ private actor RemoteImagePipeline {
     case failed
   }
 
-  private let gate = AsyncImageGate(limit: 8)
+  /// Grid has ~12 posters; higher concurrency fills first screen in ~1s.
+  private let gate = AsyncImageGate(limit: 12)
   private var inFlight: [String: Task<ImageBox, Never>] = [:]
 
   func image(for url: URL, maxPixelSize: CGFloat) async -> UIImage? {
@@ -364,6 +394,7 @@ private actor RemoteImagePipeline {
       for: key,
       maxPixelSize: request.maxPixelSize
     ) {
+      RemoteImageCache.storeMemory(cached, for: key)
       return ImageBox(image: cached)
     }
 
@@ -378,19 +409,28 @@ private actor RemoteImagePipeline {
       return ImageBox(image: legacy)
     }
 
-    let preferred = RemoteImageCache.preferredTransportURL(request.url)
-    let networkURLs = preferred == request.url ? [request.url] : [preferred, request.url]
-    for (urlIndex, networkURL) in networkURLs.enumerated() {
+    let networkURLs = Self.candidateURLs(for: request.url)
+    // Race top mirrors in parallel — first healthy image wins (~秒级).
+    let raceBatch = Array(networkURLs.prefix(3))
+    if let raced = await raceFirstImage(raceBatch, maxPixelSize: request.maxPixelSize) {
+      RemoteImageCache.storeMemory(raced, for: key)
+      RemoteImageCache.queueDiskWrite(raced, for: key)
+      return ImageBox(image: raced)
+    }
+    // Remaining candidates (http fallback etc.) get the slower budget.
+    for networkURL in networkURLs.dropFirst(raceBatch.count) {
       var result = await attempt(
         url: networkURL,
         referer: nil,
-        maxPixelSize: request.maxPixelSize
+        maxPixelSize: request.maxPixelSize,
+        timeout: RemoteImageCache.posterFallbackTimeout
       )
       if case .retryWithReferer = result {
         result = await attempt(
           url: networkURL,
           referer: "https://\(networkURL.host ?? "")/",
-          maxPixelSize: request.maxPixelSize
+          maxPixelSize: request.maxPixelSize,
+          timeout: RemoteImageCache.posterFallbackTimeout
         )
       }
       if case .loaded(let box) = result, let loaded = box.image {
@@ -398,43 +438,167 @@ private actor RemoteImagePipeline {
         RemoteImageCache.queueDiskWrite(loaded, for: key)
         return box
       }
-      if urlIndex == 0, networkURLs.count > 1 {
-        try? await Task.sleep(for: .milliseconds(120))
-      }
+    }
+    // Mirrors can all be quick 404s while the original is a healthy 3–4 s
+    // response. Retry it once with the longer fallback budget.
+    let preferred = RemoteImageCache.preferredTransportURL(request.url)
+    var fallback = await attempt(
+      url: preferred,
+      referer: "https://\(preferred.host ?? "")/",
+      maxPixelSize: request.maxPixelSize,
+      timeout: RemoteImageCache.posterFallbackTimeout
+    )
+    if case .loaded = fallback {
+      // Keep the successful image.
+    } else if preferred.absoluteString != request.url.absoluteString {
+      fallback = await attempt(
+        url: request.url,
+        referer: "https://\(request.url.host ?? "")/",
+        maxPixelSize: request.maxPixelSize,
+        timeout: RemoteImageCache.posterFallbackTimeout
+      )
+    }
+    if case .loaded(let box) = fallback, let loaded = box.image {
+      RemoteImageCache.storeMemory(loaded, for: key)
+      RemoteImageCache.queueDiskWrite(loaded, for: key)
+      return box
     }
     return ImageBox(image: nil)
+  }
+
+  /// Parallel race: cancel siblings when one mirror returns a real image.
+  private nonisolated static func raceFirstImage(
+    _ urls: [URL],
+    maxPixelSize: CGFloat
+  ) async -> UIImage? {
+    guard !urls.isEmpty else { return nil }
+    if urls.count == 1 {
+      let result = await attempt(url: urls[0], referer: nil, maxPixelSize: maxPixelSize)
+      if case .loaded(let box) = result { return box.image }
+      return nil
+    }
+    return await withTaskGroup(of: UIImage?.self) { group in
+      for url in urls {
+        group.addTask {
+          var result = await attempt(url: url, referer: nil, maxPixelSize: maxPixelSize)
+          if case .retryWithReferer = result {
+            result = await attempt(
+              url: url,
+              referer: "https://\(url.host ?? "")/",
+              maxPixelSize: maxPixelSize
+            )
+          }
+          if case .loaded(let box) = result { return box.image }
+          return nil
+        }
+      }
+      for await image in group {
+        if let image {
+          group.cancelAll()
+          return image
+        }
+      }
+      return nil
+    }
+  }
+
+  /// Try the original first. Shared-hash `/cover/` paths additionally race
+  /// known-good mirrors; `/upload/` hashes are CMS-specific and must not be
+  /// rewritten to an unrelated host.
+  private nonisolated static func candidateURLs(for url: URL) -> [URL] {
+    var urls: [URL] = []
+    func append(_ candidate: URL) {
+      guard !urls.contains(where: { $0.absoluteString == candidate.absoluteString }) else {
+        return
+      }
+      urls.append(candidate)
+    }
+    let preferred = RemoteImageCache.preferredTransportURL(url)
+    let healed = RemoteImageCache.healPosterURL(preferred)
+    let path = url.path.lowercased()
+    let host = (url.host ?? "").lowercased()
+    let knownGood = ["img.jisuimage.com", "img.guangsuimage.com", "hhmage.com"]
+    append(preferred)
+    // Only `/cover/<hash>` is shared across CMS mirrors.
+    if path.contains("/cover/") {
+      for mirror in knownGood {
+        guard host != mirror else { continue }
+        var components = URLComponents(url: preferred, resolvingAgainstBaseURL: false)
+        components?.scheme = "https"
+        components?.host = mirror
+        if let mirrored = components?.url {
+          append(mirrored)
+        }
+      }
+      append(healed)
+    }
+    append(url)
+    if preferred.scheme?.lowercased() == "https",
+      var components = URLComponents(url: preferred, resolvingAgainstBaseURL: false)
+    {
+      components.scheme = "http"
+      if let http = components.url {
+        append(http)
+      }
+    }
+    return urls
   }
 
   private nonisolated static func attempt(
     url: URL,
     referer: String?,
-    maxPixelSize: CGFloat
+    maxPixelSize: CGFloat,
+    timeout: TimeInterval = RemoteImageCache.posterRequestTimeout
   ) async -> AttemptResult {
+    if Task.isCancelled { return .failed }
     var request = URLRequest(
       url: url,
       cachePolicy: referer == nil
         ? .returnCacheDataElseLoad : .reloadIgnoringLocalCacheData,
-      timeoutInterval: 7
+      timeoutInterval: timeout
     )
     if let referer {
       request.setValue(referer, forHTTPHeaderField: "Referer")
     }
     do {
       let (data, response) = try await RemoteImageCache.session.data(for: request)
+      if Task.isCancelled { return .failed }
       guard let http = response as? HTTPURLResponse else { return .failed }
       if (200..<300).contains(http.statusCode) {
+        // HTML error pages (common on dead cover CDNs) must not poison the cache.
+        let mime = (http.mimeType ?? "").lowercased()
+        if mime.contains("text/html") || mime.contains("application/json") {
+          return .failed
+        }
+        guard data.count > 64, Self.looksLikeImageData(data) else {
+          return .failed
+        }
         let box = await Task.detached(priority: .userInitiated) {
           ImageBox(image: RemoteImageCache.decode(data, maxPixelSize: maxPixelSize))
         }.value
         return box.image == nil ? .failed : .loaded(box)
       }
-      // A timeout usually means the route itself is slow; retrying the same host
-      // with a Referer only extends first-screen occupancy. Hotlink hosts reject
-      // quickly with 4xx and can cheaply try the alternate header.
+      // Hotlink hosts reject quickly with 4xx — cheap Referer retry.
       return (400..<500).contains(http.statusCode) ? .retryWithReferer : .failed
     } catch {
       return .failed
     }
+  }
+
+  private nonisolated static func looksLikeImageData(_ data: Data) -> Bool {
+    guard data.count >= 4 else { return false }
+    let b = [UInt8](data.prefix(12))
+    // JPEG / PNG / GIF / WEBP
+    if b[0] == 0xFF, b[1] == 0xD8 { return true }
+    if b[0] == 0x89, b[1] == 0x50, b[2] == 0x4E, b[3] == 0x47 { return true }
+    if b[0] == 0x47, b[1] == 0x49, b[2] == 0x46 { return true }
+    if data.count >= 12,
+      b[0] == 0x52, b[1] == 0x49, b[2] == 0x46, b[3] == 0x46,
+      b[8] == 0x57, b[9] == 0x45, b[10] == 0x42, b[11] == 0x50
+    {
+      return true
+    }
+    return false
   }
 }
 
@@ -482,6 +646,13 @@ struct CachedRemoteImage<Placeholder: View>: View {
       image = nil
       failed = false
     }
+    .onAppear {
+      // Flaky CMS CDNs often succeed on a later pass once the gate frees up.
+      if failed, image == nil {
+        failed = false
+        reloadToken += 1
+      }
+    }
     .task(id: "\(url?.absoluteString ?? "")|\(maxPixelSize)|\(reloadToken)") {
       await load()
     }
@@ -505,12 +676,34 @@ struct CachedRemoteImage<Placeholder: View>: View {
       failed = false
       return
     }
-    let loaded = await RemoteImagePipeline.shared.image(
+    // Pipeline already races mirrors; one quick re-entry covers gate contention.
+    var loaded = await RemoteImagePipeline.shared.image(
       for: url,
       maxPixelSize: maxPixelSize
     )
+    if loaded == nil {
+      try? await Task.sleep(for: .milliseconds(220))
+      guard !Task.isCancelled else { return }
+      loaded = await RemoteImagePipeline.shared.image(
+        for: url,
+        maxPixelSize: maxPixelSize
+      )
+    }
     guard !Task.isCancelled else { return }
     image = loaded
     failed = loaded == nil
+    // Auto compensation: if still failed, silently retry once more after a beat
+    // (mirrors / gate free) — no user tap on 加载失败.
+    if failed {
+      try? await Task.sleep(for: .milliseconds(700))
+      guard !Task.isCancelled else { return }
+      if let again = await RemoteImagePipeline.shared.image(
+        for: url,
+        maxPixelSize: maxPixelSize
+      ) {
+        image = again
+        failed = false
+      }
+    }
   }
 }
