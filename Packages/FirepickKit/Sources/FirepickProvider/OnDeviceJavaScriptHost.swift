@@ -147,16 +147,22 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
   }
 
   private func downloadScript(from url: URL) async throws -> String {
-    #if DEBUG
-      if url.path.contains("firepick-cms.js"), let bundled = Self.bundledScript(for: url) {
-        NSLog(
-          "Firepick JS debug bundled url=%@ bytes=%ld",
-          url.absoluteString,
-          bundled.utf8.count
-        )
-        return bundled
-      }
-    #endif
+    // Prefer the app-bundled official list so an old COS copy cannot empty the
+    // home grid. Custom hosts with the same filename still load their own JS.
+    let officialBundledHost =
+      url.host?.lowercased() == "dl.yychuiyan.com"
+      || url.host?.lowercased() == "firepick-1302621537.cos.ap-shanghai.myqcloud.com"
+    if officialBundledHost,
+      url.path.contains("firepick-cms.js"),
+      let bundled = Self.bundledScript(for: url)
+    {
+      NSLog(
+        "Firepick JS prefer bundled url=%@ bytes=%ld",
+        url.absoluteString,
+        bundled.utf8.count
+      )
+      return bundled
+    }
     do {
       let remote = try await fetchRemoteScript(from: url)
       NSLog(

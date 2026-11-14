@@ -9,19 +9,6 @@ struct AddConnectionView: View {
   var body: some View {
     Form {
       Section {
-        Button("使用拾萤") {
-          Task {
-            if await model.applyOfficialSource() {
-              dismiss()
-            }
-          }
-        }
-        .disabled(model.isSwitchingConnection)
-      } footer: {
-        Text("一键使用当前发布的拾萤配置。")
-      }
-
-      Section {
         TextField("https://…/ios-sources.json", text: $urlText)
           .textInputAutocapitalization(.never)
           .autocorrectionDisabled()
@@ -30,7 +17,7 @@ struct AddConnectionView: View {
           .focused($focused)
           .onSubmit(submit)
       } footer: {
-        Text("粘贴 CatVod / TVBox 配置直链。添加成功后会设为当前线路。")
+        Text("粘贴 CatVod / TVBox 配置直链。添加成功后会自动设为当前线路并生效。")
       }
 
       Section {
@@ -61,6 +48,8 @@ struct AddConnectionView: View {
     guard !value.isEmpty else { return }
     focused = false
     Task {
+      model.userInitiatedConnectionSwitch = true
+      defer { model.userInitiatedConnectionSwitch = false }
       if await model.applyConfiguration(urlString: value) {
         dismiss()
       }

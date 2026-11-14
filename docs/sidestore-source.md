@@ -147,10 +147,10 @@ Current test deployment:
 
 ```text
 Source: https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
-IPA:    https://dl.yychuiyan.com/firepick/Firepick-0.1.26.ipa
+IPA:    https://dl.yychuiyan.com/firepick/Firepick-0.1.27.ipa
 ```
 
-The current published app version is `0.1.26` (build `27`) with a required
+The current published app version is `0.1.27` (build `28`) with a required
 versioned `iconURL`. The source JSON remains on the COS default domain while
 the IPA is served by the custom domain `dl.yychuiyan.com`.
 
@@ -158,10 +158,10 @@ To republish this deployment without rebuilding:
 
 ```bash
 FIREPICK_REUSE_IPA=1 \
-FIREPICK_BUILD=27 \
+FIREPICK_BUILD=28 \
 FIREPICK_IPA_BASE_URL="https://dl.yychuiyan.com/firepick" \
 ./scripts/publish-cos-release.sh \
-  0.1.26 \
+  0.1.27 \
   firepick-1302621537 \
   ap-shanghai
 ```
@@ -185,7 +185,7 @@ preserves application data.
 - Continue sequential patch versions: `0.1.9`, `0.1.10`, `0.1.11`,
   `0.1.12`, `0.1.13`, `0.1.14`, `0.1.15`, `0.1.16`, `0.1.17`, `0.1.18`,
   `0.1.19`, `0.1.20`, `0.1.21`, `0.1.22`, `0.1.23`, `0.1.24`, `0.1.25`,
-  `0.1.26`,
+  `0.1.26`, `0.1.27`,
   without jumping to
   `0.2.0`.
 - Increase `MARKETING_VERSION` for every published update.

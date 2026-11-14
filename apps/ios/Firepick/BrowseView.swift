@@ -39,45 +39,60 @@ struct BrowseView: View {
     model.homeResult?.list ?? []
   }
 
+  /// Full-screen loader only before the first grid appears — filter/category
+  /// changes keep the previous posters and refresh silently.
+  private var isInitialHomeLoading: Bool {
+    hasActiveWarehouse
+      && model.isLoadingHome
+      && (model.homeResult == nil || model.homeResult?.list.isEmpty == true)
+  }
+
   var body: some View {
     NavigationStack {
-      ScrollView {
-        LazyVStack(alignment: .leading, spacing: 28) {
-          if !hasActiveWarehouse {
-            emptyContent
-          } else if model.isLoadingHome && (model.homeResult == nil || model.homeResult?.list.isEmpty == true) {
-            ProgressView("正在加载中")
-              .frame(maxWidth: .infinity)
-              .padding(.vertical, 48)
-          } else if let items = model.homeResult?.list, !items.isEmpty {
-            catalogSection
-          } else if model.isLoadingHome {
-            ProgressView("正在加载中")
-              .frame(maxWidth: .infinity)
-              .padding(.vertical, 48)
-          } else {
-            emptyContent
-          }
-        }
-        .padding(.vertical)
-        .padding(.bottom, 72)
-      }
-      .refreshable {
-        guard hasActiveWarehouse else { return }
-        await model.reloadHome()
-      }
-      .safeAreaInset(edge: .top, spacing: 0) {
+      VStack(spacing: 0) {
         VStack(spacing: 0) {
           pageHeader
             .padding(.bottom, 4)
-          if hasActiveWarehouse {
+          if hasActiveWarehouse, !isInitialHomeLoading {
             stickyCategoryChrome
-          }
-          if hasActiveWarehouse, model.officialSourceNeedsUpdate {
-            officialUpdateBanner
           }
         }
         .background(Color(.systemBackground))
+
+        Group {
+          if !hasActiveWarehouse {
+            ScrollView {
+              emptyContent
+                .padding(.vertical)
+                .padding(.bottom, 72)
+            }
+          } else if isInitialHomeLoading {
+            // Keep ProgressView OUT of ScrollView+refreshable — otherwise iOS shows
+            // both the system refresh spinner and our labeled ProgressView.
+            ProgressView("正在加载中")
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+          } else if let items = model.homeResult?.list, !items.isEmpty {
+            ScrollView {
+              LazyVStack(alignment: .leading, spacing: 28) {
+                catalogSection
+              }
+              .padding(.vertical)
+              .padding(.bottom, 72)
+            }
+            .refreshable {
+              await model.reloadHome()
+            }
+          } else {
+            ScrollView {
+              emptyContent
+                .padding(.vertical)
+                .padding(.bottom, 72)
+            }
+            .refreshable {
+              await model.reloadHome()
+            }
+          }
+        }
       }
       .overlay(alignment: .bottomTrailing) {
         if let fab = browseFab {
@@ -148,7 +163,8 @@ struct BrowseView: View {
   }
 
   private var homeLoadToken: String {
-    "\(model.currentConnection?.id ?? "")|\(model.configuration.sites.count)|\(model.selectedSite?.key ?? "")"
+    // Don't include selectedSite — it changes mid-selectSite and would double-load.
+    "\(model.currentConnection?.id ?? "")|\(model.configuration.sites.count)"
   }
 
   private var showsPinnedFilter: Bool {
@@ -279,24 +295,6 @@ struct BrowseView: View {
       model.detailResult = nil
       selectedItem = item
     }
-  }
-
-  private var officialUpdateBanner: some View {
-    HStack(spacing: 12) {
-      Text("拾萤配置有更新")
-        .font(.subheadline)
-        .frame(maxWidth: .infinity, alignment: .leading)
-      Button("更新") {
-        Task { await model.applyOfficialSource() }
-      }
-      .buttonStyle(.borderedProminent)
-      .tint(.orange)
-      .controlSize(.small)
-      .disabled(model.isSwitchingConnection)
-    }
-    .padding(.horizontal)
-    .padding(.vertical, 8)
-    .background(Color.orange.opacity(0.12))
   }
 
   @ViewBuilder

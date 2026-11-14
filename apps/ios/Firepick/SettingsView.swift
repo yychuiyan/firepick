@@ -76,37 +76,28 @@ struct SettingsView: View {
   private var linesSection: some View {
     Section {
       if let connection = model.currentConnection {
-        HStack(alignment: .center, spacing: 12) {
-          VStack(alignment: .leading, spacing: 4) {
-            Text("当前线路")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-            Text(currentLineTitle)
-              .foregroundStyle(.primary)
-              .lineLimit(1)
-            MiddleTruncatingText(
-              text: connection.displayAddress,
-              font: .preferredFont(forTextStyle: .caption1).monospaced(),
-              textColor: .secondaryLabel
-            )
-            .frame(height: 16)
-          }
-          Spacer(minLength: 8)
-          if let ms = model.connectionLatencyMS[connection.url] {
-            Text("\(ms)ms")
-              .font(.caption.monospacedDigit().weight(.medium))
-              .foregroundStyle(.secondary)
-              .padding(.horizontal, 8)
-              .padding(.vertical, 4)
-              .background(.secondary.opacity(0.12), in: Capsule())
-          }
+        VStack(alignment: .leading, spacing: 4) {
+          Text("当前线路")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Text(currentLineTitle)
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+          MiddleTruncatingText(
+            text: connection.displayAddress,
+            font: .preferredFont(forTextStyle: .caption1).monospaced(),
+            textColor: .secondaryLabel
+          )
+          .frame(height: 16)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
       } else {
         LabeledContent("当前线路", value: "尚未选择")
       }
 
-      if model.isSwitchingConnection {
+      // Only after user taps 切换/添加 — silent restore/auto-update stays quiet.
+      if model.userInitiatedConnectionSwitch {
         HStack(spacing: 8) {
           ProgressView()
           Text("正在切换线路…")
@@ -122,12 +113,7 @@ struct SettingsView: View {
         Text("添加线路")
       }
 
-      if model.officialSourceNeedsUpdate {
-        Button("更新拾萤配置") {
-          Task { await model.applyOfficialSource() }
-        }
-        .disabled(model.isSwitchingConnection)
-      } else if model.currentConnection == nil {
+      if model.currentConnection == nil {
         Button("使用拾萤") {
           Task { await model.applyOfficialSource() }
         }
@@ -149,10 +135,10 @@ struct SettingsView: View {
 
       NavigationLink(value: SettingsDestination.sources) {
         LabeledContent(
-          "点播源管理",
+          "采集站管理",
           value: model.currentConnection == nil
             ? "—"
-            : "\(model.configuration.sites.count)"
+            : model.collectionStationSummary
         )
       }
       .disabled(model.currentConnection == nil)

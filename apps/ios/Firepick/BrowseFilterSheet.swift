@@ -6,12 +6,22 @@ struct BrowseFilterSheet: View {
   @Environment(AppModel.self) private var model
   @Environment(\.dismiss) private var dismiss
 
+  private var visibleFilters: [SourceFilter] {
+    model.categoryFilters.filter { filter in
+      let key = filter.key.lowercased()
+      let name = filter.name.trimmingCharacters(in: .whitespacesAndNewlines)
+      if key == "source" || key == "site" || key == "provider" { return false }
+      if name == "源站" || name == "站点" || name == "来源" { return false }
+      return true
+    }
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
-      ForEach(model.categoryFilters, id: \.key) { filter in
+      ForEach(visibleFilters, id: \.key) { filter in
         ScrollView(.horizontal) {
           HStack(spacing: 8) {
-        ForEach(filter.value, id: \.value) { value in
+            ForEach(filter.value, id: \.value) { value in
               let selected = (model.filterSelections[filter.key] ?? filter.initValue ?? "") == value.value
               Button(value.name) {
                 Task { await model.selectFilter(filter, value: value) }
@@ -42,7 +52,7 @@ struct BrowseFilterSheet: View {
   }
 
   private var sheetHeight: CGFloat {
-    let rows = CGFloat(max(model.categoryFilters.count, 1))
+    let rows = CGFloat(max(visibleFilters.count, 1))
     return min(360, 36 + rows * 52)
   }
 }

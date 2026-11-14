@@ -97,5 +97,9 @@ struct ConfigurationTests {
       SourceAddress.displayURL("http://www.饭太硬.net/tv")
         == "http://www.饭太硬.net/tv"
     )
+    #expect(
+      SourceAddress.displayURL("https://dl.yychuiyan.com/firepick/ios-sources.json?v=13&lang=zh")
+        == "https://dl.yychuiyan.com/firepick/ios-sources.json?lang=zh"
+    )
   }
 }

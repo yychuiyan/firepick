@@ -15,7 +15,7 @@ struct SearchView: View {
       searchBar
       Divider()
 
-      if !model.searchHasRun, !model.isLoading {
+      if !model.searchHasRun, !model.isLoadingSearch {
         historyContent
       } else {
         resultsContent
@@ -203,7 +203,7 @@ struct SearchView: View {
     ]
     return ScrollView {
       LazyVStack(alignment: .leading, spacing: 20) {
-        if model.isLoadingSearch || model.isLoading {
+        if model.isLoadingSearch {
           ProgressView("正在搜索…")
             .frame(maxWidth: .infinity)
             .padding(.vertical, 32)
@@ -276,7 +276,6 @@ struct SearchView: View {
         }
         if model.searchHasRun,
           !model.isLoadingSearch,
-          !model.isLoading,
           model.searchSections.isEmpty,
           model.liveSearchResults.isEmpty
         {

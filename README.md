@@ -19,9 +19,9 @@
 当前公开发布版本：
 
 ```text
-Version: 0.1.26
-Build:   27
-SHA-256: e0c82e4a9fe00d1d086ee79070f275c25e320f1a89bf806688a3451bec47787d
+Version: 0.1.27
+Build:   28
+SHA-256: 0e804b25e98f6a38982285eea5fd672046d17dacc8d4bd16f308ce9a60963d54
 ```
 
 SideStore 更新源：
@@ -33,7 +33,7 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 当前 IPA 下载地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/Firepick-0.1.26.ipa
+https://dl.yychuiyan.com/firepick/Firepick-0.1.27.ipa
 ```
 
 ## 功能概览
@@ -85,10 +85,10 @@ SideStore Source 是应用更新清单；Firepick 点播源是 CatVod/TVBox 配�
 拾萤自建聚合配置可直接在 `设置 → 当前线路` 中添加：
 
 ```text
-https://dl.yychuiyan.com/firepick/ios-sources.json?v=12
+https://dl.yychuiyan.com/firepick/ios-sources.json?v=13
 ```
 
-它当前是单站「拾萤」聚合一路 AppleCMS 采集接口，外加三组电视源，
+它当前是单站「拾萤」聚合七路 AppleCMS 采集接口，外加三组电视源，
 覆盖首页、分类、搜索、详情、选集、HLS 播放与直播频道。库名（如「爱奇艺」）
 是第三方采集站，不是官方 App；上游接口可能调整或失效，因此不把其内容视为永久内置资源。
 
@@ -370,7 +370,7 @@ FIREPICK_CURL_DOH_URL="https://223.5.5.5/dns-query" \
 
 版本规则：
 
-- 后续补丁版本依次使用 `0.1.10`、`0.1.11`、`0.1.12`、`0.1.13`、`0.1.14`、`0.1.15`、`0.1.16`、`0.1.17`、`0.1.18`、`0.1.19`、`0.1.20`、`0.1.21`、`0.1.22`、`0.1.23`、`0.1.24`、`0.1.25`、`0.1.26`，不跳到 `0.2.0`。
+- 后续补丁版本依次使用 `0.1.10`、`0.1.11`、`0.1.12`、`0.1.13`、`0.1.14`、`0.1.15`、`0.1.16`、`0.1.17`、`0.1.18`、`0.1.19`、`0.1.20`、`0.1.21`、`0.1.22`、`0.1.23`、`0.1.24`、`0.1.25`、`0.1.26`、`0.1.27`，不跳到 `0.2.0`。
 - 每次发布增加 `MARKETING_VERSION`。
 - 同一版本重新构建时仍应增加 `CURRENT_PROJECT_VERSION`。
 - 不复用旧版本号发布不同代码。

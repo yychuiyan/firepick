@@ -226,8 +226,8 @@ final class AppModel {
   var liveShowsTabBarInFullscreen = false
   var configuration: VodConfiguration = .empty
   var selectedSite: SiteConfiguration?
-  static let officialSourceVersion = "12"
-  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=12"
+  static let officialSourceVersion = "13"
+  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=13"
   var selectedCategory: FirepickCore.Category?
   var homeResult: MediaResult?
   var detailResult: MediaResult?
@@ -254,9 +254,14 @@ final class AppModel {
   var isLoadingHome = false
   private var categoryCache: [String: MediaResult] = [:]
   private var prefetchTask: Task<Void, Never>?
+  private var didRetryEmptyHome = false
+  private var didAutoUpdateOfficialSource = false
   var isLoadingDetail = false
   var isLoadingSearch = false
   var isSwitchingConnection = false
+  var isUpdatingOfficialSource = false
+  /// Non-error status toast (e.g. 配置更新中). Cleared by the presenter when done.
+  var statusToast: String?
   var isLoadingLive = false
   var loadMoreFailed = false
   /// Legacy aggregate flag; prefer granular flags for new UI.
@@ -272,6 +277,11 @@ final class AppModel {
   private var homeLoadGeneration = 0
   private var searchLoadGeneration = 0
   var connectionLatencyMS: [String: Int] = [:]
+  /// CMS / site probe results for 采集站管理 (keyed by CollectionStation.id).
+  var collectionStationLatencyMS: [String: Int] = [:]
+  var probingCollectionStationIDs: Set<String> = []
+  /// True only for user-tapped 切换/添加线路 — hides Settings spinner on silent restore.
+  var userInitiatedConnectionSwitch = false
   /// Reserved. Cloud skip is not wired; local intro/outro marks still apply.
   var cloudAdSkipEnabled = false
   var probingConnectionURLs: Set<String> = []
@@ -488,10 +498,120 @@ final class AppModel {
     lastLiveURLIndex = persistence?.lastLiveURLIndex ?? 0
     sourceConnections = (try? persistence?.loadSourceConnections()) ?? []
     searchHistory = persistence?.searchHistory ?? []
+    consolidateWarehouseConnections()
     if let currentURL = persistence?.currentConnectionURL {
       currentConnection = sourceConnections.first { $0.url == currentURL && $0.enabled }
     }
     refreshCacheSize()
+  }
+
+  /// CMS providers aggregated inside firepick_cms (keep in sync with firepick-cms.js).
+  static let firepickCMSProviders: [(key: String, name: String, api: String)] = [
+    ("sdzy", "索尼", "https://sdzyapi.com/api.php/provide/vod"),
+    ("guangsu", "光速", "https://api.guangsuapi.com/api.php/provide/vod"),
+    ("lzi", "量子", "https://cj.lziapi.com/api.php/provide/vod"),
+    ("bfzy", "暴风", "https://bfzyapi.com/api.php/provide/vod"),
+    ("ffzy_cj", "非凡", "https://cj.ffzyapi.com/api.php/provide/vod"),
+    ("ruyi", "如意", "https://cj.rycjapi.com/api.php/provide/vod"),
+    ("iqiyi", "爱奇艺", "https://iqiyizyapi.com/api.php/provide/vod"),
+  ]
+
+  /// Settings row summary for 采集站管理.
+  var collectionStationSummary: String {
+    "\(collectionStations.count)"
+  }
+
+  /// Rows shown in 采集站管理: firepick providers, or each on-device site.
+  var collectionStations: [CollectionStation] {
+    collectionStations(in: configuration)
+  }
+
+  /// Same rows for a previewed warehouse (线路详情).
+  func collectionStations(in configuration: VodConfiguration) -> [CollectionStation] {
+    if configuration.sites.contains(where: { $0.key == "firepick_cms" }) {
+      return Self.firepickCMSProviders.map {
+        CollectionStation(
+          id: "cms:\($0.key)",
+          name: $0.name,
+          detail: "拾萤聚合 · 自动选用",
+          probeURL: $0.api
+        )
+      }
+    }
+    return configuration.sites.filter { !$0.isHidden && isOnDeviceCapable($0) }.map {
+      CollectionStation(
+        id: $0.key,
+        name: $0.name,
+        detail: routeLabel(for: $0),
+        probeURL: $0.api
+      )
+    }
+  }
+
+  struct CollectionStation: Identifiable, Equatable {
+    var id: String
+    var name: String
+    var detail: String
+    var probeURL: String?
+  }
+
+  /// Merge official ?v= variants into one line, and collapse duplicate loopback warehouses.
+  private func consolidateWarehouseConnections() {
+    let currentURL = persistence?.currentConnectionURL
+    var next = sourceConnections
+    var currentReplacement: String?
+
+    let official = next.filter { isOfficialWarehouseURL($0.url) }
+    if !official.isEmpty {
+      let enabled = official.contains(where: \.enabled)
+      next.removeAll { isOfficialWarehouseURL($0.url) }
+      let connection = SourceConnection(
+        url: Self.officialSourceURL,
+        name: URL(string: Self.officialSourceURL)?.host ?? "拾萤",
+        updatedAt: .now,
+        displayURL: Self.officialSourceURL,
+        enabled: enabled
+      )
+      next.insert(connection, at: 0)
+      if currentURL.map(isOfficialWarehouseURL) == true {
+        currentReplacement = connection.url
+      }
+    }
+
+    // http://127.0.0.1:8765/...?v=11 and bare/duplicate locals → keep newest one per host:port/path
+    var seenLoopback = Set<String>()
+    var deduped: [SourceConnection] = []
+    for connection in next {
+      guard let key = loopbackWarehouseKey(connection.url) else {
+        deduped.append(connection)
+        continue
+      }
+      if seenLoopback.contains(key) {
+        if currentURL == connection.url, currentReplacement == nil {
+          currentReplacement = deduped.first { loopbackWarehouseKey($0.url) == key }?.url
+        }
+        continue
+      }
+      seenLoopback.insert(key)
+      deduped.append(connection)
+    }
+    next = deduped
+
+    guard next != sourceConnections || currentReplacement != nil else { return }
+    sourceConnections = next
+    try? persistence?.saveSourceConnections(sourceConnections)
+    if let currentReplacement {
+      persistence?.saveCurrentConnectionURL(currentReplacement)
+    }
+  }
+
+  private func loopbackWarehouseKey(_ raw: String) -> String? {
+    guard let components = URLComponents(string: raw),
+      let host = components.host?.lowercased(),
+      host == "127.0.0.1" || host == "localhost"
+    else { return nil }
+    let port = components.port.map { ":\($0)" } ?? ""
+    return "\(host)\(port)\(components.path)"
   }
 
   func toggleLiveFavorite(_ channel: LiveChannel) {
@@ -573,6 +693,8 @@ final class AppModel {
       errorMessage = "这条线路已禁用"
       return
     }
+    userInitiatedConnectionSwitch = true
+    defer { userInitiatedConnectionSwitch = false }
     if await applyConfiguration(
       urlString: connection.url,
       displayURL: connection.displayAddress
@@ -620,6 +742,15 @@ final class AppModel {
   }
 
   private func recordConnection(url: URL, displayURL: String? = nil) {
+    // Never downgrade a pinned official ?v=N URL to a redirect/bare address.
+    if isOfficialWarehouse(url),
+      let current = currentConnection,
+      isOfficialWarehouseURL(current.url),
+      warehouseVersion(current.url) == Self.officialSourceVersion,
+      warehouseVersion(url.absoluteString) != Self.officialSourceVersion
+    {
+      return
+    }
     let existing = sourceConnections.first { $0.url == url.absoluteString }
     let connection = SourceConnection(
       url: url.absoluteString,
@@ -629,10 +760,32 @@ final class AppModel {
       enabled: true
     )
     sourceConnections.removeAll { $0.url == connection.url }
+    // Drop bare/outdated official duplicates so the versioned line stays unique.
+    if isOfficialWarehouse(url) {
+      sourceConnections.removeAll { isOfficialWarehouseURL($0.url) }
+    }
     sourceConnections.insert(connection, at: 0)
     currentConnection = connection
     try? persistence?.saveSourceConnections(sourceConnections)
     persistence?.saveCurrentConnectionURL(connection.url)
+  }
+
+  private func isOfficialWarehouse(_ url: URL) -> Bool {
+    isOfficialWarehouseURL(url.absoluteString)
+  }
+
+  private func isOfficialWarehouseURL(_ raw: String) -> Bool {
+    guard let components = URLComponents(string: raw),
+      let host = components.host?.lowercased()
+    else { return false }
+    let officialHost =
+      host == "dl.yychuiyan.com"
+      || host == "firepick-1302621537.cos.ap-shanghai.myqcloud.com"
+    return officialHost && components.path.contains("ios-sources.json")
+  }
+
+  private func warehouseVersion(_ raw: String) -> String? {
+    URLComponents(string: raw)?.queryItems?.first(where: { $0.name == "v" })?.value
   }
 
   func setPlaybackPreference(_ value: PlaybackPreference) {
@@ -820,6 +973,55 @@ final class AppModel {
       for await _ in group {
         enqueue()
       }
+    }
+  }
+
+  func probeCollectionStationLatencies() async {
+    let stations = collectionStations
+    await withTaskGroup(of: Void.self) { group in
+      var index = 0
+      let limit = min(4, stations.count)
+      func enqueue() {
+        guard index < stations.count else { return }
+        let station = stations[index]
+        index += 1
+        group.addTask { await self.probeCollectionStationLatency(station) }
+      }
+      for _ in 0..<limit { enqueue() }
+      for await _ in group {
+        enqueue()
+      }
+    }
+  }
+
+  func probeCollectionStationLatency(_ station: CollectionStation) async {
+    guard let raw = station.probeURL, let base = URL(string: raw) else { return }
+    probingCollectionStationIDs.insert(station.id)
+    defer { probingCollectionStationIDs.remove(station.id) }
+    var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+    var items = components?.queryItems ?? []
+    if !items.contains(where: { $0.name == "ac" }) {
+      items.append(URLQueryItem(name: "ac", value: "list"))
+    }
+    components?.queryItems = items
+    guard let url = components?.url ?? Optional(base) else { return }
+    let started = Date()
+    var request = URLRequest(
+      url: url,
+      cachePolicy: .reloadIgnoringLocalCacheData,
+      timeoutInterval: 8
+    )
+    request.httpMethod = "GET"
+    do {
+      let (_, response) = try await URLSession.shared.data(for: request)
+      let ms = Int(Date().timeIntervalSince(started) * 1000)
+      if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+        collectionStationLatencyMS[station.id] = ms
+      } else {
+        collectionStationLatencyMS.removeValue(forKey: station.id)
+      }
+    } catch {
+      collectionStationLatencyMS.removeValue(forKey: station.id)
     }
   }
 
@@ -1225,12 +1427,19 @@ final class AppModel {
         "「\(site.name)」需要 Android 运行时（Java/Python 等）。当前以本机 HTTP/JS 为主，请改选本机可用源，或使用自建 iOS 配置仓。"
       return
     }
+    let siteChanged = selectedSite?.key != site.key
     selectedSite = site
-    searchSections = []
-    searchFailures = []
-    liveSearchResults = []
-    searchHasRun = false
-    searchFailureCount = 0
+    if siteChanged {
+      didRetryEmptyHome = false
+    }
+    if siteChanged {
+      // Keep search results when re-selecting the same site (avoids flash on back).
+      searchSections = []
+      searchFailures = []
+      liveSearchResults = []
+      searchHasRun = false
+      searchFailureCount = 0
+    }
     sourceTestStatus = nil
     selectedCategory = nil
     prefetchTask?.cancel()
@@ -1245,10 +1454,9 @@ final class AppModel {
     loadMoreFailed = false
     homeLoadGeneration += 1
     let generation = homeLoadGeneration
-    isLoading = true
+    // Only isLoadingHome — global isLoading would flash SearchView mid-navigation.
     isLoadingHome = true
     defer {
-      isLoading = false
       if generation == homeLoadGeneration {
         isLoadingHome = false
       }
@@ -1261,6 +1469,9 @@ final class AppModel {
       homeResult = result
       errorMessage = nil
       categoryCache = [:]
+      if !result.list.isEmpty {
+        didRetryEmptyHome = false
+      }
       if result.list.isEmpty, !result.classes.isEmpty {
         // Classes come from the spider menu even when every provider timed out.
         presentRecoverableError(
@@ -1390,13 +1601,14 @@ final class AppModel {
     let keptSource = filterSelections["source"]
     if categoryChanged {
       if let filters = homeResult?.filters?[category.typeId] {
-        categoryFilters = filters
+        categoryFilters = Self.browseVisibleFilters(filters)
       } else {
-        categoryFilters = decodedFilters(category.filters)
+        categoryFilters = Self.browseVisibleFilters(decodedFilters(category.filters))
       }
       filterSelections = categoryFilters.reduce(into: [:]) { values, filter in
         values[filter.key] = filter.initValue ?? filter.value.first?.value ?? ""
       }
+      // Keep source selection for CMS queries even though the chip row is hidden.
       if let keptSource, !keptSource.isEmpty {
         filterSelections["source"] = keptSource
       }
@@ -1418,14 +1630,10 @@ final class AppModel {
     homeLoadGeneration += 1
     let generation = homeLoadGeneration
     loadMoreFailed = false
-    if var kept = homeResult, categoryChanged || filtersActive {
-      kept.list = []
-      homeResult = kept
-    }
-    isLoading = true
+    // Keep the previous grid on screen while fetching. The flag itself remains
+    // set so `loadMore` cannot race this category request.
     isLoadingHome = true
     defer {
-      isLoading = false
       if generation == homeLoadGeneration {
         isLoadingHome = false
       }
@@ -1702,29 +1910,59 @@ final class AppModel {
   /// Resolve the same title in another on-device site. VOD IDs are scoped to a
   /// site, so switching the configuration address cannot reuse the old ID.
   func findItem(named title: String, in site: SiteConfiguration) async throws -> MediaItem? {
+    try await findItem(named: title, in: site, preferredProviderKey: nil)
+  }
+
+  /// Prefer a CMS provider key embedded in `vod_id` (`sdzy|123`) when aggregating.
+  func findItem(
+    named title: String,
+    in site: SiteConfiguration,
+    preferredProviderKey: String?
+  ) async throws -> MediaItem? {
     let provider = try await provider(for: site)
     let search = try await provider.searchContent(keyword: title, quick: false, page: 1)
-    let candidates =
+    var candidates =
       search.list.isEmpty
       ? try await provider.homeContent().list
       : search.list
+    if let preferredProviderKey, !preferredProviderKey.isEmpty {
+      let scoped = candidates.filter { $0.vodId.hasPrefix(preferredProviderKey + "|") }
+      // Strict: never fall back to another站 — that made 来源 chips look stuck.
+      guard !scoped.isEmpty else { return nil }
+      candidates = scoped
+    }
     let target = Self.normalizedTitle(title)
     guard !target.isEmpty else { return nil }
     let ranked = candidates.compactMap { item -> (MediaItem, Int)? in
-      let candidate = Self.normalizedTitle(item.name)
-      guard !candidate.isEmpty else { return nil }
-      if candidate == target { return (item, 0) }
-      if candidate.hasPrefix(target) || target.hasPrefix(candidate) {
-        return (item, abs(candidate.count - target.count) + 1)
+      guard let rank = Self.titleMatchRank(target: target, candidate: item.name) else {
+        return nil
       }
-      if candidate.contains(target) || target.contains(candidate) {
-        return (item, abs(candidate.count - target.count) + 100)
-      }
-      return nil
+      return (item, rank)
     }
     guard var best = ranked.min(by: { $0.1 < $1.1 })?.0 else { return nil }
     best.sourceKey = site.key
     return best
+  }
+
+  /// Provider keys (e.g. `sdzy`) that return a title match for the current show.
+  func providerKeysHavingTitle(_ title: String) async -> Set<String> {
+    guard let site = selectedSite else { return [] }
+    let target = Self.normalizedTitle(title)
+    guard !target.isEmpty else { return [] }
+    do {
+      let provider = try await provider(for: site)
+      let search = try await provider.searchContent(keyword: title, quick: false, page: 1)
+      var keys = Set<String>()
+      for item in search.list {
+        guard Self.titleMatchRank(target: target, candidate: item.name) != nil else { continue }
+        guard let bar = item.vodId.firstIndex(of: "|") else { continue }
+        let key = String(item.vodId[..<bar])
+        if !key.isEmpty { keys.insert(key) }
+      }
+      return keys
+    } catch {
+      return []
+    }
   }
 
   private static func normalizedTitle(_ title: String) -> String {
@@ -1733,10 +1971,25 @@ final class AppModel {
     }
   }
 
+  /// Lower is better. `nil` means no usable match.
+  private static func titleMatchRank(target: String, candidate: String) -> Int? {
+    let text = normalizedTitle(candidate)
+    guard !text.isEmpty else { return nil }
+    if text == target { return 0 }
+    if text.hasPrefix(target) || target.hasPrefix(text) {
+      return abs(text.count - target.count) + 1
+    }
+    if text.contains(target) || target.contains(text) {
+      return abs(text.count - target.count) + 100
+    }
+    return nil
+  }
+
   func resolvePlayback(
     item: MediaItem,
     episode: Episode,
-    flag: String
+    flag: String,
+    startPositionOverride: Double? = nil
   ) async throws -> PlaybackRequest {
     guard let sourceKey = item.sourceKey ?? selectedSite?.key,
       let site = configuration.sites.first(where: { $0.key == sourceKey })
@@ -1765,6 +2018,7 @@ final class AppModel {
         && $0.item.vodId == item.vodId
         && $0.episodeId == episode.value
     }
+    let startPosition = startPositionOverride ?? previous?.position ?? 0
     let baseURL = URL(string: site.api)
     let subtitles = (result.subs ?? []).compactMap { subtitle -> PlaybackSubtitle? in
       guard subtitle.flag != 0,
@@ -1786,7 +2040,7 @@ final class AppModel {
       url: url,
       headers: result.header ?? [:],
       formatHint: rawURL,
-      startPosition: previous?.position ?? 0,
+      startPosition: startPosition,
       subtitles: subtitles,
       danmaku: danmaku
     )
@@ -2256,10 +2510,14 @@ final class AppModel {
       )
     }
 
-    // The saved copy can be an older warehouse. Refresh from the address so
-    // the title and script match the file that is actually being served.
-    let keptError = errorMessage
-    if let connection = currentConnection {
+    // Official warehouse behind ?v= → auto-update first (avoids racing a
+    // stale refresh that would overwrite the versioned URL afterward).
+    if officialSourceNeedsUpdate {
+      await maybeAutoUpdateOfficialSource()
+    } else if let connection = currentConnection {
+      // The saved copy can be an older warehouse. Refresh from the address so
+      // the title and script match the file that is actually being served.
+      let keptError = errorMessage
       let refreshed = await applyConfiguration(
         urlString: connection.url,
         selectInitialSite: false,
@@ -2310,43 +2568,89 @@ final class AppModel {
   /// configuration address is applied — including when the user is still on Settings.
   func ensureHomeContentLoaded() async {
     guard currentConnection != nil else { return }
+    if isLoadingHome { return }
     if selectedSite == nil {
       await selectPendingInitialSite()
       return
     }
+    if let list = homeResult?.list, !list.isEmpty { return }
     // Categories-without-list usually means the last fetch timed out on a slow link.
-    if let home = homeResult, !home.classes.isEmpty, home.list.isEmpty, !isLoadingHome {
+    if let home = homeResult, !home.classes.isEmpty, home.list.isEmpty {
+      guard !didRetryEmptyHome else { return }
+      didRetryEmptyHome = true
+      await reloadHome()
+    } else if homeResult == nil {
       await reloadHome()
     }
   }
 
   func reloadHome() async {
     guard currentConnection != nil else { return }
-    if let category = selectedCategory {
-      await loadCategory(category)
-      return
+    if officialSourceNeedsUpdate {
+      await maybeAutoUpdateOfficialSource()
     }
     if let site = selectedSite {
+      let category = selectedCategory
       await selectSite(site)
+      if let category, !category.typeId.contains("recommend"),
+        homeResult?.list.isEmpty == false
+      {
+        await loadCategory(category)
+      }
     } else {
       await selectPendingInitialSite()
     }
   }
 
   var officialSourceNeedsUpdate: Bool {
-    guard let raw = currentConnection?.url,
-      let components = URLComponents(string: raw),
-      let host = components.host?.lowercased()
-    else { return false }
-    let officialHost = host == "dl.yychuiyan.com" || host == "firepick-1302621537.cos.ap-shanghai.myqcloud.com"
-    guard officialHost, components.path.contains("ios-sources.json") else { return false }
-    let version = components.queryItems?.first(where: { $0.name == "v" })?.value
-    return version != Self.officialSourceVersion
+    guard let connection = currentConnection else { return false }
+    let candidates = [connection.url, connection.displayURL].compactMap { $0 }
+    var onOfficial = false
+    for raw in candidates {
+      guard let components = URLComponents(string: raw),
+        let host = components.host?.lowercased()
+      else { continue }
+      let officialHost =
+        host == "dl.yychuiyan.com"
+        || host == "firepick-1302621537.cos.ap-shanghai.myqcloud.com"
+      guard officialHost, components.path.contains("ios-sources.json") else { continue }
+      onOfficial = true
+      let version = components.queryItems?.first(where: { $0.name == "v" })?.value
+      if version == Self.officialSourceVersion {
+        return false
+      }
+    }
+    return onOfficial
+  }
+
+  /// Quietly refresh the official warehouse when the saved URL is behind.
+  func maybeAutoUpdateOfficialSource() async {
+    guard officialSourceNeedsUpdate, !didAutoUpdateOfficialSource, !isUpdatingOfficialSource else {
+      return
+    }
+    didAutoUpdateOfficialSource = true
+    isUpdatingOfficialSource = true
+    statusToast = "配置更新中"
+    defer {
+      isUpdatingOfficialSource = false
+      statusToast = nil
+    }
+    if !(await applyOfficialSource()) {
+      didAutoUpdateOfficialSource = false
+    }
   }
 
   @discardableResult
   func applyOfficialSource() async -> Bool {
-    await applyConfiguration(urlString: Self.officialSourceURL)
+    let ok = await applyConfiguration(
+      urlString: Self.officialSourceURL,
+      displayURL: Self.officialSourceURL
+    )
+    // Redirects / CDN responses often drop ?v=; pin the versioned official URL.
+    if ok, let url = URL(string: Self.officialSourceURL) {
+      recordConnection(url: url, displayURL: Self.officialSourceURL)
+    }
+    return ok
   }
 
   /// Sites that can run on-device (HTTP / QuickJS) without Android Bridge.
@@ -2706,6 +3010,17 @@ final class AppModel {
       return groups.values.flatMap { $0 }
     }
     return []
+  }
+
+  /// Hide CMS 源站/站点 chips from Browse 筛选 (switch stations on the player page).
+  private static func browseVisibleFilters(_ filters: [SourceFilter]) -> [SourceFilter] {
+    filters.filter { filter in
+      let key = filter.key.lowercased()
+      let name = filter.name.trimmingCharacters(in: .whitespacesAndNewlines)
+      if key == "source" || key == "site" || key == "provider" { return false }
+      if name == "源站" || name == "站点" || name == "来源" { return false }
+      return true
+    }
   }
 
 }

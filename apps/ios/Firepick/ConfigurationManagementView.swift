@@ -41,7 +41,6 @@ struct ConfigurationManagementView: View {
                     }
                   }
                   .frame(maxWidth: .infinity, alignment: .leading)
-                  latencyBadge(for: connection)
                   if model.currentConnection?.id == connection.id {
                     Image(systemName: "checkmark.circle.fill")
                       .foregroundStyle(.orange)
@@ -69,7 +68,7 @@ struct ConfigurationManagementView: View {
             }
           }
         } footer: {
-          Text("点进线路可查看播放源并切换。关闭开关即禁用，当前线路被禁用时会改用下一条。列表延迟为配置地址测速（毫秒）。")
+          Text("点进线路可看概况（点播源/采集站数量、电视频道）和点播源列表。采集站明细在设置「采集站管理」。关闭开关即禁用；当前线路被禁用时会改用下一条。")
         }
       }
     }
@@ -83,31 +82,6 @@ struct ConfigurationManagementView: View {
         }
         .accessibilityLabel("添加线路")
       }
-    }
-    .refreshable {
-      await model.probeAllConnectionLatencies()
-    }
-    .task {
-      await model.probeAllConnectionLatencies()
-    }
-  }
-
-  @ViewBuilder
-  private func latencyBadge(for connection: SourceConnection) -> some View {
-    if model.probingConnectionURLs.contains(connection.url) {
-      ProgressView()
-        .controlSize(.small)
-    } else if let ms = model.connectionLatencyMS[connection.url] {
-      Text("\(ms)ms")
-        .font(.caption.monospacedDigit().weight(.medium))
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(.secondary.opacity(0.12), in: Capsule())
-    } else {
-      Text("—")
-        .font(.caption)
-        .foregroundStyle(.tertiary)
     }
   }
 }

@@ -2,7 +2,14 @@ import { Spider, net } from 'catvod';
 
 // Curated from LunaTV jin18 + local probe (scripts/probe-cms-providers.mjs).
 // Re-run the probe periodically; dead hosts drag search latency.
+// Faster hosts first. A single slow/blocked API must not empty the home grid.
 const DEFAULT_PROVIDERS = [
+  { key: 'sdzy', name: '索尼', api: 'https://sdzyapi.com/api.php/provide/vod' },
+  { key: 'guangsu', name: '光速', api: 'https://api.guangsuapi.com/api.php/provide/vod' },
+  { key: 'lzi', name: '量子', api: 'https://cj.lziapi.com/api.php/provide/vod' },
+  { key: 'bfzy', name: '暴风', api: 'https://bfzyapi.com/api.php/provide/vod' },
+  { key: 'ffzy_cj', name: '非凡', api: 'https://cj.ffzyapi.com/api.php/provide/vod' },
+  { key: 'ruyi', name: '如意', api: 'https://cj.rycjapi.com/api.php/provide/vod' },
   { key: 'iqiyi', name: '爱奇艺', api: 'https://iqiyizyapi.com/api.php/provide/vod' },
 ];
 
@@ -69,23 +76,10 @@ const FILTER_SORT = [
   { n: '豆瓣评分', v: 'douban' },
 ];
 
-function sourceFilter(providers) {
-  if (providers.length < 2) return null;
-  return {
-    key: 'source',
-    name: '源站',
-    init: providers[0].key,
-    value: providers.map(function (provider) {
-      return { n: provider.name, v: provider.key };
-    }),
-  };
-}
-
-function bucketFilters(bucket, providers) {
+function bucketFilters(bucket) {
   const anime = bucket === 'anime';
   const filters = [];
-  const source = sourceFilter(providers);
-  if (source) filters.push(source);
+  // 站点切换在播放页「来源」完成；筛选里不再展示源站 chips。
   filters.push({
     key: 'class',
     name: '类型',
@@ -100,28 +94,14 @@ function bucketFilters(bucket, providers) {
   return filters;
 }
 
-function menuFilters(providers) {
+function menuFilters() {
   const filters = {};
   for (let i = 0; i < MENU.length; i++) {
     const entry = MENU[i];
     if (entry.id === 'recommend') continue;
-    filters['bucket|' + entry.id] = bucketFilters(entry.id, providers);
+    filters['bucket|' + entry.id] = bucketFilters(entry.id);
   }
   return filters;
-}
-
-// One line, one source site at a time. An empty choice stays on the first site.
-function activeProviders(providers, extend) {
-  const all =
-    Array.isArray(providers) && providers.length ? providers : DEFAULT_PROVIDERS;
-  const key = extend && String(extend.source || '');
-  if (key) {
-    const found = all.filter(function (provider) {
-      return provider.key === key;
-    });
-    if (found.length) return found;
-  }
-  return all.slice(0, 1);
 }
 
 function animeLeafKind(name) {
@@ -440,6 +420,34 @@ function dedupeByTitle(list) {
   });
 }
 
+// Keep one hit per provider+title so source chips can rematch the same show.
+function dedupeByProviderTitle(list) {
+  const best = new Map();
+  const order = [];
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i];
+    const title = normalizeTitle(item.vod_name);
+    if (!title) continue;
+    const split = splitID(item.vod_id);
+    const provider = split ? split.provider : '';
+    const key = provider + '\0' + title;
+    const prev = best.get(key);
+    if (!prev) {
+      best.set(key, item);
+      order.push(key);
+      continue;
+    }
+    const newer = recency(item) > recency(prev);
+    const sameTimeBetterPic = recency(item) === recency(prev) && itemScore(item) > itemScore(prev);
+    if (newer || sameTimeBetterPic) {
+      best.set(key, item);
+    }
+  }
+  return order.map(function (key) {
+    return best.get(key);
+  });
+}
+
 function classifyTypeName(name) {
   const n = String(name || '').replace(/\s+/g, '');
   if (!n) return null;
@@ -606,7 +614,7 @@ export default class extends Spider {
 
   async homeContent(filter) {
     const configuredProviders = this.providers || DEFAULT_PROVIDERS;
-    const providers = activeProviders(configuredProviders, null);
+    const providers = configuredProviders;
     const self = this;
     const list = await collectProviderLists(providers, 1, FIRST_SCREEN, null, function (provider, row) {
       const bucket = self.classifyItem(provider, row);
@@ -616,7 +624,7 @@ export default class extends Spider {
     return {
       class: menuClasses(),
       list: sortByHotRecent(dedupeByTitle(list)),
-      filters: menuFilters(configuredProviders),
+      filters: menuFilters(),
     };
   }
 
@@ -649,7 +657,7 @@ export default class extends Spider {
 
   async bucketContent(bucket, pg, extend) {
     const configuredProviders = this.providers || DEFAULT_PROVIDERS;
-    const providers = activeProviders(configuredProviders, extend);
+    const providers = configuredProviders;
     const providerKeys = new Set(providers.map(function (provider) {
       return provider.key;
     }));
@@ -773,7 +781,7 @@ export default class extends Spider {
         if (item) list.push(item);
       }
     }
-    return { list: dedupeByTitle(list) };
+    return { list: dedupeByProviderTitle(list) };
   }
 
   async detailContent(ids) {

@@ -32,6 +32,10 @@ struct PlayerView: View {
   var onExpand: (() -> Void)? = nil
   var onCollapse: (() -> Void)? = nil
   var onPlayEpisode: ((Episode, String) -> Void)? = nil
+  /// Live clock for Detail 来源 handoff (continue from same timestamp).
+  var onPlaybackTimeChange: ((Double) -> Void)? = nil
+  /// All candidate URLs failed — return true if parent will switch 来源.
+  var onUnplayable: (() -> Bool)? = nil
 
   @State private var avEngine = AVPlayerEngine()
   @State private var mpvEngine = MPVPlayerEngine()
@@ -78,6 +82,11 @@ struct PlayerView: View {
   @State private var remoteCommandTargets: [(command: MPRemoteCommand, target: Any)] = []
   @State private var showingRatePicker = false
   @State private var orientationLocked = false
+  /// Keep progress chrome stable while soft-reloading another 来源.
+  @State private var stickyDuration: Double = 0
+  @State private var stickyTime: Double = 0
+  @State private var lastReportedTime: Double = 0
+  @State private var softReloadGeneration = 0
 
   private enum DragAxis {
     case horizontal
@@ -95,7 +104,9 @@ struct PlayerView: View {
     chrome: PlayerChrome = .immersive,
     onExpand: (() -> Void)? = nil,
     onCollapse: (() -> Void)? = nil,
-    onPlayEpisode: ((Episode, String) -> Void)? = nil
+    onPlayEpisode: ((Episode, String) -> Void)? = nil,
+    onPlaybackTimeChange: ((Double) -> Void)? = nil,
+    onUnplayable: (() -> Bool)? = nil
   ) {
     self.request = request
     self.item = item
@@ -108,6 +119,8 @@ struct PlayerView: View {
     self.onExpand = onExpand
     self.onCollapse = onCollapse
     self.onPlayEpisode = onPlayEpisode
+    self.onPlaybackTimeChange = onPlaybackTimeChange
+    self.onUnplayable = onUnplayable
     let kind =
       (try? PlayerSelector().select(
         request,
@@ -183,6 +196,28 @@ struct PlayerView: View {
     engineKind == .mpv ? mpvEngine.duration : avEngine.duration
   }
 
+  private var displayDuration: Double {
+    let live = observedDuration
+    if live > 0 {
+      return live
+    }
+    return stickyDuration
+  }
+
+  private var displayTime: Double {
+    // During soft-reload keep the last clock so the scrubber doesn't collapse to 0.
+    if stickyTime > 0 {
+      if failingOver || isResolvingNext { return stickyTime }
+      switch observedState {
+      case .loading, .idle:
+        if failure == nil { return stickyTime }
+      default:
+        break
+      }
+    }
+    return observedTime
+  }
+
   /// `any PlaybackEngine` does not publish `@Observable` changes to SwiftUI.
   private var observedState: PlaybackState {
     engineKind == .mpv ? mpvEngine.state : avEngine.state
@@ -197,14 +232,14 @@ struct PlayerView: View {
   }
 
   private var currentTime: Double {
-    let raw = scrubPreview ?? observedTime
+    let raw = scrubPreview ?? displayTime
     guard raw.isFinite, raw >= 0 else { return 0 }
     if duration > 0 { return min(raw, duration) }
     return raw
   }
 
   private var duration: Double {
-    PlaybackTimeline.duration(observedDuration)
+    PlaybackTimeline.duration(displayDuration)
   }
 
   var body: some View {
@@ -252,21 +287,25 @@ struct PlayerView: View {
       configureAudioSession()
       configureRemoteCommandsIfNeeded()
       UIApplication.shared.isIdleTimerDisabled = true
-      await loadAvailableSource()
+    }
+    .task(id: request.id) {
+      // Soft-reload in place so 来源/选集 switches keep the progress chrome.
+      if activeRequest == nil {
+        await loadAvailableSource()
+      } else {
+        await softReload(request)
+      }
       updateNowPlaying()
-      maybeShowResumeToast()
       scheduleHideControls()
     }
     .task(id: request.danmaku.first?.id) {
       await loadDanmaku()
     }
     .onChange(of: avEngine.currentTime) { _, time in
-      handleAutoSkip(at: time)
-      updateNowPlaying()
+      notePlaybackClock(time: time, durationValue: avEngine.duration, active: engineKind == .avPlayer)
     }
     .onChange(of: mpvEngine.currentTime) { _, time in
-      handleAutoSkip(at: time)
-      updateNowPlaying()
+      notePlaybackClock(time: time, durationValue: mpvEngine.duration, active: engineKind == .mpv)
     }
     .onChange(of: selectedSubtitleIndex) { _, index in
       applySubtitleSelection(index)
@@ -416,13 +455,12 @@ struct PlayerView: View {
         }
         if let displayFailure {
           failureOverlay(displayFailure)
-        }
-        if observedState == .loading || isResolvingNext {
+        } else if isAwaitingPlayback {
           ProgressView()
             .tint(.white)
             .scaleEffect(1.2)
         }
-        if let playPauseGlyph {
+        if let playPauseGlyph, !isAwaitingPlayback {
           playPauseFlash(playPauseGlyph)
             .allowsHitTesting(false)
         }
@@ -578,10 +616,25 @@ struct PlayerView: View {
     }
   }
 
+  /// Loading / failover / not-yet-ready — never show play/pause as if content is ready.
+  private var isAwaitingPlayback: Bool {
+    if failingOver || isResolvingNext { return true }
+    if failure != nil { return false }
+    switch observedState {
+    case .loading, .idle:
+      return true
+    case .ready, .playing, .paused:
+      // Duration still unknown — keep spinner so progress chrome doesn't look empty.
+      return duration <= 0
+    default:
+      return false
+    }
+  }
+
   @ViewBuilder
   private var centerPlayButton: some View {
     // Flash glyph already covers the center — never stack a second play/pause.
-    if playPauseGlyph != nil {
+    if playPauseGlyph != nil, !isAwaitingPlayback {
       Color.clear.frame(width: 1, height: 1)
     } else if chrome == .inline {
       HStack(spacing: 36) {
@@ -592,10 +645,11 @@ struct PlayerView: View {
             .font(.title2)
         }
         .accessibilityLabel("快退")
+        .disabled(isAwaitingPlayback)
         Button {
           togglePlayPause()
         } label: {
-          if observedState == .loading || isResolvingNext {
+          if isAwaitingPlayback {
             ProgressView()
               .tint(.white)
               .frame(width: 36, height: 36)
@@ -604,7 +658,7 @@ struct PlayerView: View {
               .font(.system(size: 34, weight: .regular))
           }
         }
-        .disabled(observedState == .loading || isResolvingNext)
+        .disabled(isAwaitingPlayback)
         Button {
           seek(by: 10)
         } label: {
@@ -612,6 +666,7 @@ struct PlayerView: View {
             .font(.title2)
         }
         .accessibilityLabel("快进")
+        .disabled(isAwaitingPlayback)
       }
       .buttonStyle(.plain)
       .foregroundStyle(.white)
@@ -623,7 +678,7 @@ struct PlayerView: View {
           Circle()
             .fill(.black.opacity(0.45))
             .frame(width: 64, height: 64)
-          if observedState == .loading || isResolvingNext {
+          if isAwaitingPlayback {
             ProgressView()
               .tint(.white)
           } else {
@@ -635,12 +690,12 @@ struct PlayerView: View {
         }
       }
       .buttonStyle(.plain)
-      .disabled(observedState == .loading || isResolvingNext)
+      .disabled(isAwaitingPlayback)
     }
   }
 
   private var inlineTitle: String {
-    if failingOver || observedState == .loading { return headlineTitle }
+    if isAwaitingPlayback { return headlineTitle }
     if let failure, !failure.isEmpty { return failure }
     if case .failed(let message) = observedState, !message.isEmpty {
       return message
@@ -936,7 +991,7 @@ struct PlayerView: View {
               .font(.body.weight(.semibold))
               .frame(width: 28, height: 28)
           }
-          .disabled(isResolvingNext)
+          .disabled(isResolvingNext || isAwaitingPlayback)
           .buttonStyle(.plain)
           .foregroundStyle(.white)
           .accessibilityLabel("下一集")
@@ -961,7 +1016,7 @@ struct PlayerView: View {
         ),
         range: PlaybackTimeline.progressRange(duration: duration),
         tint: chrome == .inline ? .white : .orange,
-        enabled: duration > 0,
+        enabled: duration > 0 && !isAwaitingPlayback,
         onEditingChanged: { editing in
           isScrubbing = editing
           if !editing, let scrubPreview {
@@ -975,7 +1030,7 @@ struct PlayerView: View {
       )
       .frame(height: 28)
       if chrome == .inline {
-        Text(duration > 0 ? format(duration) : "00:00")
+        Text(duration > 0 ? format(duration) : "--:--")
           .font(.caption2.monospacedDigit())
           .foregroundStyle(.white)
           .frame(width: 44, alignment: .trailing)
@@ -1097,14 +1152,53 @@ struct PlayerView: View {
   }
 
   private var displayFailure: String? {
-    if failingOver || playbackEngine.state == .loading { return nil }
-    if let failure { return failure }
-    switch playbackEngine.state {
-    case .failed(let message):
-      return message
-    default:
-      return nil
+    if isAwaitingPlayback { return nil }
+    let raw: String?
+    if let failure {
+      raw = failure
+    } else if case .failed(let message) = playbackEngine.state {
+      raw = message
+    } else {
+      raw = nil
     }
+    guard let raw, !raw.isEmpty else { return nil }
+    return Self.friendlyPlaybackError(raw)
+  }
+
+  private static func friendlyPlaybackError(_ message: String) -> String {
+    let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+    if Self.isUnplayableResourceError(text) {
+      return "当前线路暂时无法播放，请换来源或重试"
+    }
+    return text
+  }
+
+  private static func isUnplayableResourceError(_ message: String) -> Bool {
+    let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+    return text.contains("无可用资源")
+      || text.contains("许可")
+      || text.contains("无权")
+      || text.localizedCaseInsensitiveContains("resource")
+      || text.localizedCaseInsensitiveContains("permission")
+      || text.localizedCaseInsensitiveContains("not authorized")
+      || text.localizedCaseInsensitiveContains("cannot open")
+      || text.localizedCaseInsensitiveContains("not playable")
+      || text.localizedCaseInsensitiveContains("forbidden")
+      || text.localizedCaseInsensitiveContains("access")
+  }
+
+  /// Ask parent to switch 来源. Returns true when parent will retry (keep loading chrome).
+  @discardableResult
+  private func handleExhaustedPlayback(_ message: String) -> Bool {
+    let text = Self.friendlyPlaybackError(message)
+    if onUnplayable?() == true {
+      failure = nil
+      failingOver = true
+      return true
+    }
+    failingOver = false
+    failure = text
+    return false
   }
 
   private func engine(for url: URL) -> PlaybackEngineKind {
@@ -1125,8 +1219,10 @@ struct PlayerView: View {
 
   private func playCandidates(_ urls: [URL]) async {
     failingOver = true
-    defer { failingOver = false }
-    var last = "媒体不可播放"
+    failure = nil
+    var keepAwaiting = false
+    defer { if !keepAwaiting { failingOver = false } }
+    var last = "当前线路暂时无法播放，请换来源或重试"
     for url in urls where !triedURLs.contains(url) {
       triedURLs.append(url)
       let kind = engine(for: url)
@@ -1144,10 +1240,10 @@ struct PlayerView: View {
         playbackEngine.play()
         return
       } catch {
-        last = error.localizedDescription
+        last = Self.friendlyPlaybackError(error.localizedDescription)
       }
     }
-    failure = last
+    keepAwaiting = handleExhaustedPlayback(last)
   }
 
   private func recover(from message: String) async {
@@ -1160,7 +1256,8 @@ struct PlayerView: View {
     if engineKind == .mpv, !retriedWithAV, let url = activeRequest?.url ?? Optional(request.url) {
       retriedWithAV = true
       failingOver = true
-      defer { failingOver = false }
+      var keepAwaiting = false
+      defer { if !keepAwaiting { failingOver = false } }
       engineKind = .avPlayer
       var candidate = request
       candidate.url = url
@@ -1172,11 +1269,11 @@ struct PlayerView: View {
         playbackEngine.play()
         return
       } catch {
-        failure = error.localizedDescription
+        keepAwaiting = handleExhaustedPlayback(error.localizedDescription)
         return
       }
     }
-    failure = message
+    handleExhaustedPlayback(message)
   }
 
   private var playbackEngineOptions: PlaybackEngineOptions {
@@ -1333,10 +1430,48 @@ struct PlayerView: View {
       .accessibilityLabel(glyph == .pause ? "已暂停" : "正在播放")
   }
 
-  private func maybeShowResumeToast() {
-    let start = request.startPosition
-    guard start > 2 else { return }
-    showToast("已从 \(format(start)) 续播")
+  private func notePlaybackClock(time: Double, durationValue: Double, active: Bool) {
+    guard active else { return }
+    handleAutoSkip(at: time)
+    updateNowPlaying()
+    lastReportedTime = time
+    if time > 0 { stickyTime = time }
+    if durationValue > 0 { stickyDuration = durationValue }
+    onPlaybackTimeChange?(time)
+  }
+
+  /// Reload a new URL without remounting the player chrome.
+  private func softReload(_ next: PlaybackRequest) async {
+    if activeRequest?.url == next.url,
+      abs((activeRequest?.startPosition ?? 0) - next.startPosition) < 0.5
+    {
+      return
+    }
+    softReloadGeneration += 1
+    let generation = softReloadGeneration
+    stickyDuration = max(stickyDuration, observedDuration, duration)
+    stickyTime = max(next.startPosition, lastReportedTime, observedTime)
+    triedURLs = []
+    retriedWithAV = false
+    failure = nil
+    didAutoSkipIntro = false
+    didHandleEnded = false
+    showingNextEpisode = false
+    activeEpisode = episode
+    activeFlag = flag
+    activeLineEpisodes = lineEpisodes.isEmpty
+      ? (playbackLines.first(where: { $0.name == flag })?.episodes ?? [])
+      : lineEpisodes
+    await playCandidates([next.url] + alternateURLs)
+    guard generation == softReloadGeneration else { return }
+    if let index = selectedSubtitleIndex, next.subtitles.indices.contains(index) {
+      applySubtitleSelection(index)
+    } else {
+      selectedSubtitleIndex = nil
+      overlayCues = []
+    }
+    updateNowPlaying()
+    scheduleHideControls()
   }
 
   private func handleAutoSkip(at time: Double) {

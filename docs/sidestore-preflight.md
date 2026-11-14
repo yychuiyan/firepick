@@ -21,8 +21,8 @@ SideStore must perform the final personal-team signing and installation.
 
 Current artifact:
 
-- `artifacts/Firepick-unsigned-0.1.26.ipa` (22 MB)
-- SHA-256: `e0c82e4a9fe00d1d086ee79070f275c25e320f1a89bf806688a3451bec47787d`
+- `artifacts/Firepick-unsigned-0.1.27.ipa` (22 MB)
+- SHA-256: `0e804b25e98f6a38982285eea5fd672046d17dacc8d4bd16f308ce9a60963d54`
 - Archive contains only standard `Payload/Firepick.app` entries.
 
 ## Device checks
