@@ -4,13 +4,16 @@ import { Spider, net } from 'catvod';
 // Ranked by search breadth + latency; same-catalog mirrors collapsed to one host.
 // Faster hosts first so collectProviderLists fills the first screen sooner.
 const DEFAULT_PROVIDERS = [
-  { key: 'maoyan', name: '猫眼', api: 'https://api.maoyanapi.top/api.php/provide/vod' },
-  { key: 'bfzy', name: '暴风', api: 'https://bfzyapi.com/api.php/provide/vod' },
-  { key: 'subo', name: '速播', api: 'https://subocaiji.com/api.php/provide/vod' },
   { key: 'zuid', name: '最大', api: 'https://api.zuidapi.com/api.php/provide/vod' },
+  { key: 'lzcaiji', name: '量子', api: 'https://cj.lzcaiji.com/api.php/provide/vod' },
+  { key: 'haohua', name: '豪华', api: 'https://hhzyapi.com/api.php/provide/vod' },
+  { key: 'maoyan', name: '猫眼', api: 'https://api.maoyanapi.top/api.php/provide/vod' },
+  { key: 'guangsu', name: '光速', api: 'https://api.guangsuapi.com/api.php/provide/vod' },
+  { key: 'subo', name: '速播', api: 'https://subocaiji.com/api.php/provide/vod' },
+  { key: 'jisu', name: '极速', api: 'https://jszyapi.com/api.php/provide/vod' },
   { key: 'lzi', name: '量子', api: 'https://cj.lziapi.com/api.php/provide/vod' },
-  { key: 'jinying', name: '金鹰', api: 'https://jyzyapi.com/provide/vod/from/jinyingyun/at/json' },
-  { key: 'huya', name: '虎牙', api: 'https://www.huyaapi.com/api.php/provide/vod' },
+  { key: 'ruyi', name: '如意', api: 'https://cj.rycjapi.com/api.php/provide/vod' },
+  { key: 'ffzy', name: '非凡', api: 'https://api.ffzyapi.com/api.php/provide/vod' },
 ];
 
 const MENU = [
@@ -78,10 +81,10 @@ const FILTER_SORT = [
   { n: '豆瓣评分', v: 'douban' },
 ];
 
-// 电影：默认上映时间；可选豆瓣热门。
+// 电影：与剧/综/漫一致，默认热门（豆瓣榜 / 大站热播优先）；上映时间改为可选。
 const FILTER_SORT_MOVIE = [
-  { n: '上映时间', v: '' },
-  { n: '豆瓣热门', v: 'douban_hot' },
+  { n: '热门', v: '' },
+  { n: '上映时间', v: 'release' },
   { n: '最新更新', v: 'time' },
   { n: '最热', v: 'hits' },
   { n: '豆瓣评分', v: 'douban' },
@@ -238,14 +241,14 @@ function hotRecentScore(item, current) {
   return score;
 }
 
-/// 上映时间：大平台优先，再年份，同年份看入库/更新时间。
+/// 上映时间：年份优先（避免高分老片靠平台分压过新片），再轻量平台分，再入库时间。
 function releaseTime(item) {
   const year = Number(String((item && item.vod_year) || '').slice(0, 4));
   const yearScore = Number.isFinite(year) && year > 1900 ? year : 0;
   const raw = String((item && (item.vod_time || item.vod_time_add)) || '').trim();
   const time = Date.parse(raw.replace(' ', 'T'));
   const timeScore = Number.isFinite(time) ? time : 0;
-  return majorPlatformRank(item) * 1e16 + yearScore * 1e13 + timeScore;
+  return yearScore * 1e13 + majorPlatformRank(item) * 1e10 + timeScore;
 }
 
 function sortByReleaseTime(list) {
@@ -343,12 +346,12 @@ function applyExtend(list, extend, bucket) {
     out = sortByHotRecent(out);
   } else if (sortKey === 'douban_hot') {
     // Already ordered by Douban chart — keep as-is.
-  } else if (sortKey === 'release' || (bucket === 'movie' && !sortKey)) {
-    // 显式「上映时间」，或电影默认（by 为空）
+  } else if (sortKey === 'release') {
+    // 显式「上映时间」
     out = sortByReleaseTime(out);
   } else if (!sortKey) {
-    // TV / variety / anime default is Douban chart order when resolved upstream;
-    // fallback CMS path still uses hot-recent.
+    // Default (含电影)：Douban chart order when resolved upstream;
+    // fallback CMS path still uses hot-recent + major-platform rank.
     out = sortByHotRecent(out);
   } else {
     out = sortByHotRecent(out);
@@ -410,14 +413,14 @@ async function findCMSMatchForTitle(entry, providers, accept) {
   const title = entry.title;
   let best = null;
   let bestScore = 0;
-  // Two hosts are enough for chart matching; more fan-out starves the first paint.
+  // Two fast hosts + short timeout — keep Douban mapping inside category budget.
   const hosts = providers.slice(0, 2);
   await Promise.all(
     hosts.map(async function (provider) {
       const data = await requestJSON(
         provider.api,
         { ac: 'videolist', wd: title, pg: '1' },
-        7000
+        4000
       );
       const items = data && Array.isArray(data.list) ? data.list : [];
       for (let i = 0; i < items.length; i++) {
@@ -470,18 +473,22 @@ async function resolveDoubanHotList(bucket, providers, accept, options) {
     doubanResolveCache.at
     && now - doubanResolveCache.at < DOUBAN_CACHE_MS
     && doubanResolveCache.byBucket[bucket]
-    && doubanResolveCache.byBucket[bucket].length >= 6
+    && doubanResolveCache.byBucket[bucket].length >= 4
   ) {
     return doubanResolveCache.byBucket[bucket].slice();
   }
   // Cold-start home uses CMS immediately. Douban matching resumes when the
   // user opens a category or when a later request reaches this helper.
   if (options && options.allowNetwork === false) return null;
-  const entries = await cachedDoubanEntries(bucket, 12);
+  // Wall-clock budget (JSC setTimeout is blocking — do not race with it).
+  const budgetMs = options && options.budgetMs != null ? options.budgetMs : 3200;
+  const deadline = now + budgetMs;
+  const entries = await cachedDoubanEntries(bucket, 8);
   if (!entries.length) return null;
   const out = [];
   const used = {};
   for (let i = 0; i < entries.length; i += 4) {
+    if (Date.now() > deadline) break;
     const chunk = entries.slice(i, i + 4);
     const found = await Promise.all(
       chunk.map(function (entry) {
@@ -498,47 +505,67 @@ async function resolveDoubanHotList(bucket, providers, accept, options) {
     }
     if (out.length >= FIRST_SCREEN) break;
   }
-  if (out.length >= 6) {
-    doubanResolveCache.at = now;
+  if (out.length >= 4) {
+    doubanResolveCache.at = Date.now();
     doubanResolveCache.byBucket[bucket] = out.slice();
   }
   return out.length ? out : null;
 }
 
-/// CMS first screen, then Douban order on top when chart resolves in time.
-async function doubanOrCMSList(bucket, providers, accept, cmsFetcher, allowNetwork) {
-  const cmsPromise = cmsFetcher();
-  let douban = null;
-  if (allowNetwork !== false) {
-    const doubanPromise = resolveDoubanHotList(bucket, providers, accept).catch(function () {
-      return null;
-    });
-    // Don't block first paint forever on Douban — prefer CMS if chart is slow.
-    const raced = await Promise.race([
-      doubanPromise.then(function (list) {
-        return { kind: 'douban', list: list };
-      }),
-      new Promise(function (resolve) {
-        setTimeout(function () {
-          resolve({ kind: 'timeout', list: null });
-        }, 1800);
-      }),
-    ]);
-    douban = raced.kind === 'douban' ? raced.list : null;
-  } else {
-    // Reuse an in-memory chart if one is already ready, but never fan out
-    // Douban or CMS title matches during cold home.
-    douban = await resolveDoubanHotList(
-      bucket,
-      providers,
-      accept,
-      { allowNetwork: false }
-    ).catch(function () {
-      return null;
+/// When Douban chart miss/timeout: keep real TV/movies, drop short-drama floods.
+function stableHotFallback(list) {
+  const deduped = dedupeByTitle(list || []);
+  const strong = [];
+  const soft = [];
+  for (let i = 0; i < deduped.length; i++) {
+    const item = deduped[i];
+    if (looksShortDrama(item)) continue;
+    soft.push(item);
+    const rank = majorPlatformRank(item);
+    const year = Number(String(item.vod_year || '').slice(0, 4));
+    const hasCast = String(item.vod_actor || '').trim().length > 1;
+    const remarks = String(item.vod_remarks || item.vod_note || '');
+    const updating = /更新/.test(remarks);
+    if (rank >= 2 || (hasCast && Number.isFinite(year) && year >= 2020) || (updating && hasCast)) {
+      strong.push(item);
+    }
+  }
+  // Always try to fill a screen — strong-only was leaving ~6–8 sparse rows.
+  let pool = strong.length >= 12 ? strong : soft.concat(strong);
+  if (pool.length < 12) {
+    pool = deduped.filter(function (item) {
+      return !looksShortDrama(item);
     });
   }
-  const cmsList = await cmsPromise;
-  if (douban && douban.length >= 6) {
+  if (!pool.length) pool = deduped;
+  return sortByHotRecent(dedupeByTitle(pool));
+}
+
+/// CMS first screen, then Douban order on top when chart resolves.
+/// IMPORTANT: OnDevice JSC setTimeout is blocking (__firepickSleep). Never use
+/// Promise.race(+setTimeout) here — it freezes the JS thread and Douban always "loses".
+async function doubanOrCMSList(bucket, providers, accept, cmsFetcher, allowNetwork) {
+  // Overlap CMS + Douban; keep Douban budget short so first paint is ~1–2s on Wi‑Fi.
+  const cmsPromise = cmsFetcher();
+  const doubanPromise =
+    allowNetwork !== false
+      ? resolveDoubanHotList(bucket, providers, accept, { budgetMs: 1400 }).catch(function () {
+          return null;
+        })
+      : resolveDoubanHotList(bucket, providers, accept, { allowNetwork: false }).catch(
+          function () {
+            return null;
+          }
+        );
+  const settled = await Promise.all([cmsPromise, doubanPromise]);
+  const cmsList = settled[0];
+  let douban = settled[1];
+  if (!douban || douban.length < 4) {
+    const cached = doubanResolveCache.byBucket[bucket];
+    if (cached && cached.length >= 4) douban = cached.slice();
+  }
+  const cms = stableHotFallback(cmsList || []);
+  if (douban && douban.length >= 4) {
     const used = {};
     const merged = [];
     for (let i = 0; i < douban.length; i++) {
@@ -547,7 +574,6 @@ async function doubanOrCMSList(bucket, providers, accept, cmsFetcher, allowNetwo
       used[key] = true;
       merged.push(douban[i]);
     }
-    const cms = dedupeByTitle(cmsList || []);
     for (let i = 0; i < cms.length; i++) {
       const key = normalizeTitle(cms[i].vod_name);
       if (!key || used[key]) continue;
@@ -556,7 +582,7 @@ async function doubanOrCMSList(bucket, providers, accept, cmsFetcher, allowNetwo
     }
     return { list: merged, fromDouban: true };
   }
-  return { list: dedupeByTitle(cmsList || []), fromDouban: false };
+  return { list: cms, fromDouban: false };
 }
 
 /// True when the user narrowed or re-sorted — keep that order (no platform shuffle).
@@ -573,8 +599,10 @@ function extendRequestsStrictOrder(extend) {
 const BATCH_SIZE = 8;
 // Mobile/cellular often needs >4s; empty home with categories usually means timeout.
 const REQUEST_TIMEOUT_MS = 12000;
+// First-paint list fetch — don't let one slow host hold the grid for 12s.
+const FIRST_PAINT_TIMEOUT_MS = 3500;
 // Smaller first screen → stop waiting on slow CMS hosts sooner.
-const FIRST_SCREEN = 24;
+const FIRST_SCREEN = 16;
 const ADULT_PATTERN = /伦理|福利|里番|无码|有码|SWAG|色情|成人|黄游|性爱|口交|三级片/i;
 
 function encode(value) {
@@ -630,13 +658,17 @@ async function collectProviderLists(providers, page, limit, extra, accept, pageS
   const list = [];
   let cursor = 0;
   let stopped = false;
+  // First paint: only the fastest few hosts; detail/search still use the full pool.
+  const pool =
+    limit <= FIRST_SCREEN * 2 ? providers.slice(0, Math.min(4, providers.length)) : providers;
   // Prefer a short span so the first screen returns before slow pages pile up.
-  const span = pageSpan || (providers.length <= 2 ? 2 : 1);
+  const span = pageSpan || (pool.length <= 2 ? 2 : 1);
   const start = (Math.max(1, Number(page) || 1) - 1) * span + 1;
-  const concurrency = Math.min(10, providers.length);
+  const concurrency = Math.min(4, pool.length);
+  const paintTimeout = limit <= FIRST_SCREEN * 2 ? FIRST_PAINT_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
   function take() {
-    if (stopped || list.length >= limit || cursor >= providers.length) return null;
-    const provider = providers[cursor];
+    if (stopped || list.length >= limit || cursor >= pool.length) return null;
+    const provider = pool[cursor];
     cursor += 1;
     return provider;
   }
@@ -650,7 +682,7 @@ async function collectProviderLists(providers, page, limit, extra, accept, pageS
           const keys = Object.keys(extra);
           for (let i = 0; i < keys.length; i++) params[keys[i]] = extra[keys[i]];
         }
-        const data = await requestJSON(provider.api, params);
+        const data = await requestJSON(provider.api, params, paintTimeout);
         if (stopped || list.length >= limit) return;
         const items = data && Array.isArray(data.list) ? data.list : [];
         for (let i = 0; i < items.length && list.length < limit; i++) {
@@ -774,7 +806,7 @@ function looksShortDrama(item) {
   if (/竖屏|短剧|微短剧/.test(remarks)) return true;
   // Strong title tropes — enough alone (CMS often files these under 国产剧).
   if (
-    /七零|八零|九零|团宠|闪婚|和离|家妻|家夫|萌宝|娇妻|弃妇|真千金|假千金|世子妃|娘娘|穿书|马甲|双穿|觉醒后|分手后|退婚后|改嫁|替嫁|带球跑|霸总|神医战神|战神归来/.test(
+    /七零|八零|九零|团宠|闪婚|和离|家妻|家夫|夫君|萌宝|娇妻|弃妇|真千金|假千金|世子妃|娘娘|穿书|马甲|双穿|魂穿|白月光|麒麟血|觉醒后|分手后|退婚后|改嫁|替嫁|带球跑|霸总|神医战神|战神归来|争宠/.test(
       name
     )
   ) {
@@ -782,7 +814,7 @@ function looksShortDrama(item) {
   }
   // Weaker tropes + mini-drama pack size (全40–120集 / 已完结无“更新至”).
   const weakTrope =
-    /重生|神医|战神|总裁|闪婚|娇妻|弃妇|千金|后妈|后爸|虐渣|打脸|逆袭/.test(name);
+    /重生|神医|战神|总裁|闪婚|娇妻|弃妇|千金|后妈|后爸|虐渣|打脸|逆袭|穿越|穿成/.test(name);
   const full = remarks.match(/全\s*(\d+)\s*集/);
   if (full && !/更新/.test(remarks)) {
     const n = Number(full[1]);
@@ -1193,20 +1225,17 @@ export default class extends Spider {
       this.ensureCatalogs().catch(function () {});
     }
 
-    // Default TV/variety/anime (and explicit 豆瓣热门): Douban order on page 1,
-    // CMS continuation on later pages (load more).
+    // Default 推荐桶外各分类（含电影）与显式「豆瓣热门」：Douban 榜单优先，
+    // 对齐腾讯/爱奇艺/优酷/芒果/B站热播；CMS 作续页与兜底。
     const wantDouban =
       !classKey
       && !areaKey
       && !yearKey
-      && (
-        sortKey === 'douban_hot'
-        || (sortKey === '' && bucket !== 'movie')
-      );
+      && (sortKey === 'douban_hot' || sortKey === '');
     const filtered = extendRequestsStrictOrder(extend);
 
     if (wantDouban && requestedPage === 1 && !filtered) {
-      const want = bucket === 'tv' ? FIRST_SCREEN * 2 : FIRST_SCREEN;
+      const want = FIRST_SCREEN;
       const packed = await doubanOrCMSList(bucket, providers, acceptRow, function () {
         return collectProviderLists(providers, 1, want, extra, acceptRow);
       });
@@ -1229,7 +1258,7 @@ export default class extends Spider {
     // 国产剧 leaves + deeper pull — CMS area=大陆 “最新” is mostly 短剧/更新中,
     // so completed hits like 嫁金钗 never appear unless we query category pages.
     if (requestedPage === 1 && !filtered) {
-      const want = bucket === 'tv' ? FIRST_SCREEN * 3 : FIRST_SCREEN;
+      const want = FIRST_SCREEN;
       list = await collectProviderLists(
         providers,
         1,
@@ -1294,14 +1323,8 @@ export default class extends Spider {
       );
     }
     let deduped = applyExtend(dedupeByTitle(list), extend, bucket);
-    // Unfiltered first page only: mix platforms. Filtered / custom sort keeps order.
-    if (
-      requestedPage === 1
-      && deduped.length > 8
-      && !extendRequestsStrictOrder(extend)
-    ) {
-      deduped = diversifyByProvider(deduped, bucket === 'movie' ? 3 : 4);
-    }
+    // Do not diversify after sort — it scrambled 上映时间 / 豆瓣热门 / 最新更新.
+    // Mixing hosts belongs upstream (collect) or on 推荐 only.
     const hasMore = reportedPages > requestedPage || deduped.length >= 12;
     return {
       page: requestedPage,

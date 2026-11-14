@@ -22,6 +22,8 @@ struct DetailView: View {
   @State private var isPlayerExpanded = false
   /// Frozen playable 来源 order (sorted once on enter). nil = still probing silently.
   @State private var orderedPlayableStations: [AppModel.CollectionStation]?
+  /// Stations dropped after unplayable / stuck — survives until probe finishes.
+  @State private var droppedProviderKeys: Set<String> = []
   /// User picked 来源 manually — skip auto optimal until stuck / episode change.
   @State private var userLockedSource = false
   @State private var lastPlaybackTime: Double = 0
@@ -164,21 +166,22 @@ struct DetailView: View {
         sourceKey: currentItem.sourceKey ?? model.selectedSite?.key,
         vodId: currentItem.vodId
       )
+      droppedProviderKeys = []
+      orderedPlayableStations = nil
+      // Station probe must not block first play — movies should start in seconds.
       async let stationsReady: Void = preparePlayableStationsIfNeeded()
       await model.loadDetail(currentItem)
-      await stationsReady
       if let name = focusEpisodeName, let match = matchEpisode(named: name) {
         selectedFlag = match.line.name
       } else if selectedFlag == nil || !lines.contains(where: { $0.name == selectedFlag }) {
         selectedFlag = lines.first?.name
       }
-      // Prefer the fastest playable 来源 once; user can still change via dropdown.
-      if await autoSelectOptimalSourceIfNeeded() {
-        return
-      }
       if playback == nil, !lines.isEmpty {
         await playPrimary()
       }
+      await stationsReady
+      // Upgrade to faster 来源 only while still early / buffering.
+      _ = await autoSelectOptimalSourceIfNeeded()
     }
     .onChange(of: selectedFlag) { oldFlag, flag in
       guard let flag else { return }
@@ -370,11 +373,8 @@ struct DetailView: View {
               .tint(.orange)
             }
           } else if !lines.isEmpty || isSwitchingSource {
-            Text("来源")
-              .font(.body)
-              .foregroundStyle(.primary)
+            sourceStatusRow
               .padding(.top, 8)
-            sourceChips
             // 线路（gsyun/gsm3u8 等）静默选用，不在播放页展示。
             if !displayedEpisodes.isEmpty {
               HStack(spacing: 8) {
@@ -451,12 +451,12 @@ struct DetailView: View {
       return Self.providerDisplayNames[key] ?? key
     }
     let name = model.selectedSite?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    return name.isEmpty ? "拾萤" : name
+    return name.isEmpty ? "拾萤精选" : name
   }
 
   private static let providerDisplayNames: [String: String] = [
     "iqiyi": "爱奇艺",
-    "sdzy": "索尼",
+    "sdzy": "闪电",
     "dytt": "电影天堂",
     "maoyan": "猫眼",
     "lzcaiji": "量子",
@@ -482,6 +482,24 @@ struct DetailView: View {
     "wolong": "卧龙",
     "maotai": "茅台",
     "ikun": "iKun",
+    "baidu": "百度",
+    "douban": "豆瓣",
+    "piaoling": "飘零",
+    "suoni": "索尼",
+    "heimuer": "木耳",
+    "niuniu": "牛牛",
+    "yaya": "丫丫",
+    "yinghua": "樱花",
+    "kuaiche": "快车",
+    "feisu": "飞速",
+    "kuaikan": "快看",
+    "xiongzhang": "熊掌",
+    "qihu": "奇虎",
+    "kuaiyun": "快云",
+    "wwzy": "旺旺",
+    "hw8": "华为吧",
+    "okzy": "OK",
+    "taopian": "淘片",
   ]
 
   private func stationProviderKey(_ station: AppModel.CollectionStation) -> String {
@@ -495,7 +513,8 @@ struct DetailView: View {
     return hasDirector || hasActor || hasContent
   }
 
-  /// Probe title hits + latency once, then freeze sorted playable list (fastest first).
+  /// Probe title hits + latency + episode completeness, then freeze playable list
+  /// (完整最新集/期优先，同档再按延迟：最快的为默认最优).
   private func preparePlayableStationsIfNeeded() async {
     guard orderedPlayableStations == nil else { return }
     let all = model.collectionStations
@@ -504,7 +523,14 @@ struct DetailView: View {
       return
     }
     async let keysTask = model.providerKeysHavingTitle(detail.name)
-    async let latencyTask: Void = model.probeCollectionStationLatencies()
+    // Reuse cached latency badges when already probed (avoid full pool re-measure).
+    let needsLatency = !model.didProbeCollectionStations
+      || model.collectionStationLatencyMS.isEmpty
+    async let latencyTask: Void = {
+      if needsLatency {
+        await model.probeActivePoolLatenciesOnly()
+      }
+    }()
     let keys = await keysTask
     await latencyTask
     var available = keys
@@ -512,8 +538,34 @@ struct DetailView: View {
       available.insert(current)
     }
     let playable = all.filter { available.contains(stationProviderKey($0)) }
+    let remarkTarget = AppModel.expectedUpdateCount(from: detail.remarks)
+    let currentCount = AppModel.playbackEpisodeCount(
+      playFrom: detail.playFrom,
+      playURL: detail.playURL
+    )
+    // Movie / single-shot: skip per-station detail fan-out (was the slow path).
+    let looksLikeSeries = (remarkTarget ?? 0) > 1 || currentCount > 1
+    let complete: [AppModel.CollectionStation]
+    if !looksLikeSeries {
+      complete = playable
+    } else {
+      let counts = await episodeCounts(for: playable)
+      let catalogMax = max(counts.values.max() ?? 0, currentCount)
+      let target = max(remarkTarget ?? 0, catalogMax)
+      let filtered = playable.filter { station in
+        (counts[stationProviderKey(station)] ?? 0) >= target
+      }
+      if !filtered.isEmpty {
+        complete = filtered
+      } else {
+        let bar = max(catalogMax, 1)
+        complete = playable.filter { station in
+          (counts[stationProviderKey(station)] ?? 0) >= bar
+        }
+      }
+    }
     // Sort by latency once (fastest first); unknown latency last. Never reshuffle later.
-    orderedPlayableStations = playable.sorted { a, b in
+    let ranked = complete.sorted { a, b in
       let ma = model.collectionStationLatencyMS[a.id]
       let mb = model.collectionStationLatencyMS[b.id]
       switch (ma, mb) {
@@ -523,6 +575,48 @@ struct DetailView: View {
       case (nil, nil): return false
       }
     }
+    // Honor stations already marked dead while first paint was probing.
+    orderedPlayableStations = ranked.filter {
+      !droppedProviderKeys.contains(stationProviderKey($0))
+    }
+  }
+
+  /// Parallel detail fetch → episode/期 counts keyed by CMS provider.
+  private func episodeCounts(
+    for stations: [AppModel.CollectionStation]
+  ) async -> [String: Int] {
+    let title = detail.name
+    var counts: [String: Int] = [:]
+    if let current = playbackProviderKey {
+      let n = AppModel.playbackEpisodeCount(
+        playFrom: detail.playFrom,
+        playURL: detail.playURL
+      )
+      if n > 0 { counts[current] = n }
+    }
+    // Prefer already-fast stations when capping fan-out.
+    let ranked = stations.sorted { a, b in
+      let ma = model.collectionStationLatencyMS[a.id]
+      let mb = model.collectionStationLatencyMS[b.id]
+      switch (ma, mb) {
+      case let (l?, r?): return l < r
+      case (_?, nil): return true
+      default: return false
+      }
+    }
+    let keys = ranked.map(stationProviderKey).filter { counts[$0] == nil }.prefix(8)
+    await withTaskGroup(of: (String, Int).self) { group in
+      for key in keys {
+        group.addTask {
+          let n = await model.detailEpisodeCount(title: title, providerKey: key)
+          return (key, n)
+        }
+      }
+      for await (key, n) in group {
+        counts[key] = n
+      }
+    }
+    return counts
   }
 
   /// Auto-pick the fastest playable station. Skipped while the user locked a manual pick.
@@ -530,9 +624,9 @@ struct DetailView: View {
   private func autoSelectOptimalSourceIfNeeded(force: Bool = false) async -> Bool {
     if userLockedSource && !force { return false }
     if force { userLockedSource = false }
-    // Mid-playback handoff only when forced (episode change / stuck path).
-    if !force {
-      guard playback == nil, lastPlaybackTime < 1.5 else { return false }
+    // First paint plays immediately; only upgrade while still early / buffering.
+    if !force, playback != nil, lastPlaybackTime >= 2.5 {
+      return false
     }
     guard let stations = orderedPlayableStations, let best = stations.first else { return false }
     let bestKey = stationProviderKey(best)
@@ -545,46 +639,84 @@ struct DetailView: View {
   private func failoverToNextStation(from failedKey: String) -> Bool {
     userLockedSource = false
     dropUnplayableStation(failedKey)
-    guard let next = orderedPlayableStations?.first else { return false }
-    let nextKey = stationProviderKey(next)
-    guard nextKey != failedKey else { return false }
-    Task { await switchCollectionStation(nextKey, silent: true, userInitiated: false) }
-    return true
+    if let next = orderedPlayableStations?.first(where: {
+      stationProviderKey($0) != failedKey
+    }) {
+      let nextKey = stationProviderKey(next)
+      Task { await switchCollectionStation(nextKey, silent: true, userInitiated: false) }
+      return true
+    }
+    // Play-first: probe may still be running — finish it, then switch.
+    if orderedPlayableStations == nil {
+      Task {
+        await preparePlayableStationsIfNeeded()
+        guard let next = orderedPlayableStations?.first(where: {
+          stationProviderKey($0) != failedKey
+        })
+        else { return }
+        await switchCollectionStation(
+          stationProviderKey(next),
+          silent: true,
+          userInitiated: false
+        )
+      }
+      return true
+    }
+    return false
   }
 
   private func dropUnplayableStation(_ providerKey: String) {
+    droppedProviderKeys.insert(providerKey)
     guard var stations = orderedPlayableStations else { return }
     stations.removeAll { stationProviderKey($0) == providerKey }
     orderedPlayableStations = stations
   }
 
-  private func latencyColor(ms: Int) -> Color {
-    if ms < 800 { return Color(red: 0.20, green: 0.70, blue: 0.35) }
-    if ms < 1600 { return Color(red: 0.90, green: 0.55, blue: 0.10) }
-    return Color(red: 0.90, green: 0.28, blue: 0.25)
+  /// 与「选集」左对齐：标签 + 浅胶囊标识。
+  private var sourceStatusRow: some View {
+    HStack(alignment: .center, spacing: 8) {
+      Text("当前来源")
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+      if canChooseSourceStation {
+        Button {
+          showingSourceStationPicker = true
+        } label: {
+          sourceStatusCapsule(showsChevron: true)
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showingSourceStationPicker) {
+          sourceStationPickerSheet
+        }
+      } else {
+        sourceStatusCapsule(showsChevron: false)
+      }
+      Spacer(minLength: 0)
+    }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("当前来源 \(sourceStatusValue)")
   }
 
-  private func sourceMenuLabel(_ title: String, ms: Int? = nil, emphasized: Bool = true) -> some View {
-    HStack(spacing: 8) {
-      Text(title)
-        .font(.subheadline.weight(.semibold))
+  private var canChooseSourceStation: Bool {
+    (orderedPlayableStations?.count ?? 0) > 1
+  }
+
+  private func sourceStatusCapsule(showsChevron: Bool) -> some View {
+    HStack(spacing: 5) {
+      Text(sourceStatusValue)
+        .font(.subheadline.weight(.medium))
+        .foregroundStyle(.primary)
         .lineLimit(1)
-      if let ms {
-        Text("\(ms)ms")
-          .font(.caption2.monospacedDigit().weight(.medium))
-          .foregroundStyle(emphasized ? Color.white.opacity(0.92) : latencyColor(ms: ms))
+      if showsChevron {
+        Image(systemName: "chevron.up.chevron.down")
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.secondary)
       }
-      Image(systemName: "chevron.up.chevron.down")
-        .font(.caption2.weight(.semibold))
-        .opacity(0.85)
     }
-    .foregroundStyle(emphasized ? Color.white : Color.primary)
-    .padding(.horizontal, 14)
-    .padding(.vertical, 8)
-    .background(
-      emphasized ? Color.orange : Color.secondary.opacity(0.12),
-      in: Capsule()
-    )
+    .padding(.horizontal, 10)
+    .padding(.vertical, 4)
+    .background(Color.secondary.opacity(0.10), in: Capsule())
+    .contentShape(Capsule())
   }
 
   private var sourceStationPickerSheet: some View {
@@ -594,11 +726,10 @@ struct DetailView: View {
         ForEach(stations) { station in
           let providerKey = stationProviderKey(station)
           let selected = playbackProviderKey == providerKey
-            || (playbackProviderKey == nil && stations.first?.id == station.id)
-          let ms = model.collectionStationLatencyMS[station.id]
           Button {
             showingSourceStationPicker = false
             guard !selected else { return }
+            userLockedSource = true
             Task {
               await switchCollectionStation(
                 providerKey,
@@ -609,24 +740,15 @@ struct DetailView: View {
           } label: {
             HStack(spacing: 12) {
               Text(station.name)
-                .font(.body)
                 .foregroundStyle(.primary)
               Spacer(minLength: 8)
-              if let ms {
+              if let ms = model.collectionStationLatencyMS[station.id] {
                 Text("\(ms)ms")
-                  .font(.caption.monospacedDigit().weight(.semibold))
-                  .foregroundStyle(latencyColor(ms: ms))
-                  .padding(.horizontal, 8)
-                  .padding(.vertical, 4)
-                  .background(latencyColor(ms: ms).opacity(0.12), in: Capsule())
-              } else {
-                Text("测速中")
-                  .font(.caption2)
+                  .font(.caption.monospacedDigit())
                   .foregroundStyle(.secondary)
               }
               Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                 .foregroundStyle(selected ? Color.orange : Color.secondary.opacity(0.35))
-                .imageScale(.medium)
             }
             .contentShape(Rectangle())
           }
@@ -634,60 +756,32 @@ struct DetailView: View {
         }
       }
       .listStyle(.plain)
-      .navigationTitle("来源")
+      .navigationTitle("切换来源")
       .navigationBarTitleDisplayMode(.inline)
     }
     .presentationDetents([.height(min(520, 72 + CGFloat(max(stations.count, 1)) * 52))])
     .presentationDragIndicator(.visible)
   }
 
-  @ViewBuilder
-  private var sourceChips: some View {
+  private var sourceStatusValue: String {
     if model.collectionStations.count > 1 {
       if let stations = orderedPlayableStations, stations.isEmpty {
-        Text("暂无可用来源")
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
-      } else {
-        // Silent probe: show current/best name immediately; no spinner on 来源.
-        let stations = orderedPlayableStations ?? model.collectionStations
+        return "暂无可用"
+      }
+      if let stations = orderedPlayableStations {
         let selected =
           stations.first(where: { stationProviderKey($0) == playbackProviderKey })
           ?? stations.first
         let selectedName = selected?.name ?? playbackSourceName
-        let selectedMS = selected.flatMap { model.collectionStationLatencyMS[$0.id] }
-        Button {
-          showingSourceStationPicker = true
-        } label: {
-          sourceMenuLabel(selectedName, ms: selectedMS)
-        }
-        .buttonStyle(.plain)
-        .sheet(isPresented: $showingSourceStationPicker) {
-          sourceStationPickerSheet
-        }
+        return userLockedSource ? selectedName : "最优·\(selectedName)"
       }
-    } else if model.onDeviceSites.count > 1 {
-      Menu {
-        ForEach(model.onDeviceSites, id: \.key) { site in
-          let selected = model.selectedSite?.key == site.key
-          Button {
-            Task { await switchSource(to: site) }
-          } label: {
-            if selected {
-              Label(site.name, systemImage: "checkmark")
-            } else {
-              Text(site.name)
-            }
-          }
-          .disabled(selected)
-        }
-      } label: {
-        sourceMenuLabel(model.selectedSite?.name ?? "点播源")
-      }
-    } else {
-      sourceMenuLabel(playbackSourceName)
-        .allowsHitTesting(false)
+      // Probe still running — show current station, not a stuck「加载中」.
+      return playbackSourceName
     }
+    if model.onDeviceSites.count > 1 {
+      return model.selectedSite?.name ?? "拾萤精选"
+    }
+    return playbackSourceName
   }
 
   /// Douban score only (product rule); fall back to site score when Douban is empty.

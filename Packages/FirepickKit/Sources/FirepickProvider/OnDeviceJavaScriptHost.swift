@@ -664,13 +664,14 @@ public final class OnDeviceJavaScriptHost: QuickJSHost, @unchecked Sendable {
       let reject = deferred.objectForKeyedSubscript("reject")
       let promise = deferred.objectForKeyedSubscript("promise")!
 
-      // Floor at 12s: older firepick-cms.js still passes 4000, which empties
-      // home on cellular even when the warehouse itself is reachable.
+      // Respect JS timeout (Douban title-match uses ~4s). Floor 4s so a brief
+      // cellular blip still retries; the old 12s floor made Promise.all of
+      // chart matching blow the 20s category budget →「网络超时 / 源无响应」.
       let requestedTimeoutMs =
         (options["timeout"] as? NSNumber)?.doubleValue
         ?? (options["timeout"] as? Double)
         ?? 15000
-      let timeoutMs = max(requestedTimeoutMs, 12_000)
+      let timeoutMs = max(requestedTimeoutMs, 4_000)
       let method = (options["method"] as? String)?.uppercased() ?? "GET"
       let requestURL = urlApplying(
         params: options["params"] as? [String: Any],

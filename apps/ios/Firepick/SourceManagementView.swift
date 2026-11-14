@@ -52,12 +52,24 @@ struct SourceManagementView: View {
           }
         }
       } header: {
-        Text("当前线路 · \(stations.count)")
-      } footer: {
-        if usesFirepickCMS {
-          Text("拾萤聚合采集站，进入页面会静默测速。点右上角可重新测速。概况请到「线路管理」打开具体线路查看。")
-        } else if !stations.isEmpty {
-          Text("当前线路下的本机可播源。延迟为采集接口往返时间。")
+        VStack(alignment: .leading, spacing: 4) {
+          Text("当前线路 · \(stations.count)")
+          if let status = model.collectionStationProbeStatus {
+            Text(status)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .textCase(nil)
+          } else if usesFirepickCMS {
+            Text("展示测速后的活跃采集站。点右上角会重新测速并筛选候选站。概况请到「线路管理」打开具体线路查看。")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .textCase(nil)
+          } else if !stations.isEmpty {
+            Text("当前线路下的本机可播源。延迟为采集接口往返时间。")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .textCase(nil)
+          }
         }
       }
     }
@@ -69,12 +81,17 @@ struct SourceManagementView: View {
         Button(isProbing ? "测速中…" : "重新测速") {
           Task { await model.probeCollectionStationLatencies() }
         }
-        .disabled(stations.isEmpty || isProbing)
+        .disabled((stations.isEmpty && !usesFirepickCMS) || isProbing)
       }
     }
     .searchable(text: $query, prompt: "搜索采集站")
     .task(id: model.currentConnection?.id) {
-      await model.probeCollectionStationLatencies()
+      // Silent latency check for current active pool only (no full refine on every enter).
+      if usesFirepickCMS {
+        await model.probeActivePoolLatenciesOnly()
+      } else {
+        await model.probeCollectionStationLatencies()
+      }
     }
     .refreshable {
       await model.probeCollectionStationLatencies()

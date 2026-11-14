@@ -48,7 +48,7 @@ const CANDIDATES = [
 const KEYWORDS = ['庆余年', '三体', '进击的巨人', '绝命毒师'];
 const TIMEOUT_MS = 8000;
 const CONCURRENCY = 4;
-const ACTIVE_POOL = 7;
+const ACTIVE_POOL = 10;
 
 /** Chip / settings short labels (must stay ≤4 chars-ish for 来源 UI). */
 const SHORT_NAMES = {

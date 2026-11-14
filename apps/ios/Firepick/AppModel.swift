@@ -227,8 +227,8 @@ final class AppModel {
   var liveShowsTabBarInFullscreen = false
   var configuration: VodConfiguration = .empty
   var selectedSite: SiteConfiguration?
-  static let officialSourceVersion = "15"
-  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=15"
+  static let officialSourceVersion = "21"
+  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=21"
   var selectedCategory: FirepickCore.Category?
   var homeResult: MediaResult?
   var detailResult: MediaResult?
@@ -294,6 +294,10 @@ final class AppModel {
   var probingCollectionStationIDs: Set<String> = []
   /// True after at least one 采集站测速 pass finished (so "失败" ≠ "尚未测").
   var didProbeCollectionStations = false
+  /// Active CMS pool after 测速淘金 (drives 采集站管理 / 播放来源 / firepick-cms providers).
+  var activeCMSProviders: [ActiveCMSProvider] = []
+  /// Last refine result shown under 采集站管理.
+  var collectionStationProbeStatus: String?
   /// True only for user-tapped 切换/添加线路 — hides Settings spinner on silent restore.
   var userInitiatedConnectionSwitch = false
   /// Reserved. Cloud skip is not wired; local intro/outro marks still apply.
@@ -315,6 +319,7 @@ final class AppModel {
   var lastLiveChannelID: String?
   var lastLiveChannelName: String?
   var lastLiveGroupName: String?
+  var lastLiveShelfID: String?
   var lastLiveURLIndex: Int = 0
 
   struct SkipMark: Codable, Equatable, Sendable {
@@ -339,7 +344,7 @@ final class AppModel {
   var sourceTestIsRunning = false
   var playbackPreference: PlaybackPreference = .automatic
   var posterSizePreference: PosterSizePreference = .standard
-  var danmakuEnabledByDefault = true
+  var danmakuEnabledByDefault = false
   var danmakuOpacity = 0.9
   var danmakuFontScale = 1.0
   var danmakuSpeed = 1.0
@@ -533,26 +538,43 @@ final class AppModel {
     lastLiveChannelID = persistence?.lastLiveChannelID
     lastLiveChannelName = persistence?.lastLiveChannelName
     lastLiveGroupName = persistence?.lastLiveGroupName
+    lastLiveShelfID = persistence?.lastLiveShelfID
     lastLiveURLIndex = persistence?.lastLiveURLIndex ?? 0
     sourceConnections = (try? persistence?.loadSourceConnections()) ?? []
     searchHistory = persistence?.searchHistory ?? []
+    let persistedActive = persistence?.loadActiveCMSProviders() ?? []
+    activeCMSProviders =
+      persistedActive.isEmpty
+      ? Self.defaultActiveCMSProviders
+      : persistedActive
     consolidateWarehouseConnections()
     if let currentURL = persistence?.currentConnectionURL {
       currentConnection = sourceConnections.first { $0.url == currentURL && $0.enabled }
     }
   }
 
-  /// CMS providers aggregated inside firepick_cms (keep in sync with firepick-cms.js).
+  /// Fallback active pool before first in-app 测速淘金.
   /// Keep in sync with firepick-cms.js DEFAULT_PROVIDERS (probe: scripts/probe-cms-providers.mjs).
   static let firepickCMSProviders: [(key: String, name: String, api: String)] = [
-    ("maoyan", "猫眼", "https://api.maoyanapi.top/api.php/provide/vod"),
-    ("bfzy", "暴风", "https://bfzyapi.com/api.php/provide/vod"),
-    ("subo", "速播", "https://subocaiji.com/api.php/provide/vod"),
     ("zuid", "最大", "https://api.zuidapi.com/api.php/provide/vod"),
+    ("lzcaiji", "量子", "https://cj.lzcaiji.com/api.php/provide/vod"),
+    ("haohua", "豪华", "https://hhzyapi.com/api.php/provide/vod"),
+    ("maoyan", "猫眼", "https://api.maoyanapi.top/api.php/provide/vod"),
+    ("guangsu", "光速", "https://api.guangsuapi.com/api.php/provide/vod"),
+    ("subo", "速播", "https://subocaiji.com/api.php/provide/vod"),
+    ("jisu", "极速", "https://jszyapi.com/api.php/provide/vod"),
     ("lzi", "量子", "https://cj.lziapi.com/api.php/provide/vod"),
-    ("jinying", "金鹰", "https://jyzyapi.com/provide/vod/from/jinyingyun/at/json"),
-    ("huya", "虎牙", "https://www.huyaapi.com/api.php/provide/vod"),
+    ("ruyi", "如意", "https://cj.rycjapi.com/api.php/provide/vod"),
+    ("ffzy", "非凡", "https://api.ffzyapi.com/api.php/provide/vod"),
   ]
+
+  static var defaultActiveCMSProviders: [ActiveCMSProvider] {
+    firepickCMSProviders.map {
+      ActiveCMSProvider(key: $0.key, name: $0.name, api: $0.api)
+    }
+  }
+
+  static let activeCMSPoolSize = 10
 
   /// Settings row summary for 采集站管理.
   var collectionStationSummary: String {
@@ -567,7 +589,9 @@ final class AppModel {
   /// Same rows for a previewed warehouse (线路详情).
   func collectionStations(in configuration: VodConfiguration) -> [CollectionStation] {
     if configuration.sites.contains(where: { $0.key == "firepick_cms" }) {
-      return Self.firepickCMSProviders.map {
+      let providers =
+        activeCMSProviders.isEmpty ? Self.defaultActiveCMSProviders : activeCMSProviders
+      return providers.map {
         CollectionStation(
           id: "cms:\($0.key)",
           name: $0.name,
@@ -584,6 +608,13 @@ final class AppModel {
         probeURL: $0.api
       )
     }
+  }
+
+  struct ActiveCMSProvider: Codable, Equatable, Sendable, Identifiable {
+    var key: String
+    var name: String
+    var api: String
+    var id: String { key }
   }
 
   struct CollectionStation: Identifiable, Equatable {
@@ -605,7 +636,7 @@ final class AppModel {
       next.removeAll { isOfficialWarehouseURL($0.url) }
       let connection = SourceConnection(
         url: Self.officialSourceURL,
-        name: URL(string: Self.officialSourceURL)?.host ?? "拾萤",
+        name: URL(string: Self.officialSourceURL)?.host ?? "拾萤精选",
         updatedAt: .now,
         displayURL: Self.officialSourceURL,
         enabled: enabled
@@ -674,6 +705,11 @@ final class AppModel {
     persistence?.saveLastLiveChannelName(channel.name)
     persistence?.saveLastLiveGroupName(groupName)
     persistence?.saveLastLiveURLIndex(lastLiveURLIndex)
+  }
+
+  func rememberLiveShelf(_ shelfID: String) {
+    lastLiveShelfID = shelfID
+    persistence?.saveLastLiveShelfID(shelfID)
   }
 
   func allLiveChannels() -> [LiveChannel] {
@@ -1047,12 +1083,42 @@ final class AppModel {
     }
   }
 
-  func probeCollectionStationLatencies() async {
+  /// Enter 采集站管理: only re-measure current active pool latency badges.
+  func probeActivePoolLatenciesOnly() async {
     let stations = collectionStations
     guard !stations.isEmpty else {
       didProbeCollectionStations = true
       return
     }
+    await withTaskGroup(of: Void.self) { group in
+      var index = 0
+      let limit = min(4, stations.count)
+      func enqueue() {
+        guard index < stations.count else { return }
+        let station = stations[index]
+        index += 1
+        group.addTask { await self.probeCollectionStationLatency(station) }
+      }
+      for _ in 0..<limit { enqueue() }
+      for await _ in group {
+        enqueue()
+      }
+    }
+    didProbeCollectionStations = true
+  }
+
+  /// 采集站管理测速：拾萤线路会全量淘金候选池；其它线路只测当前展示站。
+  func probeCollectionStationLatencies() async {
+    if configuration.sites.contains(where: { $0.key == "firepick_cms" }) {
+      await refineActiveCMSProviders()
+      return
+    }
+    let stations = collectionStations
+    guard !stations.isEmpty else {
+      didProbeCollectionStations = true
+      return
+    }
+    collectionStationProbeStatus = nil
     await withTaskGroup(of: Void.self) { group in
       var index = 0
       let limit = min(4, stations.count)
@@ -1082,14 +1148,8 @@ final class AppModel {
       probing.remove(station.id)
       probingCollectionStationIDs = probing
     }
-    var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
-    var items = components?.queryItems ?? []
-    if !items.contains(where: { $0.name == "ac" }) {
-      items.append(URLQueryItem(name: "ac", value: "list"))
-    }
-    components?.queryItems = items
-    guard let url = components?.url ?? Optional(base) else { return }
-    let ms = await Self.measureProbeLatency(url: url)
+    guard let url = Self.cmsListProbeURL(from: base) else { return }
+    let ms = await Self.measureProbeLatency(url: url, requireJSONBody: false)
     var next = collectionStationLatencyMS
     if let ms {
       next[station.id] = ms
@@ -1099,8 +1159,122 @@ final class AppModel {
     collectionStationLatencyMS = next
   }
 
+  /// Probe all cms-candidates → TopN unique-host survivors → persist + inject CMS.
+  private func refineActiveCMSProviders() async {
+    collectionStationProbeStatus = "正在测速…"
+    let candidates = await CMSProviderCatalog.loadCandidates()
+    let pool =
+      candidates.isEmpty
+      ? Self.defaultActiveCMSProviders.map {
+        CMSProviderCatalog.Entry(key: $0.key, name: $0.name, api: $0.api)
+      }
+      : candidates
+
+    probingCollectionStationIDs = Set(pool.map { "cms:\($0.key)" })
+    defer { probingCollectionStationIDs = [] }
+
+    struct ProbeHit: Sendable {
+      var entry: CMSProviderCatalog.Entry
+      var ms: Int
+    }
+
+    let hits: [ProbeHit] = await withTaskGroup(of: ProbeHit?.self) { group in
+      var index = 0
+      let limit = min(6, pool.count)
+      var results: [ProbeHit] = []
+      func enqueue() {
+        guard index < pool.count else { return }
+        let entry = pool[index]
+        index += 1
+        group.addTask {
+          guard let base = URL(string: entry.api),
+            let url = Self.cmsListProbeURL(from: base),
+            let ms = await Self.measureProbeLatency(url: url, requireJSONBody: true)
+          else {
+            return nil
+          }
+          return ProbeHit(entry: entry, ms: ms)
+        }
+      }
+      for _ in 0..<limit { enqueue() }
+      for await hit in group {
+        if let hit { results.append(hit) }
+        enqueue()
+      }
+      return results
+    }
+
+    let ranked = hits.sorted { $0.ms < $1.ms }
+    var seenHosts = Set<String>()
+    var picked: [ActiveCMSProvider] = []
+    var latency: [String: Int] = [:]
+    for hit in ranked {
+      let host = URL(string: hit.entry.api)?.host?.lowercased() ?? hit.entry.key
+      if seenHosts.contains(host) { continue }
+      seenHosts.insert(host)
+      let name = CMSProviderCatalog.displayName(for: hit.entry)
+      picked.append(
+        ActiveCMSProvider(key: hit.entry.key, name: name, api: hit.entry.api)
+      )
+      latency["cms:\(hit.entry.key)"] = hit.ms
+      if picked.count >= Self.activeCMSPoolSize { break }
+    }
+
+    if picked.isEmpty {
+      collectionStationLatencyMS = [:]
+      didProbeCollectionStations = true
+      collectionStationProbeStatus = "候选站暂不可用，仍用当前活跃池"
+      return
+    }
+
+    activeCMSProviders = picked
+    persistence?.saveActiveCMSProviders(picked)
+    collectionStationLatencyMS = latency
+    didProbeCollectionStations = true
+    collectionStationProbeStatus = "已更新 \(picked.count) 条优质线路"
+
+    await coordinator?.invalidate(sourceKey: "firepick_cms")
+    if selectedSite?.key == "firepick_cms", let site = selectedSite {
+      selectedSite = siteWithActiveCMSProviders(site)
+    }
+  }
+
+  private func siteWithActiveCMSProviders(_ site: SiteConfiguration) -> SiteConfiguration {
+    guard site.key == "firepick_cms" else { return site }
+    var site = site
+    let providers =
+      activeCMSProviders.isEmpty ? Self.defaultActiveCMSProviders : activeCMSProviders
+    let providerValues: [JSONValue] = providers.map { item in
+      .object([
+        "key": .string(item.key),
+        "name": .string(item.name),
+        "api": .string(item.api),
+      ])
+    }
+    if case .object(var object) = site.ext {
+      object["providers"] = .array(providerValues)
+      site.ext = .object(object)
+    } else {
+      site.ext = .object(["providers": .array(providerValues)])
+    }
+    return site
+  }
+
+  nonisolated private static func cmsListProbeURL(from base: URL) -> URL? {
+    var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+    var items = components?.queryItems ?? []
+    if !items.contains(where: { $0.name == "ac" }) {
+      items.append(URLQueryItem(name: "ac", value: "list"))
+    }
+    components?.queryItems = items
+    return components?.url ?? base
+  }
+
   /// Network wait off the main actor so concurrent probes actually overlap.
-  nonisolated private static func measureProbeLatency(url: URL) async -> Int? {
+  nonisolated private static func measureProbeLatency(
+    url: URL,
+    requireJSONBody: Bool
+  ) async -> Int? {
     let started = Date()
     var request = URLRequest(
       url: url,
@@ -1108,12 +1282,26 @@ final class AppModel {
       timeoutInterval: 8
     )
     request.httpMethod = "GET"
+    request.setValue("okhttp/4.1.0", forHTTPHeaderField: "User-Agent")
+    request.setValue("application/json,text/plain,*/*", forHTTPHeaderField: "Accept")
     do {
-      let (_, response) = try await URLSession.shared.data(for: request)
+      let (data, response) = try await URLSession.shared.data(for: request)
       let ms = Int(Date().timeIntervalSince(started) * 1000)
-      if let http = response as? HTTPURLResponse {
-        if (200..<300).contains(http.statusCode) { return ms }
+      guard let http = response as? HTTPURLResponse,
+        (200..<300).contains(http.statusCode)
+      else {
         return nil
+      }
+      if requireJSONBody {
+        guard
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+          return nil
+        }
+        let hasList = (object["list"] as? [Any])?.isEmpty == false
+        let hasClass = (object["class"] as? [Any])?.isEmpty == false
+        let codeOK = (object["code"] as? Int).map { $0 == 1 } ?? true
+        guard codeOK, hasList || hasClass else { return nil }
       }
       return ms
     } catch {
@@ -1227,7 +1415,7 @@ final class AppModel {
   }
 
   func resetDanmakuSettings() {
-    setDanmakuEnabledByDefault(true)
+    setDanmakuEnabledByDefault(false)
     setDanmakuOpacity(0.9)
     setDanmakuFontScale(1)
     setDanmakuSpeed(1)
@@ -1638,6 +1826,7 @@ final class AppModel {
         return
       }
       homeResult = result
+      PosterPrefetch.warm(items: result.list)
       errorMessage = nil
       categoryCache = [:]
       if result.list.isEmpty, !result.classes.isEmpty {
@@ -1776,6 +1965,7 @@ final class AppModel {
           if Task.isCancelled || generation != homeLoadGeneration { return }
           attachSourceKey(site.key, to: &result)
           categoryCache[cacheKey] = result
+          PosterPrefetch.warm(items: result.list)
         } catch {
           continue
         }
@@ -1827,6 +2017,7 @@ final class AppModel {
       shown.classes = homeResult?.classes ?? cached.classes
       shown.filters = homeResult?.filters ?? cached.filters
       homeResult = shown
+      PosterPrefetch.warm(items: shown.list)
       currentPage = 1
       errorMessage = nil
       isLoadingHome = false
@@ -1867,8 +2058,12 @@ final class AppModel {
       guard generation == categoryLoadGeneration else { return }
       // User already switched away — don't clobber the newer tab.
       guard selectedCategory?.typeId == category.typeId else { return }
-      if result.classes.isEmpty {
-        result.classes = homeResult?.classes ?? []
+      // Keep browse menu (推荐→剧→影→综→漫). Category payloads often ship raw
+      // CMS `class` arrays that would scramble the sticky chips.
+      if let menu = homeResult?.classes, !menu.isEmpty {
+        result.classes = menu
+      } else if result.classes.isEmpty {
+        result.classes = []
       }
       if result.filters == nil {
         result.filters = homeResult?.filters
@@ -1876,6 +2071,7 @@ final class AppModel {
       attachSourceKey(site.key, to: &result)
       categoryCache[cacheKey] = result
       homeResult = result
+      PosterPrefetch.warm(items: result.list)
       currentPage = 1
       errorMessage = nil
     } catch {
@@ -1966,8 +2162,10 @@ final class AppModel {
       guard generation == categoryLoadGeneration, selectedCategory?.typeId == typeId else {
         return
       }
-      if result.classes.isEmpty {
-        result.classes = homeResult?.classes ?? []
+      if let menu = homeResult?.classes, !menu.isEmpty {
+        result.classes = menu
+      } else if result.classes.isEmpty {
+        result.classes = []
       }
       if result.filters == nil {
         result.filters = homeResult?.filters
@@ -2212,6 +2410,57 @@ final class AppModel {
     }
   }
 
+  /// Episode/期 count for a CMS provider after resolving title → detail.
+  /// Used to skip incomplete 来源 when picking 最优线路.
+  func detailEpisodeCount(title: String, providerKey: String) async -> Int {
+    guard let site = selectedSite, !providerKey.isEmpty else { return 0 }
+    do {
+      guard
+        let item = try await findItem(
+          named: title,
+          in: site,
+          preferredProviderKey: providerKey
+        )
+      else { return 0 }
+      let provider = try await provider(for: site)
+      let result = try await provider.detailContent(id: item.vodId)
+      guard let detail = result.list.first else { return 0 }
+      return Self.playbackEpisodeCount(playFrom: detail.playFrom, playURL: detail.playURL)
+    } catch {
+      return 0
+    }
+  }
+
+  static func playbackEpisodeCount(playFrom: String?, playURL: String?) -> Int {
+    EpisodeParser.lines(playFrom: playFrom, playURL: playURL)
+      .map(\.episodes.count)
+      .max() ?? 0
+  }
+
+  /// Parse 「更新至35集 / 全40集 / 更新第12期」 style progress from remarks.
+  static func expectedUpdateCount(from remarks: String?) -> Int? {
+    let text = remarks?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !text.isEmpty else { return nil }
+    let patterns = [
+      #"更新(?:至|到|第)?\s*(\d+)\s*集"#,
+      #"全\s*(\d+)\s*集"#,
+      #"更新(?:至|到|第)?\s*(\d+)\s*期"#,
+      #"第\s*(\d+)\s*期"#,
+    ]
+    for pattern in patterns {
+      guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+      let range = NSRange(text.startIndex..<text.endIndex, in: text)
+      guard let match = regex.firstMatch(in: text, range: range),
+        match.numberOfRanges > 1,
+        let numRange = Range(match.range(at: 1), in: text),
+        let value = Int(text[numRange]),
+        value > 0
+      else { continue }
+      return value
+    }
+    return nil
+  }
+
   private static func normalizedTitle(_ title: String) -> String {
     title.lowercased().filter { character in
       !character.isWhitespace && !character.isPunctuation
@@ -2280,39 +2529,17 @@ final class AppModel {
         language: subtitle.lang
       )
     }
-    var danmaku = (result.danmaku ?? []).compactMap { item -> PlaybackDanmaku? in
+    // Provider-supplied danmaku only — B站/自定义自动匹配在 PlayerView 后台做，
+    // 不挡首帧（否则电影开播可多等数秒「加载中」）。
+    let danmaku = (result.danmaku ?? []).compactMap { item -> PlaybackDanmaku? in
       guard let url = URL(string: item.url, relativeTo: baseURL)?.absoluteURL else {
         return nil
       }
       return PlaybackDanmaku(url: url, name: item.name)
     }
-    if danmaku.isEmpty, danmakuAutoMatch {
-      let custom = URL(string: danmakuCustomAPIBase)
-      danmaku = await DanmakuSourceResolver.resolve(
-        .init(
-          title: item.name,
-          episodeLabel: episode.name,
-          year: item.year,
-          customAPIBase: custom
-        )
-      )
-    }
-    var skips = (result.skips ?? []).filter { segment in
+    // Cloud ad-skip also runs in PlayerView after play starts.
+    let skips = (result.skips ?? []).filter { segment in
       segment.end.map { $0 > segment.start } ?? (segment.start > 0)
-    }
-    if cloudAdSkipEnabled, HlsAdSkipDetector.looksLikeHLS(url) {
-      let detection = await HlsAdSkipDetector.detectResolvingMaster(
-        url: url,
-        headers: result.header ?? [:],
-        options: .init(adPatterns: configuration.ads ?? [])
-      )
-      for segment in detection.skips
-      where !skips.contains(where: {
-        abs($0.start - segment.start) < 0.35
-          && abs(($0.end ?? $0.start) - (segment.end ?? segment.start)) < 0.35
-      }) {
-        skips.append(segment)
-      }
     }
     return PlaybackRequest(
       url: url,
@@ -3227,7 +3454,7 @@ final class AppModel {
     guard let coordinator else {
       throw FirepickError.provider("Provider 未初始化")
     }
-    return try await coordinator.provider(for: site)
+    return try await coordinator.provider(for: siteWithActiveCMSProviders(site))
   }
 
   private func makeCoordinator(client: BridgeClient?) -> ProviderCoordinator {

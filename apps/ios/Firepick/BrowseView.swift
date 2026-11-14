@@ -29,10 +29,15 @@ struct BrowseView: View {
   }
 
   private var visibleCategories: [FirepickCore.Category] {
-    (model.homeResult?.classes ?? []).filter { category in
+    let preferred = ["bucket|recommend", "bucket|tv", "bucket|movie", "bucket|variety", "bucket|anime"]
+    let raw = (model.homeResult?.classes ?? []).filter { category in
       let id = category.typeId
       return !id.hasSuffix("kids") && !id.hasSuffix("doc")
     }
+    // Prefer fixed 拾萤 menu order when present; drop stray CMS classes.
+    let buckets = preferred.compactMap { id in raw.first(where: { $0.typeId == id }) }
+    if buckets.count >= 3 { return buckets }
+    return raw
   }
 
   private var latestItems: [MediaItem] {
@@ -323,7 +328,7 @@ struct BrowseView: View {
       } description: {
         Text(Self.defaultWarehouseDescription)
       } actions: {
-        Button("使用拾萤") {
+        Button("使用拾萤精选") {
           Task { await model.applyOfficialSource() }
         }
         .buttonStyle(.borderedProminent)
@@ -434,25 +439,31 @@ struct BrowseView: View {
     .accessibilityLabel(label)
   }
 
-  /// Prefer the active site name (e.g. 拾萤), then warehouse notice, never a raw host alone.
+  /// Prefer the active site name (e.g. 拾萤精选), then warehouse notice, never a raw host alone.
   private var headerTitle: String {
-    guard model.currentConnection != nil else { return "拾萤" }
+    guard model.currentConnection != nil else { return "拾萤精选" }
     if let site = model.selectedSite {
-      let name = site.name.trimmingCharacters(in: .whitespacesAndNewlines)
+      let name = Self.brandDisplayName(site.name)
       if !name.isEmpty { return name }
     }
-    if let notice = model.configuration.notice?.trimmingCharacters(in: .whitespacesAndNewlines),
-      !notice.isEmpty
-    {
-      return notice
+    if let notice = model.configuration.notice {
+      let name = Self.brandDisplayName(notice)
+      if !name.isEmpty { return name }
     }
     if let connection = model.currentConnection {
       let name = connection.name.trimmingCharacters(in: .whitespacesAndNewlines)
       if !name.isEmpty, name != connection.url, URL(string: connection.url)?.host != name {
-        return name
+        return Self.brandDisplayName(name)
       }
     }
-    return "拾萤"
+    return "拾萤精选"
+  }
+
+  /// Cached remote config may still say「拾萤」— show 拾萤精选 until republish.
+  private static func brandDisplayName(_ raw: String) -> String {
+    let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if name == "拾萤" { return "拾萤精选" }
+    return name
   }
 
   private static let defaultWarehouseDescription = "在设置中添加配置地址后，点播内容会出现在这里"

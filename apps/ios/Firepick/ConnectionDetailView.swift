@@ -56,9 +56,13 @@ struct ConnectionDetailView: View {
 
         Section {
           ForEach(preview.sites, id: \.key) { site in
+            let displayName =
+              site.name.trimmingCharacters(in: .whitespacesAndNewlines) == "拾萤"
+              ? "拾萤精选"
+              : site.name
             HStack {
               VStack(alignment: .leading, spacing: 4) {
-                Text(site.name)
+                Text(displayName)
                 Text(model.routeLabel(for: site))
                   .font(.caption)
                   .foregroundStyle(.secondary)
@@ -78,7 +82,7 @@ struct ConnectionDetailView: View {
         } header: {
           Text("点播源 · \(preview.sites.count)")
         } footer: {
-          Text("配置仓里的站（如拾萤）。延迟为静默探测；采集站列表与测速见「采集站管理」。")
+          Text("配置仓里的站（如拾萤精选）。延迟为静默探测；采集站列表与测速见「采集站管理」。")
         }
       }
 
@@ -130,7 +134,11 @@ struct ConnectionDetailView: View {
           LabeledContent("已隐藏点播源", value: "\(model.hiddenSiteCount) 个")
         }
         if let site = model.selectedSite {
-          LabeledContent("当前点播源", value: site.name)
+          let siteName =
+            site.name.trimmingCharacters(in: .whitespacesAndNewlines) == "拾萤"
+            ? "拾萤精选"
+            : site.name
+          LabeledContent("当前点播源", value: siteName)
           LabeledContent("执行路径", value: model.routeLabel(for: site))
         }
       } else if let lives = preview.lives, !lives.isEmpty {

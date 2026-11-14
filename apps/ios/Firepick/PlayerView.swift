@@ -61,7 +61,7 @@ struct PlayerView: View {
   @State private var activeFlag: String?
   @State private var activeLineEpisodes: [Episode] = []
   @State private var danmakuComments: [DanmakuComment] = []
-  @State private var danmakuEnabled = true
+  @State private var danmakuEnabled = false
   @State private var showingEpisodes = false
   @State private var showingLines = false
   @State private var showingDanmakuSettings = false
@@ -116,8 +116,14 @@ struct PlayerView: View {
   @State private var showingRatePicker = false
   @State private var showingResolutionPicker = false
   @State private var streamResolution: StreamResolution = .automatic
+  /// Auto mode stepped down after stall / constrained network; clears when path recovers.
+  @State private var autoQualityDegraded = false
   /// Detected output height while 自动 (from AV presentationSize).
   @State private var detectedOutputHeight: CGFloat = 0
+  /// Max short-edge height from HLS variants / URL hints (gates 4K/2K menu rows).
+  @State private var streamPeakHeight: CGFloat = 0
+  /// Cloud ad-skip segments resolved after first frame (not blocking open).
+  @State private var cloudAdSkips: [SkipSegment] = []
   @State private var orientationLocked = false
   /// Keep progress chrome stable while soft-reloading another 来源.
   @State private var stickyDuration: Double = 0
@@ -155,6 +161,8 @@ struct PlayerView: View {
 
   private enum StreamResolution: String, CaseIterable, Identifiable {
     case automatic
+    case p2160
+    case p1440
     case p1080
     case p720
     case p480
@@ -165,6 +173,8 @@ struct PlayerView: View {
     var title: String {
       switch self {
       case .automatic: "自动"
+      case .p2160: "4K"
+      case .p1440: "2K"
       case .p1080: "1080P"
       case .p720: "720P"
       case .p480: "480P"
@@ -172,10 +182,12 @@ struct PlayerView: View {
       }
     }
 
-    /// AVPlayer preferredPeakBitRate; 0 = uncapped / 自动.
+    /// AVPlayer preferredPeakBitRate；自动档由 `effectivePeakBitRate` 优先封顶 1080P。
     var peakBitRate: Double {
       switch self {
-      case .automatic: 0
+      case .automatic: 4_500_000
+      case .p2160: 16_000_000
+      case .p1440: 8_000_000
       case .p1080: 4_500_000
       case .p720: 2_500_000
       case .p480: 1_200_000
@@ -409,9 +421,10 @@ struct PlayerView: View {
         }
         updateNowPlaying()
         scheduleHideControls()
-      }
-      .task(id: request.danmaku.first?.id) {
-        await loadDanmaku()
+        // Background — never block first frame on B站弹幕 / 云端去广.
+        async let danmakuReady: Void = loadDanmaku()
+        async let adSkipReady: Void = enrichCloudAdSkipsIfNeeded()
+        _ = await (danmakuReady, adSkipReady)
       }
       .onChange(of: avEngine.currentTime) { _, time in
         notePlaybackClock(
@@ -495,6 +508,13 @@ struct PlayerView: View {
       }
       .onChange(of: model.backgroundPlaybackEnabled) { _, enabled in
         if enabled { configureAudioSession() }
+      }
+      .onChange(of: model.isNetworkConstrained) { _, constrained in
+        if !constrained {
+          autoQualityDegraded = false
+        }
+        guard streamResolution == .automatic else { return }
+        applyPreferredPeakBitRate()
       }
       .onReceive(
         NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
@@ -653,13 +673,17 @@ struct PlayerView: View {
     }
   }
 
-  /// Left-edge swipe right → exit fullscreen or leave the player page.
+  /// Left-edge zone that owns swipe-back (must not compete with seek).
+  private var edgeBackWidth: CGFloat { 48 }
+
+  /// Left-edge swipe right → exit fullscreen or leave the player / detail page.
+  /// Tuned for real devices: wider edge + lower distance than simulator-only defaults.
   private func edgeSwipeBackGesture(in size: CGSize) -> some Gesture {
-    DragGesture(minimumDistance: 24)
+    DragGesture(minimumDistance: 20)
       .onEnded { value in
-        let fromLeftEdge = value.startLocation.x < 28
-        let mostlyHorizontal = abs(value.translation.width) > abs(value.translation.height) * 1.2
-        let swipedRight = value.translation.width > 90
+        let fromLeftEdge = value.startLocation.x < edgeBackWidth
+        let mostlyHorizontal = abs(value.translation.width) > abs(value.translation.height) * 1.05
+        let swipedRight = value.translation.width > 56
         guard fromLeftEdge, mostlyHorizontal, swipedRight else { return }
         if let onCollapse, chrome != .inline {
           onCollapse()
@@ -1133,16 +1157,21 @@ struct PlayerView: View {
         .font(.headline)
         .foregroundStyle(.white)
         .padding(.top, 20)
-      ForEach(StreamResolution.allCases) { option in
+      ForEach(availableStreamResolutions) { option in
         let selected = streamResolution == option
+        // Auto row label is stable — never mirror the current manual rung (that showed two「1080P」).
+        let label = option == .automatic ? "自动（1080P）" : option.title
         Button {
           streamResolution = option
-          playbackEngine.setPreferredPeakBitRate(option.peakBitRate)
-          showToast(option == .automatic ? "清晰度：\(resolutionButtonTitle)" : "清晰度：\(option.title)")
+          if option != .automatic {
+            autoQualityDegraded = false
+          }
+          applyPreferredPeakBitRate()
+          showToast("清晰度：\(label)")
           closePlayerDrawers()
         } label: {
           HStack {
-            Text(option == .automatic ? automaticResolutionMenuTitle : option.title)
+            Text(label)
               .font(.body.weight(selected ? .semibold : .regular))
             Spacer()
             if selected {
@@ -1163,6 +1192,38 @@ struct PlayerView: View {
       Spacer(minLength: 0)
     }
     .padding(.horizontal, 14)
+  }
+
+  /// 4K/2K only when the stream/URL actually offers them; lower rungs stay selectable as caps.
+  private var availableStreamResolutions: [StreamResolution] {
+    var options: [StreamResolution] = [.automatic, .p1080, .p720, .p480, .p360]
+    let peak = max(detectedOutputHeight, streamPeakHeight, hintedStreamPeakHeight)
+    if peak >= 1400 {
+      options.insert(.p1440, at: 1)
+    }
+    if peak >= 2000 {
+      options.insert(.p2160, at: 1)
+    }
+    return options
+  }
+
+  private var hintedStreamPeakHeight: CGFloat {
+    let active = activeRequest ?? request
+    let blob = "\(active.formatHint ?? "") \(active.url.absoluteString)".lowercased()
+    if blob.contains("2160") || blob.contains("4k") || blob.contains("uhd") {
+      return 2160
+    }
+    if blob.contains("1440") || blob.contains("2k") {
+      return 1440
+    }
+    return 0
+  }
+
+  private func clampResolutionSelection() {
+    let available = availableStreamResolutions
+    guard !available.contains(streamResolution) else { return }
+    streamResolution = .automatic
+    applyPreferredPeakBitRate()
   }
 
   private var episodeDrawerPanel: some View {
@@ -1556,22 +1617,36 @@ struct PlayerView: View {
     abs(playbackRate - 1) < 0.01 ? "倍速" : "\(playbackRate.formatted())×"
   }
 
-  /// Overlay chip: keep compact — just「自动」when in auto mode.
+  /// Overlay chip: compact「自动」; manual shows 4K/2K/1080P…
   private var resolutionButtonTitle: String {
     streamResolution == .automatic ? "自动" : streamResolution.title
   }
 
-  /// Drawer row: show resolved rung, e.g.「自动（1080P）」.
-  private var automaticResolutionMenuTitle: String {
-    if let label = Self.qualityLabel(forHeight: detectedOutputHeight) {
-      return "自动（\(label)）"
+  /// 自动：默认封顶 1080P；仅弱网/卡顿时静默降档（不改菜单文案，避免「一直在变」）。
+  private func effectivePeakBitRate() -> Double {
+    switch streamResolution {
+    case .automatic:
+      if autoQualityDegraded {
+        return StreamResolution.p480.peakBitRate
+      }
+      if model.isNetworkConstrained {
+        return StreamResolution.p720.peakBitRate
+      }
+      return StreamResolution.p1080.peakBitRate
+    default:
+      return streamResolution.peakBitRate
     }
-    return "自动"
+  }
+
+  private func applyPreferredPeakBitRate() {
+    playbackEngine.setPreferredPeakBitRate(effectivePeakBitRate())
   }
 
   /// `height` is the shorter presentation edge (P ladder).
   private static func qualityLabel(forHeight height: CGFloat) -> String? {
     guard height >= 200 else { return nil }
+    if height >= 2000 { return "4K" }
+    if height >= 1400 { return "2K" }
     if height >= 1000 { return "1080P" }
     if height >= 700 { return "720P" }
     if height >= 480 { return "480P" }
@@ -1587,6 +1662,35 @@ struct PlayerView: View {
     let shortEdge = min(size.width, size.height)
     if abs(shortEdge - detectedOutputHeight) > 4 {
       detectedOutputHeight = shortEdge
+    }
+    if shortEdge > streamPeakHeight {
+      streamPeakHeight = shortEdge
+    }
+    clampResolutionSelection()
+  }
+
+  /// Inspect HLS variants so 4K/2K can appear before the adaptive ladder climbs.
+  private func refreshStreamPeakFromAsset() async {
+    guard engineKind == .avPlayer,
+      let item = avEngine.player.currentItem,
+      let asset = item.asset as? AVURLAsset
+    else { return }
+    refreshDetectedQuality()
+    do {
+      let variants = try await asset.load(.variants)
+      let peak = variants.compactMap { variant -> CGFloat? in
+        guard let size = variant.videoAttributes?.presentationSize,
+          size.width > 1,
+          size.height > 1
+        else { return nil }
+        return min(size.width, size.height)
+      }.max() ?? 0
+      if peak > streamPeakHeight {
+        streamPeakHeight = peak
+        clampResolutionSelection()
+      }
+    } catch {
+      // Single-bitrate / progressive — presentationSize is enough.
     }
   }
 
@@ -1634,6 +1738,12 @@ struct PlayerView: View {
     DragGesture(minimumDistance: 12)
       .onChanged { value in
         guard holdSpeedSide == nil else { return }
+        // Leave left-edge horizontal drags to swipe-back (real-device Nav/pop).
+        if value.startLocation.x < edgeBackWidth,
+          abs(value.translation.width) >= abs(value.translation.height)
+        {
+          return
+        }
         if dragAxis == nil {
           if abs(value.translation.width) > abs(value.translation.height) {
             dragAxis = .horizontal
@@ -1833,6 +1943,9 @@ struct PlayerView: View {
     triedURLs = []
     retriedWithAV = false
     failure = nil
+    detectedOutputHeight = 0
+    streamPeakHeight = hintedStreamPeakHeight
+    cloudAdSkips = []
     // Exhaustion silently asks DetailView to 换源; keep spinner (not silentHandoff)
     // so a black first paint doesn't look "failed".
     await playCandidates([request.url] + alternateURLs, silent: false)
@@ -1882,11 +1995,12 @@ struct PlayerView: View {
         activeRequest = candidate
         failure = nil
         playbackEngine.setPlaybackRate(playbackRate)
-        playbackEngine.setPreferredPeakBitRate(streamResolution.peakBitRate)
+        applyPreferredPeakBitRate()
         wantsPlaying = true
         playbackEngine.play()
         lastProgressWallclock = Date()
         lastProgressMediaTime = resumeAt
+        Task { await refreshStreamPeakFromAsset() }
         return
       } catch {
         last = Self.friendlyPlaybackError(error.localizedDescription)
@@ -2008,7 +2122,19 @@ struct PlayerView: View {
   }
 
   private func loadDanmaku() async {
-    guard let source = request.danmaku.first else {
+    var sources = request.danmaku
+    if sources.isEmpty, model.danmakuAutoMatch {
+      let custom = URL(string: model.danmakuCustomAPIBase)
+      sources = await DanmakuSourceResolver.resolve(
+        .init(
+          title: item.name,
+          episodeLabel: (activeEpisode ?? episode)?.name,
+          year: item.year,
+          customAPIBase: custom
+        )
+      )
+    }
+    guard let source = sources.first else {
       danmakuComments = []
       return
     }
@@ -2033,6 +2159,19 @@ struct PlayerView: View {
     } catch {
       danmakuComments = []
     }
+  }
+
+  private func enrichCloudAdSkipsIfNeeded() async {
+    cloudAdSkips = []
+    guard model.cloudAdSkipEnabled,
+      HlsAdSkipDetector.looksLikeHLS(request.url)
+    else { return }
+    let detection = await HlsAdSkipDetector.detectResolvingMaster(
+      url: request.url,
+      headers: request.headers,
+      options: .init(adPatterns: model.configuration.ads ?? [])
+    )
+    cloudAdSkips = detection.skips
   }
 
   private func seek(by delta: Double) {
@@ -2254,6 +2393,10 @@ struct PlayerView: View {
     stickyTime = position
     // Avoid immediate re-trigger while recovery is in flight / loading.
     lastProgressWallclock = Date()
+    if streamResolution == .automatic, !autoQualityDegraded {
+      autoQualityDegraded = true
+      applyPreferredPeakBitRate()
+    }
     let pending = ([request.url] + alternateURLs).filter { !triedURLs.contains($0) }
     if !pending.isEmpty {
       await playCandidates(pending, startAt: position, silent: true)
@@ -2328,6 +2471,12 @@ struct PlayerView: View {
     failure = nil
     didAutoSkipIntro = false
     skippedAdSegmentKeys = []
+    // Reset quality gates so 换源 doesn't inherit the previous station's 4K/2K.
+    detectedOutputHeight = 0
+    streamPeakHeight = 0
+    cloudAdSkips = []
+    streamResolution = .automatic
+    autoQualityDegraded = false
     cancelNextEpisodeCountdown()
     activeEpisode = episode
     activeFlag = flag
@@ -2405,7 +2554,7 @@ struct PlayerView: View {
   /// 智能去广：片源/云端返回的插播广告轴，落入区间则跳到段末。
   private func handleMidrollAdSkip(at time: Double) {
     guard model.cloudAdSkipEnabled else { return }
-    let segments = (activeRequest ?? request).skips
+    let segments = (activeRequest ?? request).skips + cloudAdSkips
     guard !segments.isEmpty else { return }
     for segment in segments {
       guard Self.isMidrollAdSegment(segment) else { continue }

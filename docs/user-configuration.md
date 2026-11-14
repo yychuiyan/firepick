@@ -74,13 +74,15 @@ https://raw.githubusercontent.com/gaotianliuyun/gao/master/js.json
 拾萤自建的聚合配置地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/ios-sources.json?v=15
+https://dl.yychuiyan.com/firepick/ios-sources.json?v=21
 ```
 
-该地址提供一个聚合点播站「拾萤」（当前聚合七路 AppleCMS 采集接口：量子 / 暴风 /
-速播 / 非凡 / 极速 / 天堂 / 最大；`scripts/probe-cms-providers.mjs` 测活后自动写回 `DEFAULT_PROVIDERS`）
+该地址提供一个聚合点播站「拾萤精选」（当前聚合十路 AppleCMS 采集接口：最大 / 量子采集 /
+豪华 / 猫眼 / 光速 / 速播 / 极速 / 量子影视 / 如意 / 非凡；`scripts/probe-cms-providers.mjs`
+测活后自动写回默认活跃池）
 和三组电视源，可直接验证首页、分类、搜索、详情、选集、HLS 播放与频道直播。
 显示名是采集库名称，不是正版平台官方接口。电视剧等默认按豆瓣热门榜匹配可播源。
+App 的「采集站管理」可重新测速候选池，并保留本机实测可用线路。
 上游采集接口和直播频道可能临时失效，不承诺长期固定内容。官方 iOS 包优先使用
 内置聚合脚本，维护采集站列表时需要重新发布 App 并 bump 配置版本。
 

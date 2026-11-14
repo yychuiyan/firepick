@@ -40,6 +40,9 @@ final class AppPersistence {
     static let lastLiveChannelName = "lastLiveChannelName"
     static let lastLiveGroupName = "lastLiveGroupName"
     static let lastLiveURLIndex = "lastLiveURLIndex"
+    static let lastLiveShelfID = "lastLiveShelfID"
+    static let activeCMSProviders = "activeCMSProviders"
+    static let activeCMSProvidersProbedAt = "activeCMSProvidersProbedAt"
   }
 
   private let defaults = UserDefaults.standard
@@ -347,9 +350,31 @@ final class AppPersistence {
   var lastLiveChannelID: String? { defaults.string(forKey: Key.lastLiveChannelID) }
   var lastLiveChannelName: String? { defaults.string(forKey: Key.lastLiveChannelName) }
   var lastLiveGroupName: String? { defaults.string(forKey: Key.lastLiveGroupName) }
+  var lastLiveShelfID: String? { defaults.string(forKey: Key.lastLiveShelfID) }
   var lastLiveURLIndex: Int? {
     guard defaults.object(forKey: Key.lastLiveURLIndex) != nil else { return nil }
     return defaults.integer(forKey: Key.lastLiveURLIndex)
+  }
+
+  func loadActiveCMSProviders() -> [AppModel.ActiveCMSProvider] {
+    guard let data = defaults.data(forKey: Key.activeCMSProviders),
+      let decoded = try? JSONDecoder().decode([AppModel.ActiveCMSProvider].self, from: data)
+    else {
+      return []
+    }
+    return decoded
+  }
+
+  func saveActiveCMSProviders(_ values: [AppModel.ActiveCMSProvider], probedAt: Date = .now) {
+    if let data = try? JSONEncoder().encode(values) {
+      defaults.set(data, forKey: Key.activeCMSProviders)
+    }
+    defaults.set(probedAt.timeIntervalSince1970, forKey: Key.activeCMSProvidersProbedAt)
+  }
+
+  var activeCMSProvidersProbedAt: Date? {
+    guard defaults.object(forKey: Key.activeCMSProvidersProbedAt) != nil else { return nil }
+    return Date(timeIntervalSince1970: defaults.double(forKey: Key.activeCMSProvidersProbedAt))
   }
 
   func saveLastLiveChannelID(_ value: String?) {
@@ -366,6 +391,14 @@ final class AppPersistence {
 
   func saveLastLiveURLIndex(_ value: Int) {
     defaults.set(value, forKey: Key.lastLiveURLIndex)
+  }
+
+  func saveLastLiveShelfID(_ value: String?) {
+    if let value {
+      defaults.set(value, forKey: Key.lastLiveShelfID)
+    } else {
+      defaults.removeObject(forKey: Key.lastLiveShelfID)
+    }
   }
 
   func loadBridgeCredentials() throws -> BridgeCredentials? {

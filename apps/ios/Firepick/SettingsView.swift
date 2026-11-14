@@ -114,7 +114,7 @@ struct SettingsView: View {
       }
 
       if model.currentConnection == nil {
-        Button("使用拾萤") {
+        Button("使用拾萤精选") {
           Task { await model.applyOfficialSource() }
         }
         .disabled(model.isSwitchingConnection)
@@ -224,11 +224,13 @@ struct SettingsView: View {
       .trimmingCharacters(in: .whitespacesAndNewlines),
       !notice.isEmpty
     {
-      return notice
+      return notice == "拾萤" ? "拾萤精选" : notice
     }
     if let connection = model.currentConnection {
       let name = connection.name.trimmingCharacters(in: .whitespacesAndNewlines)
-      if !name.isEmpty { return name }
+      if !name.isEmpty {
+        return name == "拾萤" ? "拾萤精选" : name
+      }
     }
     return "尚未选择"
   }

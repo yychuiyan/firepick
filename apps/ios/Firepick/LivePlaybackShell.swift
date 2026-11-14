@@ -32,6 +32,10 @@ struct LivePlaybackShell: View {
   @State private var reachableIDs: Set<String> = []
   @State private var checkedIDs: Set<String> = []
   @State private var playPauseGlyph: PlayPauseGlyph?
+  /// Bumps on leave / new load so late `loadCurrent` cannot restart audio after 点播.
+  @State private var liveLoadGeneration = 0
+  /// Keep the 16:9 stage black (and muted) until a real video plane is confirmed.
+  @State private var holdBlackUntilVideo = false
 
   private let liveShelves: [LiveShelf] = [
     LiveShelf(id: "cctv", title: "央视", keywords: ["央视", "cctv"]),
@@ -66,11 +70,9 @@ struct LivePlaybackShell: View {
       if model.liveGroups.isEmpty {
         emptyState
       } else if let channel {
-        if isFullscreen {
-          fullscreenBody(channel: channel)
-        } else {
-          portraitBody(channel: channel)
-        }
+        // Keep one player surface across portrait ↔ fullscreen — branching
+        // remounts AVPlayer and yields black video + radio-like audio.
+        liveStage(channel: channel)
       } else {
         ZStack {
           Color(.systemBackground).ignoresSafeArea()
@@ -99,38 +101,23 @@ struct LivePlaybackShell: View {
     }
     .onChange(of: model.selectedTab) { _, tab in
       if tab == .live {
-        if channel == nil {
-          Task { await bootstrap() }
-        } else {
-          // Re-entering the tab: restore last remembered channel if it drifted.
-          restoreRememberedChannelIfNeeded()
-          playbackEngine.play()
-          scheduleHideHUD()
-        }
+        Task { await enterLiveTab() }
       } else {
-        playbackEngine.pause()
-        if isFullscreen {
-          exitFullscreen()
-        }
-        if let channel {
-          model.rememberLiveChannel(channel, groupName: groupName, urlIndex: urlIndex)
-        }
+        leaveLiveTab()
       }
     }
     .onChange(of: scenePhase) { _, phase in
-      // Honor 后台播放 — previously live always paused when leaving the app.
+      // Leaving the app while on 电视: stop unless 后台播放 (avoids 串音 into other apps).
       if phase != .active, model.selectedTab == .live, !model.backgroundPlaybackEnabled {
-        playbackEngine.pause()
+        stopAllLiveEngines()
       }
-    }
-    .onChange(of: channel?.id) { _, _ in
-      syncShelfToCurrentChannel()
     }
     .onDisappear {
       hideTask?.cancel()
       singleTapTask?.cancel()
       glyphHideTask?.cancel()
-      playbackEngine.stop()
+      persistLiveMemory()
+      stopAllLiveEngines()
       if isFullscreen {
         isFullscreen = false
         OrientationBridge.enterPortraitThenUnlock()
@@ -158,83 +145,124 @@ struct LivePlaybackShell: View {
     .background(Color(.systemBackground))
   }
 
-  private func portraitBody(channel: LiveChannel) -> some View {
-    VStack(spacing: 0) {
-      ZStack(alignment: .bottomTrailing) {
-        playerStage(channel: channel, fullscreenChrome: false)
-        // Always visible — HUD auto-hide must not remove the fullscreen entry.
-        Button {
-          enterFullscreen()
-        } label: {
-          Image(systemName: "arrow.up.left.and.arrow.down.right")
-            .font(.body.weight(.semibold))
-            .foregroundStyle(.white)
-            .frame(width: 40, height: 40)
-            .background(.black.opacity(0.55), in: Circle())
-        }
-        .buttonStyle(.plain)
-        .padding(.trailing, 12)
-        .padding(.bottom, 12)
-        .accessibilityLabel("全屏")
-      }
-      .aspectRatio(16 / 9, contentMode: .fit)
-      .frame(maxWidth: .infinity)
-      .background(Color.black)
+  private func liveStage(channel: LiveChannel) -> some View {
+    GeometryReader { geo in
+      let portraitVideoH = geo.size.width * 9 / 16
+      ZStack(alignment: .top) {
+        // Video plane — must sit above any page background (白屏 was systemBackground
+        // painted on the full-height VStack covering this hole).
+        Color.black
+          .frame(
+            width: geo.size.width,
+            height: isFullscreen ? geo.size.height : portraitVideoH
+          )
+          .frame(maxHeight: isFullscreen ? .infinity : nil)
 
-      channelPanel(current: channel)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Color(.systemBackground))
+        playerStage(channel: channel, fullscreenChrome: isFullscreen)
+          .frame(
+            width: geo.size.width,
+            height: isFullscreen ? geo.size.height : portraitVideoH
+          )
+          .frame(maxHeight: isFullscreen ? .infinity : nil)
+
+        if isFullscreen {
+          fullscreenBackChrome()
+        } else {
+          VStack(spacing: 0) {
+            Color.clear
+              .frame(height: portraitVideoH)
+              .allowsHitTesting(false)
+              .overlay(alignment: .bottomTrailing) {
+                fullscreenEntryButton
+              }
+            channelPanel(current: channel)
+              .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+              .background(Color(.systemBackground))
+          }
+        }
+      }
+      .frame(width: geo.size.width, height: geo.size.height)
+      .background {
+        Group {
+          if isFullscreen {
+            Color.black
+          } else {
+            Color(.systemBackground)
+          }
+        }
+        .ignoresSafeArea()
+      }
     }
-    .background(Color(.systemBackground).ignoresSafeArea())
+    .ignoresSafeArea(isFullscreen ? .all : [])
+    .statusBarHidden(isFullscreen)
+    .persistentSystemOverlays(isFullscreen ? .hidden : .automatic)
   }
 
-  private func fullscreenBody(channel: LiveChannel) -> some View {
-    ZStack {
-      Color.black.ignoresSafeArea()
-      playerStage(channel: channel, fullscreenChrome: true)
-        .ignoresSafeArea()
-      // Always-available exit so fullscreen is never a trap when HUD is hidden.
-      VStack {
-        HStack {
-          Button {
-            exitFullscreen()
-          } label: {
-            Image(systemName: "chevron.left")
-              .font(.body.weight(.semibold))
-              .foregroundStyle(.white)
-              .frame(width: 40, height: 40)
-              .background(.black.opacity(0.55), in: Circle())
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel("退出全屏")
-          Spacer()
+  private var fullscreenEntryButton: some View {
+    Button {
+      enterFullscreen()
+    } label: {
+      Image(systemName: "arrow.up.left.and.arrow.down.right")
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(.white)
+        .shadow(color: .black.opacity(0.65), radius: 1.5, y: 1)
+        .padding(12)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .padding(.trailing, 8)
+    .padding(.bottom, 6)
+    .accessibilityLabel("全屏")
+  }
+
+  /// Single top-leading 返回 — no duplicate bottom「收起」control.
+  private func fullscreenBackChrome() -> some View {
+    VStack {
+      HStack {
+        Button {
+          exitFullscreen()
+        } label: {
+          Image(systemName: "chevron.left")
+            .font(.body.weight(.semibold))
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.65), radius: 1.5, y: 1)
+            .padding(14)
+            .contentShape(Rectangle())
         }
-        .padding(.leading, 16)
-        .padding(.top, 12)
+        .buttonStyle(.plain)
+        .accessibilityLabel("返回")
         Spacer()
       }
+      .padding(.leading, 4)
+      .padding(.top, 4)
+      Spacer()
     }
-    .statusBarHidden(true)
-    .persistentSystemOverlays(.hidden)
   }
 
   private func playerStage(channel: LiveChannel, fullscreenChrome: Bool) -> some View {
     ZStack {
+      Color.black
       playerLayer
+      // Cover layer swaps / empty AVPlayerLayer so 切台 never flashes system white.
+      if holdBlackUntilVideo || playbackEngine.state == .loading {
+        Color.black
+      }
 
       if showHUD {
         playerChrome(channel: channel, fullscreenChrome: fullscreenChrome)
           .transition(.opacity)
       }
 
-      if playbackEngine.state == .loading {
+      if playbackEngine.state == .loading || holdBlackUntilVideo {
         VStack(spacing: 10) {
           ProgressView()
             .controlSize(.large)
             .tint(.white)
-          Text(bitrateText)
-            .font(.subheadline.monospacedDigit())
-            .foregroundStyle(.white)
+          if !holdBlackUntilVideo || failure == nil {
+            Text(bitrateText)
+              .font(.subheadline.monospacedDigit())
+              .foregroundStyle(.white)
+          }
         }
         .allowsHitTesting(false)
       }
@@ -273,9 +301,8 @@ struct LivePlaybackShell: View {
       DragGesture(minimumDistance: 36)
         .onEnded { value in
           guard abs(value.translation.height) > abs(value.translation.width) else { return }
-          if fullscreenChrome {
-            handleFullscreenTabBarSwipe(value.translation.height)
-          } else if value.translation.height < 0 {
+          // No fullscreen tab-bar swipe / 收起 — always zap by vertical swipe.
+          if value.translation.height < 0 {
             zap(delta: 1)
           } else {
             zap(delta: -1)
@@ -304,7 +331,9 @@ struct LivePlaybackShell: View {
     if engineKind == .mpv {
       MPVVideoView(engine: mpvEngine)
     } else {
-      LiveSystemPlayerView(player: avEngine.player)
+      // AVPlayerLayer — AVPlayerViewController shows Apple's radio/Q artwork
+      // when no video plane is ready yet.
+      LivePlayerLayerView(player: avEngine.player)
     }
   }
 
@@ -312,11 +341,11 @@ struct LivePlaybackShell: View {
     ZStack {
       VStack {
         HStack {
-          if !fullscreenChrome {
-            Spacer()
+          if fullscreenChrome {
+            // Room for top-leading 返回 outside the HUD.
+            Spacer(minLength: 56)
           } else {
-            // Persistent 「返回」 lives outside HUD; keep trailing actions here.
-            Spacer(minLength: 120)
+            Spacer()
           }
           if channel.urls.count > 1 {
             Button("线路") { showLines = true }
@@ -338,28 +367,9 @@ struct LivePlaybackShell: View {
           .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
-        .padding(.top, fullscreenChrome ? 52 : 10)
+        .padding(.top, fullscreenChrome ? 12 : 10)
 
         Spacer()
-
-        if fullscreenChrome {
-          HStack(alignment: .bottom) {
-            Spacer()
-            Button {
-              exitFullscreen()
-            } label: {
-              Image(systemName: "arrow.down.right.and.arrow.up.left")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 40, height: 40)
-                .background(.black.opacity(0.55), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("退出全屏")
-          }
-          .padding(.trailing, 12)
-          .padding(.bottom, 12)
-        }
       }
 
       if playPauseGlyph == nil {
@@ -409,7 +419,10 @@ struct LivePlaybackShell: View {
           ForEach(liveShelves) { shelf in
             let selected = selectedShelfID == shelf.id
             Button {
+              // Only switch the list shelf — do not force-sync from the playing channel
+              // (that was bouncing 卫视 → 央视 while CCTV was still on air).
               selectedShelfID = shelf.id
+              model.rememberLiveShelf(shelf.id)
             } label: {
               Text(shelf.title)
                 .font(.subheadline.weight(.semibold))
@@ -428,78 +441,113 @@ struct LivePlaybackShell: View {
       }
 
       let channels = activeShelfChannels
-      ScrollView {
-        LazyVStack(spacing: 0) {
-          if channels.isEmpty {
-            VStack(spacing: 10) {
-              if shelfPending {
-                ProgressView().tint(.orange)
-              }
-              Text(shelfPending ? "正在检测可用频道" : "没有检测到可播放的频道")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 36)
-          } else {
-            ForEach(channels) { item in
-              Button {
-                select(channel: item, groupHint: nil)
-              } label: {
-                HStack(spacing: 12) {
-                  CachedRemoteImage(
-                    url: item.logo.flatMap(URL.init(string:)),
-                    maxPixelSize: 96
-                  ) {
-                    Image(systemName: "tv")
-                      .foregroundStyle(.secondary)
-                  }
-                  .frame(width: 36, height: 36)
-                  .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-
-                  VStack(alignment: .leading, spacing: 2) {
-                    Text(item.name)
-                      .font(.body.weight(item.id == current.id ? .semibold : .regular))
-                      .foregroundStyle(item.id == current.id ? Color.orange : Color.primary)
-                    if let program = model.currentProgram(for: item) {
-                      Text(program.title)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    }
-                  }
-                  Spacer(minLength: 0)
-                  if item.id == current.id {
-                    Image(systemName: "waveform")
-                      .font(.caption.weight(.bold))
-                      .foregroundStyle(.orange)
-                  }
+      ScrollViewReader { proxy in
+        ScrollView {
+          LazyVStack(spacing: 0) {
+            if channels.isEmpty {
+              VStack(spacing: 10) {
+                if shelfPending {
+                  ProgressView().tint(.orange)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(
-                  item.id == current.id ? Color.orange.opacity(0.08) : Color.clear
-                )
-              }
-              .buttonStyle(.plain)
-
-              Divider().padding(.leading, 64)
-            }
-
-            if shelfPending {
-              HStack(spacing: 6) {
-                ProgressView().tint(.orange).controlSize(.small)
-                Text("继续检测…")
-                  .font(.caption)
+                Text(shelfPending ? "正在检测可用频道" : "没有检测到可播放的频道")
+                  .font(.subheadline)
                   .foregroundStyle(.secondary)
+                  .multilineTextAlignment(.center)
               }
               .frame(maxWidth: .infinity)
-              .padding(.vertical, 14)
+              .padding(.vertical, 36)
+            } else {
+              ForEach(channels, id: \.name) { item in
+                let isCurrent = item.name == current.name
+                Button {
+                  // Stay on the shelf the user is browsing — never re-infer 央视.
+                  select(channel: item, groupHint: nil, keepShelf: true)
+                } label: {
+                  HStack(spacing: 12) {
+                    CachedRemoteImage(
+                      url: item.logo.flatMap(URL.init(string:)),
+                      maxPixelSize: 96
+                    ) {
+                      Image(systemName: "tv")
+                        .foregroundStyle(.secondary)
+                    }
+                    .frame(width: 36, height: 36)
+                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                      Text(item.name)
+                        .font(.body.weight(isCurrent ? .semibold : .regular))
+                        .foregroundStyle(isCurrent ? Color.orange : Color.primary)
+                      if let program = model.currentProgram(for: item) {
+                        Text(program.title)
+                          .font(.caption)
+                          .foregroundStyle(.secondary)
+                          .lineLimit(1)
+                      }
+                    }
+                    Spacer(minLength: 0)
+                    if isCurrent {
+                      Image(systemName: "waveform")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.orange)
+                    }
+                  }
+                  .padding(.horizontal, 16)
+                  .padding(.vertical, 12)
+                  .background(
+                    isCurrent ? Color.orange.opacity(0.08) : Color.clear
+                  )
+                }
+                .buttonStyle(.plain)
+                .id(item.name)
+
+                Divider().padding(.leading, 64)
+              }
+
+              if shelfPending {
+                HStack(spacing: 6) {
+                  ProgressView().tint(.orange).controlSize(.small)
+                  Text("继续检测…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+              }
             }
           }
         }
+        .onAppear {
+          scrollToPlayingChannel(proxy, name: current.name, animated: false)
+        }
+        .onChange(of: current.name) { _, name in
+          scrollToPlayingChannel(proxy, name: name)
+        }
+        .onChange(of: selectedShelfID) { _, _ in
+          scrollToPlayingChannel(proxy, name: current.name)
+        }
+        .onChange(of: channelListScrollToken(channels)) { _, _ in
+          scrollToPlayingChannel(proxy, name: current.name, animated: false)
+        }
       }
+    }
+  }
+
+  private func channelListScrollToken(_ channels: [LiveChannel]) -> String {
+    channels.map(\.name).joined(separator: "|")
+  }
+
+  private func scrollToPlayingChannel(
+    _ proxy: ScrollViewProxy,
+    name: String,
+    animated: Bool = true
+  ) {
+    guard activeShelfChannels.contains(where: { $0.name == name }) else { return }
+    let action = { proxy.scrollTo(name, anchor: .center) }
+    if animated {
+      withAnimation(.easeInOut(duration: 0.25), action)
+    } else {
+      action()
     }
   }
 
@@ -531,20 +579,37 @@ struct LivePlaybackShell: View {
 
   private func shelfChannels(id: String) -> [LiveChannel] {
     guard let shelf = liveShelves.first(where: { $0.id == id }) else { return [] }
-    var chosen: [String: LiveChannel] = [:]
+    var byName: [String: [LiveChannel]] = [:]
     var order: [String] = []
     for channel in shelfCandidates(shelf) {
       let key = channel.name
-      if chosen[key] == nil {
-        order.append(key)
-      }
-      if chosen[key] == nil || reachableIDs.contains(channel.id) {
-        chosen[key] = channel
-      }
+      if byName[key] == nil { order.append(key) }
+      byName[key, default: []].append(channel)
     }
-    return order.compactMap { name in
-      guard let channel = chosen[name], reachableIDs.contains(channel.id) else { return nil }
-      return channel
+    return order.compactMap { name -> LiveChannel? in
+      let variants = byName[name] ?? []
+      let reachable = variants.filter { reachableIDs.contains($0.id) }
+      guard let primary = reachable.first else { return nil }
+      // Merge mirrors from all sources so 湖南卫视 can fail over past a bad 4K/HEVC line.
+      var urls: [String] = []
+      var headers = primary.headers
+      for channel in reachable + variants {
+        for url in channel.urls where !urls.contains(url) {
+          urls.append(url)
+        }
+        if headers.isEmpty, !channel.headers.isEmpty {
+          headers = channel.headers
+        }
+      }
+      return LiveChannel(
+        name: primary.name,
+        number: primary.number,
+        logo: primary.logo,
+        epg: primary.epg,
+        tvgId: primary.tvgId,
+        urls: urls,
+        headers: headers
+      )
     }
   }
 
@@ -558,20 +623,62 @@ struct LivePlaybackShell: View {
     return liveShelves.flatMap { shelfCandidates($0) }.filter { seen.insert($0.id).inserted }
   }
 
+  /// Prefer channel-name rules so 湖南卫视 never lands under 央视 via group quirks.
   private func shelfID(containing channel: LiveChannel) -> String? {
+    let name = channel.name.lowercased()
+    if name.contains("卫视") { return "satellite" }
+    if name.contains("cctv") || name.contains("央视") { return "cctv" }
     for shelf in liveShelves {
-      if shelfCandidates(shelf).contains(where: { $0.id == channel.id || $0.name == channel.name }) {
+      if shelfCandidates(shelf).contains(where: { $0.name == channel.name }) {
         return shelf.id
       }
     }
     return nil
   }
 
-  private func syncShelfToCurrentChannel() {
-    guard let channel, let shelfID = shelfID(containing: channel) else { return }
-    if selectedShelfID != shelfID {
-      selectedShelfID = shelfID
+  private func persistLiveMemory() {
+    if let channel {
+      model.rememberLiveChannel(channel, groupName: groupName, urlIndex: urlIndex)
     }
+    model.rememberLiveShelf(selectedShelfID)
+  }
+
+  /// Hard stop both engines — pause alone still leaked 电视 audio into 点播 (串音).
+  private func stopAllLiveEngines() {
+    liveLoadGeneration += 1
+    avEngine.player.isMuted = false
+    avEngine.player.volume = 1
+    avEngine.stop()
+    mpvEngine.stop()
+    failure = nil
+    holdBlackUntilVideo = false
+  }
+
+  private func leaveLiveTab() {
+    persistLiveMemory()
+    stopAllLiveEngines()
+    if isFullscreen {
+      exitFullscreen()
+    }
+  }
+
+  /// Re-enter 电视: restore channel, sync shelf to the playing station, then reload.
+  private func enterLiveTab() async {
+    if channel == nil {
+      await bootstrap()
+      return
+    }
+    restoreRememberedChannelIfNeeded()
+    syncShelfToPlayingChannel()
+    await loadCurrent(autoplay: true)
+    scheduleHideHUD()
+  }
+
+  /// Menu follows the on-air channel (浙江卫视 → 卫视), not a stale browsed shelf.
+  private func syncShelfToPlayingChannel() {
+    guard let channel, let shelfID = shelfID(containing: channel) else { return }
+    selectedShelfID = shelfID
+    model.rememberLiveShelf(shelfID)
   }
 
   private func probeShelfChannels() async {
@@ -622,66 +729,224 @@ struct LivePlaybackShell: View {
     if let preferred = model.playbackPreference.engine {
       engineKind = preferred
     }
+    // Playing channel wins over last browsed shelf (avoids 浙江卫视 + 央视 tab).
     if let shelfID = shelfID(containing: initial.channel) {
       selectedShelfID = shelfID
+    } else if let rememberedShelf = model.lastLiveShelfID,
+      liveShelves.contains(where: { $0.id == rememberedShelf })
+    {
+      selectedShelfID = rememberedShelf
     } else {
       selectedShelfID = liveShelves.first?.id ?? selectedShelfID
     }
+    model.rememberLiveShelf(selectedShelfID)
     await model.loadEPG(for: initial.group)
-    await loadCurrent(autoplay: model.selectedTab == .live)
+    // TabView may mount this while still on 点播 — don't start audio until 电视 is selected.
+    guard model.selectedTab == .live else { return }
+    await loadCurrent(autoplay: true)
     scheduleHideHUD()
   }
 
   private func restoreRememberedChannelIfNeeded() {
     guard let remembered = model.resolveInitialLiveChannel() else { return }
     if channel?.id == remembered.channel.id || channel?.name == remembered.channel.name {
-      syncShelfToCurrentChannel()
       return
     }
-    select(channel: remembered.channel, groupHint: remembered.group.name)
+    channel = remembered.channel
+    groupName = remembered.group.name
+    urlIndex = min(model.lastLiveURLIndex, max(0, remembered.channel.urls.count - 1))
   }
 
-  private func select(channel newChannel: LiveChannel, groupHint: String?) {
+  private func select(
+    channel newChannel: LiveChannel,
+    groupHint: String?,
+    keepShelf: Bool = false
+  ) {
+    // Kill previous audio immediately so 切台 never leaves the old station playing.
+    silenceLiveOutput()
+    holdBlackUntilVideo = true
     channel = newChannel
     if let groupHint,
       model.liveGroups.contains(where: { $0.name == groupHint })
     {
       groupName = groupHint
     } else if let group = model.liveGroups.first(where: {
-      $0.channels.contains(where: { $0.id == newChannel.id })
+      $0.channels.contains(where: { $0.name == newChannel.name || $0.id == newChannel.id })
     }) {
       groupName = group.name
     }
-    if let shelfID = shelfID(containing: newChannel) {
+    if keepShelf {
+      model.rememberLiveShelf(selectedShelfID)
+    } else if let shelfID = shelfID(containing: newChannel) {
       selectedShelfID = shelfID
+      model.rememberLiveShelf(shelfID)
     }
     urlIndex = 0
     failure = nil
+    engineKind = model.playbackPreference.engine ?? .avPlayer
+    model.rememberLiveChannel(newChannel, groupName: groupName, urlIndex: urlIndex)
     Task { await loadCurrent(autoplay: true) }
+  }
+
+  /// Mute + pause both engines without bumping load generation.
+  private func silenceLiveOutput() {
+    avEngine.player.isMuted = true
+    avEngine.player.volume = 0
+    avEngine.pause()
+    mpvEngine.pause()
+  }
+
+  private func unmuteLiveOutput() {
+    avEngine.player.isMuted = false
+    avEngine.player.volume = 1
   }
 
   private func loadCurrent(autoplay: Bool) async {
     guard let channel else { return }
+    liveLoadGeneration += 1
+    let generation = liveLoadGeneration
+    holdBlackUntilVideo = true
+    silenceLiveOutput()
     model.rememberLiveChannel(channel, groupName: groupName, urlIndex: urlIndex)
     let urls = channel.urls.compactMap(URL.init(string:))
     guard !urls.isEmpty else {
       failure = "该频道没有可播放地址"
+      holdBlackUntilVideo = false
       return
     }
     let index = min(urlIndex, urls.count - 1)
     urlIndex = index
     let request = PlaybackRequest(url: urls[index], headers: channel.headers)
+
+    func stillActive() -> Bool {
+      generation == liveLoadGeneration && model.selectedTab == .live
+    }
+
     do {
       try await playbackEngine.load(request)
+      // Newer load owns the engines — do NOT stopAll here (that raced and flashed).
+      guard stillActive() else { return }
       failure = nil
-      if autoplay { playbackEngine.play() }
+      // Probe muted: never let audio-only 湖南卫视 blast while we wait for video.
+      if autoplay {
+        silenceLiveOutput()
+        playbackEngine.play()
+      }
+      if engineKind == .avPlayer, autoplay {
+        let hasVideo = await waitForLiveVideo(seconds: 2.8)
+        guard stillActive() else { return }
+        if hasVideo {
+          unmuteLiveOutput()
+          holdBlackUntilVideo = false
+          failure = nil
+          return
+        }
+        // No video plane — stop sound before trying the next mirror.
+        silenceLiveOutput()
+        if index + 1 < urls.count {
+          failure = "无画面，正在换线路…"
+          urlIndex = index + 1
+          await loadCurrent(autoplay: autoplay)
+          return
+        }
+        // Last AV line: try MPV once (HEVC). Stay muted until video-params confirm a plane.
+        avEngine.stop()
+        engineKind = .mpv
+        failure = "无画面，正在用兼容解码…"
+        try await mpvEngine.load(request)
+        guard stillActive() else { return }
+        if autoplay {
+          silenceLiveOutput()
+          mpvEngine.play()
+        }
+        let mpvHasVideo = await waitForMPVVideo(seconds: 2.5)
+        guard stillActive() else { return }
+        if mpvHasVideo {
+          failure = nil
+          unmuteLiveOutput()
+          holdBlackUntilVideo = false
+        } else {
+          // Still radio-like — stop completely, don't leave soundtrack running.
+          silenceLiveOutput()
+          mpvEngine.stop()
+          failure = "无画面，请换线路重试"
+          holdBlackUntilVideo = false
+        }
+      } else {
+        unmuteLiveOutput()
+        holdBlackUntilVideo = false
+      }
     } catch {
-      failure = error.localizedDescription
+      guard stillActive() else { return }
+      silenceLiveOutput()
       if index + 1 < urls.count {
+        failure = "线路失败，正在换线…"
         urlIndex = index + 1
         await loadCurrent(autoplay: autoplay)
+      } else if engineKind == .avPlayer {
+        engineKind = .mpv
+        avEngine.stop()
+        failure = "无画面，正在用兼容解码…"
+        do {
+          try await mpvEngine.load(request)
+          guard stillActive() else { return }
+          if autoplay {
+            silenceLiveOutput()
+            mpvEngine.play()
+          }
+          let mpvHasVideo = await waitForMPVVideo(seconds: 2.5)
+          guard stillActive() else { return }
+          if mpvHasVideo {
+            failure = nil
+            unmuteLiveOutput()
+            holdBlackUntilVideo = false
+          } else {
+            silenceLiveOutput()
+            mpvEngine.stop()
+            failure = "无画面，请换线路重试"
+            holdBlackUntilVideo = false
+          }
+        } catch {
+          failure = error.localizedDescription
+          stopAllLiveEngines()
+          holdBlackUntilVideo = false
+        }
+      } else {
+        failure = error.localizedDescription
+        stopAllLiveEngines()
+        holdBlackUntilVideo = false
       }
     }
+  }
+
+  /// True when AVPlayer reports a real video plane (not audio-only / black).
+  private func waitForLiveVideo(seconds: Double) async -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline {
+      if Task.isCancelled { return false }
+      if let item = avEngine.player.currentItem {
+        let size = item.presentationSize
+        if size.width > 1, size.height > 1 {
+          return true
+        }
+      }
+      try? await Task.sleep(for: .milliseconds(200))
+    }
+    if let item = avEngine.player.currentItem {
+      let size = item.presentationSize
+      return size.width > 1 && size.height > 1
+    }
+    return false
+  }
+
+  private func waitForMPVVideo(seconds: Double) async -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline {
+      if Task.isCancelled { return false }
+      if mpvEngine.hasVideoPlane { return true }
+      try? await Task.sleep(for: .milliseconds(200))
+    }
+    return mpvEngine.hasVideoPlane
   }
 
   private func advanceLine(autoplay: Bool) async {
@@ -694,16 +959,20 @@ struct LivePlaybackShell: View {
     let channels = {
       let shelf = activeShelfChannels
       if !shelf.isEmpty { return shelf }
-      return model.liveGroups.first(where: { $0.name == groupName })?.channels
-        ?? model.liveGroups.first?.channels
-        ?? []
+      // Never fall back to liveGroups.first (央视) — that yanked shelf back to 央视.
+      if let groupName,
+        let group = model.liveGroups.first(where: { $0.name == groupName })
+      {
+        return group.channels
+      }
+      return activeShelfChannels
     }()
-    guard let channel, let index = channels.firstIndex(where: { $0.id == channel.id }),
+    guard let channel, let index = channels.firstIndex(where: { $0.name == channel.name }),
       !channels.isEmpty
     else { return }
     let next = (index + delta + channels.count) % channels.count
     let target = channels[next]
-    select(channel: target, groupHint: groupName)
+    select(channel: target, groupHint: groupName, keepShelf: true)
     zapHint = target.name
     Task {
       try? await Task.sleep(for: .seconds(1.2))
@@ -743,30 +1012,43 @@ struct LivePlaybackShell: View {
     model.liveShowsTabBarInFullscreen = false
   }
 
-  private func handleFullscreenTabBarSwipe(_ translationHeight: CGFloat) {
-    if translationHeight < -40 {
-      withAnimation(.easeInOut(duration: 0.28)) {
-        model.liveShowsTabBarInFullscreen = true
-      }
-    } else if translationHeight > 40 {
-      withAnimation(.easeInOut(duration: 0.28)) {
-        model.liveShowsTabBarInFullscreen = false
-      }
-    }
-  }
-
   private func togglePlayPause(flash: Bool) {
     let wasPlaying = isPlaying
     if wasPlaying {
       playbackEngine.pause()
     } else {
-      playbackEngine.play()
+      // Live TV: resume at the live edge, not the paused DVR buffer.
+      Task { await resumeLiveFromEdge() }
     }
     if flash {
       revealPlayPauseGlyph(wasPlaying ? .pause : .play)
     }
     showHUD = true
     scheduleHideHUD()
+  }
+
+  /// Seek to the HLS live edge (seekable range end), then play.
+  private func resumeLiveFromEdge() async {
+    if engineKind == .avPlayer, let item = avEngine.player.currentItem {
+      let ranges = item.seekableTimeRanges
+      if let range = ranges.last?.timeRangeValue,
+        range.duration.seconds.isFinite,
+        range.duration.seconds > 2
+      {
+        let live = CMTimeRangeGetEnd(range)
+        let target = CMTimeSubtract(live, CMTime(seconds: 1.2, preferredTimescale: 600))
+        await avEngine.player.seek(
+          to: target,
+          toleranceBefore: .positiveInfinity,
+          toleranceAfter: .positiveInfinity
+        )
+      } else {
+        // No DVR window — reload so we don't stay stuck on a stale buffer.
+        await loadCurrent(autoplay: true)
+        return
+      }
+    }
+    playbackEngine.play()
   }
 
   private func flashPlayPause() {
@@ -813,15 +1095,16 @@ private struct LiveShelf: Identifiable {
 private enum LiveShelfProbe {
   private static let session: URLSession = {
     let config = URLSessionConfiguration.ephemeral
-    config.timeoutIntervalForRequest = 1.0
-    config.timeoutIntervalForResource = 1.2
+    // 1s was too aggressive — many 卫视 mirrors need 2–3s on cellular.
+    config.timeoutIntervalForRequest = 3.5
+    config.timeoutIntervalForResource = 4.0
     config.httpMaximumConnectionsPerHost = 8
     config.requestCachePolicy = .reloadIgnoringLocalCacheData
     return URLSession(configuration: config)
   }()
 
   static func responds(_ channel: LiveChannel) async -> Bool {
-    for raw in channel.urls.prefix(3) {
+    for raw in channel.urls.prefix(5) {
       guard let url = URL(string: raw),
         url.scheme == "http" || url.scheme == "https"
       else { continue }
@@ -831,7 +1114,7 @@ private enum LiveShelfProbe {
   }
 
   private static func responds(url: URL, headers: [String: String]) async -> Bool {
-    var request = URLRequest(url: url, timeoutInterval: 1.0)
+    var request = URLRequest(url: url, timeoutInterval: 3.5)
     request.httpMethod = "GET"
     request.setValue("bytes=0-512", forHTTPHeaderField: "Range")
     for (key, value) in headers {
@@ -870,24 +1153,37 @@ private enum LiveShelfProbe {
   }
 }
 
-private struct LiveSystemPlayerView: UIViewControllerRepresentable {
+private struct LivePlayerLayerView: UIViewRepresentable {
   let player: AVPlayer
 
-  func makeUIViewController(context: Context) -> AVPlayerViewController {
-    let controller = AVPlayerViewController()
-    controller.player = player
-    controller.showsPlaybackControls = false
-    controller.videoGravity = .resizeAspect
-    controller.view.backgroundColor = .black
-    controller.allowsPictureInPicturePlayback = true
-    controller.allowsVideoFrameAnalysis = false
-    return controller
+  func makeUIView(context: Context) -> LivePlayerUIView {
+    let view = LivePlayerUIView()
+    view.backgroundColor = .black
+    view.isOpaque = true
+    view.playerLayer.player = player
+    view.playerLayer.videoGravity = .resizeAspect
+    view.playerLayer.backgroundColor = UIColor.black.cgColor
+    return view
   }
 
-  func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
-    if controller.player !== player {
-      controller.player = player
+  func updateUIView(_ view: LivePlayerUIView, context: Context) {
+    if view.playerLayer.player !== player {
+      view.playerLayer.player = player
     }
-    controller.allowsVideoFrameAnalysis = false
+    view.playerLayer.videoGravity = .resizeAspect
+    view.backgroundColor = .black
+  }
+}
+
+private final class LivePlayerUIView: UIView {
+  override class var layerClass: AnyClass { AVPlayerLayer.self }
+
+  var playerLayer: AVPlayerLayer {
+    layer as! AVPlayerLayer
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    playerLayer.frame = bounds
   }
 }

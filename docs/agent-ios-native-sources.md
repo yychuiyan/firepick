@@ -89,13 +89,13 @@ with authorized endpoints before uploading a real `ios-sources.json`.
 The current curated configuration is:
 
 ```text
-https://dl.yychuiyan.com/firepick/ios-sources.json?v=15
+https://dl.yychuiyan.com/firepick/ios-sources.json?v=21
 ```
 
 Its JavaScript aggregator is:
 
 ```text
-https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=15
+https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/sources/firepick-cms.js?v=21
 ```
 
 Full acceptance probe:
@@ -103,16 +103,20 @@ Full acceptance probe:
 ```bash
 swift run --package-path Packages/FirepickKit firepick-source-probe \
   --invoke --live --search '庆余年' --site firepick_cms \
-  'https://dl.yychuiyan.com/firepick/ios-sources.json?v=15'
+  'https://dl.yychuiyan.com/firepick/ios-sources.json?v=21'
 ```
 
-Expected current shape: one on-device JS site (`拾萤`) backed by seven active
-AppleCMS providers (`lzcaiji` / `bfzy` / `subo` / `ffzy_cj` / `jisu` / `dytt` /
-`zuid`), synthetic menu buckets, Douban-hot default lists for TV/variety/anime,
-non-zero search results for probe keywords, a direct playback URL, and three
-parsed live playlists. The larger `sources/providers.whitelist.json` is a
-maintenance candidate list, not the active pool. Official app builds prefer the
-bundled aggregator; changes to the active provider list require an app release.
+Expected current shape: one on-device JS site (`拾萤精选`) backed by ten active
+AppleCMS providers (`zuid` / `lzcaiji` / `haohua` / `maoyan` / `guangsu` /
+`subo` / `jisu` / `lzi` / `ruyi` / `ffzy`), synthetic menu buckets, Douban-hot
+default lists for all media buckets, non-zero search results for probe keywords,
+a direct playback URL, and three parsed live playlists. The in-app 采集站管理
+page probes `cms-candidates.json`, persists a fresh ten-host active pool, and
+injects it into the QuickJS site. AppYs candidates are separately probed as a
+future source pool and are not published when no usable host survives.
+`sources/applecms.js` and `sources/appysv2.js` are standalone generic spiders
+for manually supplied AppleCMS/AppYs API roots; the 2026-11-14 AppYs probe found
+no host that passed both list and search checks.
 Re-probe candidates with `node scripts/probe-cms-providers.mjs` when stale.
 The script ranks live hosts and rewrites `DEFAULT_PROVIDERS` in both
 `Packages/.../Resources/firepick-cms.js` and `sources/firepick-cms.js`, plus

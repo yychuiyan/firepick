@@ -108,6 +108,11 @@ import Observation
       _ = bitsPerSecond
     }
 
+    /// True when libmpv reports a decoded video width (audio-only / radio → false).
+    public var hasVideoPlane: Bool {
+      (runtime.getDouble("video-params/w") ?? 0) > 1
+    }
+
     public func applyOptions(_ options: PlaybackEngineOptions) {
       self.options = options
       runtime.applyOptions(options)
@@ -428,6 +433,19 @@ import Observation
       _ = mpv_set_property(context, name, MPV_FORMAT_DOUBLE, &number)
     }
 
+    func getDouble(_ name: String) -> Double? {
+      lock.lock()
+      guard let context = handle else {
+        lock.unlock()
+        return nil
+      }
+      lock.unlock()
+      var number: Double = 0
+      let status = mpv_get_property(context, name, MPV_FORMAT_DOUBLE, &number)
+      guard status >= 0, number.isFinite else { return nil }
+      return number
+    }
+
     func applyOptions(_ options: PlaybackEngineOptions) {
       lock.lock()
       guard let context = handle else {
@@ -693,6 +711,7 @@ import Observation
     public func setPlaybackRate(_ rate: Float) {}
     public func applyOptions(_ options: PlaybackEngineOptions) {}
     public func setPreferredPeakBitRate(_ bitsPerSecond: Double) {}
+    public var hasVideoPlane: Bool { false }
   }
 
 #endif

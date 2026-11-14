@@ -1,4 +1,5 @@
 import CryptoKit
+import FirepickCore
 import ImageIO
 import SwiftUI
 import UIKit
@@ -291,6 +292,31 @@ enum RemoteImageCache {
       return UIImage(cgImage: thumbnail, scale: 1, orientation: .up)
     }
     return UIImage(data: data)
+  }
+}
+
+enum PosterPrefetch {
+  /// Warm memory/disk cache for the first-screen posters so LazyVGrid does not wait serial.
+  static func warm(urls: [URL?], maxPixelSize: CGFloat = 720, limit: Int = 12) {
+    let targets = urls.compactMap { $0 }.prefix(limit)
+    guard !targets.isEmpty else { return }
+    Task(priority: .utility) {
+      await withTaskGroup(of: Void.self) { group in
+        for url in targets {
+          group.addTask {
+            _ = await RemoteImagePipeline.shared.image(for: url, maxPixelSize: maxPixelSize)
+          }
+        }
+      }
+    }
+  }
+
+  static func warm(items: [MediaItem], maxPixelSize: CGFloat = 720, limit: Int = 12) {
+    warm(
+      urls: items.map { RemoteImageCache.normalizedURL(from: $0.pic) },
+      maxPixelSize: maxPixelSize,
+      limit: limit
+    )
   }
 }
 

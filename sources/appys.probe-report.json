@@ -1,0 +1,738 @@
+{
+  "probedAt": "2026-11-14T11:27:24.247Z",
+  "results": [
+    {
+      "key": "tegou",
+      "name": "特狗",
+      "api": "https://www.tegouys.com/xgapp.php/v2/",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 404,
+      "searchStatus": 404
+    },
+    {
+      "key": "zhuiju",
+      "name": "追剧TV",
+      "api": "http://111.229.120.180:88/lvdou_api.php/v2.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "yuyu",
+      "name": "渔渔",
+      "api": "http://luobo.yugenye.site/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "yusheng",
+      "name": "余生",
+      "api": "http://yu.cuicanys.cn/lvdou_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "yingshimao",
+      "name": "影视猫",
+      "api": "https://vip.wscyun.com/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "yingshidaquan",
+      "name": "影视大全",
+      "api": "https://xc.xixi2yy.xyz/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "yali",
+      "name": "呀哩动漫",
+      "api": "https://app.yaliyali.cc/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 200,
+      "searchStatus": 200
+    },
+    {
+      "key": "yingku",
+      "name": "影库",
+      "api": "https://yingkudy.com/lvdou_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "yueer",
+      "name": "月儿",
+      "api": "https://yue52.xyz/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "xingxiu",
+      "name": "星宿漫",
+      "api": "http://3.xingxiuman.com/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "xiaoniao",
+      "name": "小鸟动漫",
+      "api": "http://xydm.baicai.buzz/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 200,
+      "searchStatus": 200
+    },
+    {
+      "key": "xiongmao",
+      "name": "熊猫视频",
+      "api": "http://anegh.com/lvdou_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "xiongmaodm",
+      "name": "熊猫动漫",
+      "api": "http://dongman.k8aa.com/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "xunchang",
+      "name": "寻常",
+      "api": "http://tv.91ymz.cn/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 521,
+      "searchStatus": 521
+    },
+    {
+      "key": "xiaobai",
+      "name": "小白动漫",
+      "api": "http://121.62.60.222:13579/xiaobai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "wanneng",
+      "name": "万能影院",
+      "api": "http://app.wnvod.net/lvdou_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "woniu",
+      "name": "蜗牛动漫",
+      "api": "http://woniudm.woniu.cyou:20000/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "genju",
+      "name": "我爱跟剧",
+      "api": "https://www.genmov.com/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "tuzi",
+      "name": "兔子窝",
+      "api": "http://cj.huimaojia.com:12345/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "tiantian",
+      "name": "天天视频",
+      "api": "http://app.qianju.cc/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "taojushe",
+      "name": "淘剧社",
+      "api": "https://app.shuhai99.com/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "shuyang",
+      "name": "沭阳",
+      "api": "http://zjr.jurentiaodeng.com/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "sanri",
+      "name": "三日",
+      "api": "https://www.3ri.net/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 404,
+      "searchStatus": 404
+    },
+    {
+      "key": "richeng",
+      "name": "日诚",
+      "api": "http://tv.rcz168.com/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 200,
+      "searchStatus": 200
+    },
+    {
+      "key": "qunxin",
+      "name": "群鑫",
+      "api": "http://www.qunxinys.com/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "pgy",
+      "name": "蒲公英",
+      "api": "http://www.pgy1.top/ruifenglb_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "meijumi",
+      "name": "美剧迷",
+      "api": "http://mj.zjtv.cc/ruifenglb_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "mianfei",
+      "name": "免费影视",
+      "api": "http://111.229.120.180:88/lvdou_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "leyun",
+      "name": "乐云",
+      "api": "https://www.leyun.tv/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "liuxing",
+      "name": "流星",
+      "api": "http://app.216bk.xyz/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 404,
+      "searchStatus": 404
+    },
+    {
+      "key": "lengshi",
+      "name": "冷视",
+      "api": "https://len.tv/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 404,
+      "searchStatus": 404
+    },
+    {
+      "key": "longmao",
+      "name": "龙猫追剧",
+      "api": "https://lb.ybnxcx.com/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "kankan",
+      "name": "看看视频",
+      "api": "http://888.ccboke.top/ruifenglb_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "kanjuba",
+      "name": "看剧吧",
+      "api": "http://app.ishen520.com/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "This operation was aborted"
+    },
+    {
+      "key": "kuaikys",
+      "name": "快看",
+      "api": "https://kuaikys.com/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "kanba",
+      "name": "看吧VIP",
+      "api": "http://app.ppli.xyz/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "juzi",
+      "name": "橘子",
+      "api": "http://jz.juzidy.vip/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "jiusi",
+      "name": "玖肆",
+      "api": "http://android.jiusi.vip/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "jiku",
+      "name": "极酷",
+      "api": "https://jiku.vip/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "jindouyun",
+      "name": "筋斗云",
+      "api": "https://tv.jindcloud.com/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "huanghe",
+      "name": "黄河",
+      "api": "http://i.ledu8.cn/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "hanfeng",
+      "name": "寒枫",
+      "api": "https://vip.shenyunwl.cn/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "fengling",
+      "name": "风凌",
+      "api": "https://z1q1.com/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "This operation was aborted"
+    },
+    {
+      "key": "dawei",
+      "name": "大威",
+      "api": "http://vip.davdy.com/ruifenglb_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "bilin",
+      "name": "比邻",
+      "api": "http://0hzy.cn:9990/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "baitao",
+      "name": "百淘",
+      "api": "http://ys.58g8.com/lvdou_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "aite",
+      "name": "艾特",
+      "api": "https://www.aitee.cc/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "aliys",
+      "name": "阿里影视",
+      "api": "http://aliys.cn:90/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "aidianying",
+      "name": "爱电影",
+      "api": "https://www.idianying.com.cn/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "u5",
+      "name": "U5",
+      "api": "https://appx.uy07.com/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "okys",
+      "name": "OK影视",
+      "api": "http://123.ok00.xyz/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "mx",
+      "name": "MX影视",
+      "api": "http://mkk.gotka.top/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "mj69",
+      "name": "69美剧",
+      "api": "https://www.69mj.com/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 403,
+      "searchStatus": 403
+    },
+    {
+      "key": "miniku",
+      "name": "迷你库",
+      "api": "http://www.miniku.cc/xgapp.php/v1/",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 200,
+      "searchStatus": 200
+    },
+    {
+      "key": "yaya",
+      "name": "呀呀",
+      "api": "https://yayayaaapp.ynf.icu/api.php/app/",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "kuku",
+      "name": "酷酷",
+      "api": "http://cms.realdou.cn:35264/api.php/app/",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "aidi",
+      "name": "爱迪",
+      "api": "https://api123.adys.app/xgapp.php/v3/",
+      "listOK": false,
+      "searchOK": true,
+      "error": null,
+      "listStatus": 200,
+      "searchStatus": 200
+    },
+    {
+      "key": "dyw1080",
+      "name": "视界",
+      "api": "https://www.1080dyw.cc/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "ytvip",
+      "name": "影探",
+      "api": "http://ytcms.lyyytv.cn/api.php/app/",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 403,
+      "searchStatus": 403
+    },
+    {
+      "key": "niuma",
+      "name": "牛马",
+      "api": "http://niumatv.com/api.php/app/",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 200,
+      "searchStatus": 200
+    },
+    {
+      "key": "lltp",
+      "name": "躺平",
+      "api": "http://www.lltpys.com/api.php/app/",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "xf123",
+      "name": "先锋",
+      "api": "http://xf123.cc/api.php/app/",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 404,
+      "searchStatus": 404
+    },
+    {
+      "key": "dd88",
+      "name": "多多",
+      "api": "http://dd88.icu:6080/xgapp.php/v2/",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "x913e",
+      "name": "913e",
+      "api": "http://www.913e.net/xgapp.php/v1/",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "nuanguang",
+      "name": "暖光",
+      "api": "https://app.bl210.com/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "qiqiguai",
+      "name": "奇奇怪",
+      "api": "https://www.qiqiguai.cn/api.php/app/",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "vipmv",
+      "name": "追剧达人",
+      "api": "https://vipmv.co/xgapp.php/v1/",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "tkys",
+      "name": "天空",
+      "api": "https://tkys.tv/xgapp.php/v1/",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "ysysasia",
+      "name": "亚洲",
+      "api": "http://app.ysys.asia/lvdou_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "ttzmz",
+      "name": "天天字幕",
+      "api": "http://ttzmz.net/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "chaoren",
+      "name": "超人",
+      "api": "http://chaorenbb.com/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "app269",
+      "name": "269",
+      "api": "http://app.269w.com/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "app2zd",
+      "name": "2zd",
+      "api": "http://app.2zdyy.com/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "tvip",
+      "name": "tvip",
+      "api": "http://app.tvip.cc/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "cx999",
+      "name": "cx999",
+      "api": "http://www.cx99999.cn/lvdou_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 404,
+      "searchStatus": 404
+    },
+    {
+      "key": "yinliub",
+      "name": "引流",
+      "api": "http://yinliub.cn/lvdou_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": "fetch failed"
+    },
+    {
+      "key": "muying",
+      "name": "沐影动漫",
+      "api": "http://dm.muying.me/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "luobu",
+      "name": "萝卜yss",
+      "api": "http://luobu.yss6080.com/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "jiusi_aliyun",
+      "name": "玖肆云",
+      "api": "http://aliyun.k8aa.com/mogai_api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 502,
+      "searchStatus": 502
+    },
+    {
+      "key": "35ys",
+      "name": "35影视",
+      "api": "http://35ys.cc/api.php/v1.vod",
+      "listOK": false,
+      "searchOK": false,
+      "error": null,
+      "listStatus": 200,
+      "searchStatus": 200
+    }
+  ],
+  "whitelistCount": 0
+}
