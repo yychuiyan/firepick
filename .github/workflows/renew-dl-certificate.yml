@@ -1,0 +1,198 @@
+name: Renew dl.yychuiyan.com certificate
+
+on:
+  schedule:
+    # Check monthly. The workflow only renews when the active certificate has
+    # fewer than 45 days remaining, so a failed run is retried next month.
+    - cron: "23 3 1 * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Renew even when the current certificate is still valid
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: renew-dl-certificate
+  cancel-in-progress: false
+
+env:
+  DOMAIN: dl.yychuiyan.com
+  TENCENT_REGION: ap-shanghai
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check current certificate lifetime
+        id: expiry
+        shell: bash
+        env:
+          FORCE_RENEW: ${{ inputs.force || 'false' }}
+        run: |
+          set -euo pipefail
+          if [[ "$FORCE_RENEW" == "true" ]]; then
+            echo "Forced renewal requested."
+            echo "renew=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          current_end="$(
+            openssl s_client \
+              -connect "${DOMAIN}:443" \
+              -servername "$DOMAIN" \
+              </dev/null 2>/dev/null \
+              | openssl x509 -noout -enddate 2>/dev/null \
+              | cut -d= -f2-
+          )"
+          if [[ -z "$current_end" ]]; then
+            echo "Unable to read the current certificate; requesting renewal."
+            echo "renew=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          end_epoch="$(date -d "$current_end" +%s)"
+          remaining_days="$(( (end_epoch - $(date +%s)) / 86400 ))"
+          echo "Current certificate expires: $current_end"
+          echo "Remaining days: $remaining_days"
+          echo "remaining_days=$remaining_days" >> "$GITHUB_OUTPUT"
+          if (( remaining_days <= 45 )); then
+            echo "renew=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "renew=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install acme.sh
+        if: steps.expiry.outputs.renew == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/acmesh-official/acme.sh.git \
+            "$RUNNER_TEMP/acme.sh"
+          git -C "$RUNNER_TEMP/acme.sh" checkout \
+            7e87a310fda61afe92e3db6ac29f81efdf53b8c0
+
+      - name: Issue Let's Encrypt certificate
+        if: steps.expiry.outputs.renew == 'true'
+        shell: bash
+        env:
+          CF_Token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          : "${CF_Token:?Missing GitHub secret CLOUDFLARE_API_TOKEN}"
+          ACME="$RUNNER_TEMP/acme.sh/acme.sh"
+          ACME_HOME="$RUNNER_TEMP/acme-home"
+          CERT_DIR="$RUNNER_TEMP/firepick-cert"
+          mkdir -p "$CERT_DIR"
+
+          "$ACME" --home "$ACME_HOME" \
+            --set-default-ca --server letsencrypt
+          "$ACME" --home "$ACME_HOME" \
+            --issue \
+            --dns dns_cf \
+            --domain "$DOMAIN" \
+            --keylength 2048 \
+            --force
+          "$ACME" --home "$ACME_HOME" \
+            --install-cert --domain "$DOMAIN" \
+            --key-file "$CERT_DIR/key.pem" \
+            --fullchain-file "$CERT_DIR/fullchain.pem"
+
+          chmod 600 "$CERT_DIR/key.pem"
+          openssl x509 -in "$CERT_DIR/fullchain.pem" \
+            -noout -subject -issuer -dates
+
+      - name: Upload and deploy certificate to Tencent CDN
+        if: steps.expiry.outputs.renew == 'true'
+        shell: bash
+        env:
+          TENCENTCLOUD_SECRET_ID: ${{ secrets.TENCENTCLOUD_SECRET_ID }}
+          TENCENTCLOUD_SECRET_KEY: ${{ secrets.TENCENTCLOUD_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          : "${TENCENTCLOUD_SECRET_ID:?Missing GitHub secret TENCENTCLOUD_SECRET_ID}"
+          : "${TENCENTCLOUD_SECRET_KEY:?Missing GitHub secret TENCENTCLOUD_SECRET_KEY}"
+          CERT_DIR="$RUNNER_TEMP/firepick-cert"
+
+          python3 -m pip install --user --quiet "tccli==3.1.200.1"
+          export PATH="$HOME/.local/bin:$PATH"
+          tccli configure set \
+            secretId "$TENCENTCLOUD_SECRET_ID" \
+            secretKey "$TENCENTCLOUD_SECRET_KEY" \
+            region "$TENCENT_REGION" \
+            output json
+
+          upload_response="$(
+            tccli ssl UploadCertificate \
+              --CertificatePublicKey "$(cat "$CERT_DIR/fullchain.pem")" \
+              --CertificatePrivateKey "$(cat "$CERT_DIR/key.pem")" \
+              --Alias "Firepick dl auto $(date -u +%Y%m%d-%H%M)" \
+              --CertificateType SVR
+          )"
+          printf '%s\n' "$upload_response"
+          certificate_id="$(jq -er '.Response.CertificateId' <<<"$upload_response")"
+
+          deploy_response="$(
+            tccli ssl DeployCertificateInstance \
+              --CertificateId "$certificate_id" \
+              --InstanceIdList "[\"${DOMAIN}|on\"]" \
+              --ResourceType cdn
+          )"
+          printf '%s\n' "$deploy_response"
+          deploy_record_id="$(jq -er '.Response.DeployRecordId' <<<"$deploy_response")"
+
+          echo "certificate_id=$certificate_id" >> "$GITHUB_STEP_SUMMARY"
+          echo "deploy_record_id=$deploy_record_id" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify public certificate and IPA download
+        if: steps.expiry.outputs.renew == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CERT_DIR="$RUNNER_TEMP/firepick-cert"
+          expected_fingerprint="$(
+            openssl x509 -in "$CERT_DIR/fullchain.pem" \
+              -noout -fingerprint -sha256 \
+              | cut -d= -f2 | tr -d ':'
+          )"
+
+          echo "Waiting for the CDN certificate to propagate..."
+          verified=false
+          for attempt in $(seq 1 15); do
+            remote_fingerprint="$(
+              openssl s_client \
+                -connect "${DOMAIN}:443" \
+                -servername "$DOMAIN" \
+                </dev/null 2>/dev/null \
+                | openssl x509 -noout -fingerprint -sha256 2>/dev/null \
+                | cut -d= -f2 | tr -d ':'
+            )"
+            if [[ "$remote_fingerprint" == "$expected_fingerprint" ]]; then
+              verified=true
+              break
+            fi
+            echo "Attempt ${attempt}/15: remote certificate not updated yet."
+            sleep 60
+          done
+          if [[ "$verified" != "true" ]]; then
+            echo "Timed out waiting for the CDN certificate." >&2
+            exit 1
+          fi
+
+          manifest_url="https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json"
+          ipa_url="$(
+            curl --fail --silent --show-error "$manifest_url" \
+              | jq -er '.apps[0].downloadURL'
+          )"
+          curl --fail --silent --show-error \
+            --range 0-1023 \
+            --output /dev/null \
+            "$ipa_url"
+
+          echo "Public certificate fingerprint: $expected_fingerprint" >> "$GITHUB_STEP_SUMMARY"
+          echo "IPA range download passed: $ipa_url" >> "$GITHUB_STEP_SUMMARY"

@@ -371,8 +371,12 @@ IPA base:    https://dl.yychuiyan.com/firepick
 腾讯 COS 默认域名会拒绝公开下载 `.ipa`，因此：
 
 - `firepick.json` 和图标可以继续使用 COS 默认域名
-- IPA 必须使用绑定到 COS 的自定义域名
+- IPA 使用绑定到腾讯 CDN/COS 的自定义域名 `dl.yychuiyan.com`
 - 发布验证必须执行真实 GET，不能只做 HEAD
+
+`dl.yychuiyan.com` 的证书由 GitHub Actions 自动续期。每月检查一次，剩余有效期
+低于 45 天才换证；具体权限与 Secrets 配置见
+[证书自动续期](docs/certificate-auto-renewal.md)。
 
 发布命令：
 
