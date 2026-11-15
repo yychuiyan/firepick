@@ -457,16 +457,27 @@ struct DetailView: View {
                 }
               }
               .padding(.top, 6)
-              ScrollView(.horizontal) {
-                HStack(spacing: 8) {
-                  ForEach(displayedEpisodes) { episode in
-                    episodeChip(episode)
-                      // Stable across 来源 switches (value/URL changes per站).
-                      .id(episode.name)
+              ScrollViewReader { episodeProxy in
+                ScrollView(.horizontal) {
+                  HStack(spacing: 8) {
+                    ForEach(displayedEpisodes) { episode in
+                      episodeChip(episode)
+                        // Stable across 来源 switches (value/URL changes per站).
+                        .id(episode.name)
+                    }
                   }
                 }
+                .scrollIndicators(.hidden)
+                .onAppear {
+                  scrollToFocusedEpisodeStrip(using: episodeProxy)
+                }
+                .onChange(of: displayedEpisodes.map(\.value)) { _, _ in
+                  scrollToFocusedEpisodeStrip(using: episodeProxy)
+                }
+                .onChange(of: playbackEpisode?.value) { _, _ in
+                  scrollToFocusedEpisodeStrip(using: episodeProxy)
+                }
               }
-              .scrollIndicators(.hidden)
               .sheet(isPresented: $showingEpisodeDrawer) {
                 episodeDrawer
               }
@@ -1203,6 +1214,16 @@ struct DetailView: View {
 
   private func scrollToHistoryEpisode(using proxy: ScrollViewProxy) {
     scrollToFocusedEpisode(using: proxy)
+  }
+
+  private func scrollToFocusedEpisodeStrip(using proxy: ScrollViewProxy) {
+    Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(120))
+      guard let episode = displayedEpisodes.first(where: isFocusedEpisode) else { return }
+      withAnimation(.easeInOut(duration: 0.22)) {
+        proxy.scrollTo(episode.name, anchor: .center)
+      }
+    }
   }
 
   private func playNextLine() async {

@@ -101,14 +101,45 @@ struct BrowseView: View {
             }
           } else if !latestItems.isEmpty {
             ScrollView {
-              LazyVStack(alignment: .leading, spacing: 28) {
-                catalogSection
+              LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(Array(latestItems.enumerated()), id: \.element.id) { index, item in
+                  posterButton(item)
+                    .id(item.id)
+                    .onAppear {
+                      // First screen stays at ~12. More pages only when the user
+                      // scrolls to the last row — never prefetch mid-grid.
+                      guard latestItems.count >= 12 else { return }
+                      guard !model.isLoadingMore, !model.isLoadingHome else { return }
+                      guard model.currentPage < (model.homeResult?.pagecount ?? 0) else {
+                        return
+                      }
+                      if index >= latestItems.count - 2 {
+                        Task { await model.loadMore() }
+                      }
+                    }
+                }
               }
-              .padding(.vertical)
+              .padding(.horizontal)
+              .padding(.top)
               .padding(.bottom, 72)
+              .scrollTargetLayout()
+
+              if model.isLoadingMore {
+                ProgressView()
+                  .frame(maxWidth: .infinity)
+                  .padding(.vertical, 8)
+              } else if model.loadMoreFailed {
+                Button("加载失败 · 重试") {
+                  Task { await model.loadMore() }
+                }
+                .buttonStyle(.bordered)
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 72)
+              }
             }
+            .scrollPosition(id: browseScrollPosition, anchor: .top)
             .refreshable {
-              await model.reloadHome()
+              await model.refreshCurrentCategory()
             }
           } else {
             ScrollView {
@@ -117,7 +148,7 @@ struct BrowseView: View {
                 .padding(.bottom, 72)
             }
             .refreshable {
-              await model.reloadHome()
+              await model.refreshCurrentCategory()
             }
           }
         }
@@ -239,6 +270,19 @@ struct BrowseView: View {
     "\(model.currentConnection?.id ?? "")|\(model.configuration.sites.count)"
   }
 
+  private var browseScrollKey: String {
+    let siteKey = model.selectedSite?.key ?? model.currentConnection?.id ?? ""
+    return "\(siteKey)|\(model.selectedCategory?.typeId ?? "none")"
+  }
+
+  private var browseScrollPosition: Binding<String?> {
+    let key = browseScrollKey
+    return Binding(
+      get: { model.browseScrollAnchor(for: key) },
+      set: { model.rememberBrowseScrollAnchor($0, for: key) }
+    )
+  }
+
   private var showsPinnedFilter: Bool {
     guard !model.categoryFilters.isEmpty else { return false }
     guard let typeId = model.selectedCategory?.typeId else { return false }
@@ -331,39 +375,6 @@ struct BrowseView: View {
     .accessibilityLabel("正在加载分类")
   }
 
-  private var catalogSection: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      LazyVGrid(columns: columns, spacing: 12) {
-        ForEach(Array(latestItems.enumerated()), id: \.element.id) { index, item in
-          posterButton(item)
-            .onAppear {
-              // First screen stays at ~12. More pages only when the user scrolls
-              // to the last row — never prefetch mid-grid.
-              guard latestItems.count >= 12 else { return }
-              guard !model.isLoadingMore, !model.isLoadingHome else { return }
-              guard model.currentPage < (model.homeResult?.pagecount ?? 0) else { return }
-              let nearEnd = index >= latestItems.count - 2
-              if nearEnd {
-                Task { await model.loadMore() }
-              }
-            }
-        }
-      }
-      .padding(.horizontal)
-      if model.isLoadingMore {
-        ProgressView()
-          .frame(maxWidth: .infinity)
-          .padding(.vertical, 8)
-      } else if model.loadMoreFailed {
-        Button("加载失败 · 重试") {
-          Task { await model.loadMore() }
-        }
-        .buttonStyle(.bordered)
-        .frame(maxWidth: .infinity)
-      }
-    }
-  }
-
   private func posterButton(_ item: MediaItem) -> some View {
     Button {
       Task { await open(item) }
@@ -426,7 +437,7 @@ struct BrowseView: View {
         Text(error)
       } actions: {
         Button("重试") {
-          Task { await model.reloadHome() }
+          Task { await model.refreshCurrentCategory() }
         }
         .buttonStyle(.bordered)
       }

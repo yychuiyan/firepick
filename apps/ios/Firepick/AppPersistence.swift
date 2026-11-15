@@ -45,6 +45,7 @@ final class AppPersistence {
     static let lastLiveGroupName = "lastLiveGroupName"
     static let lastLiveURLIndex = "lastLiveURLIndex"
     static let lastLiveShelfID = "lastLiveShelfID"
+    static let browseScrollAnchors = "browseScrollAnchors"
     static let activeCMSProviders = "activeCMSProviders"
     static let activeCMSProvidersProbedAt = "activeCMSProvidersProbedAt"
     static let activeCMSProvidersAdult = "activeCMSProvidersAdult"
@@ -165,6 +166,14 @@ final class AppPersistence {
 
   var searchHistory: [String] {
     defaults.stringArray(forKey: Key.searchHistory) ?? []
+  }
+
+  func loadBrowseScrollAnchors() -> [String: String] {
+    defaults.dictionary(forKey: Key.browseScrollAnchors) as? [String: String] ?? [:]
+  }
+
+  func saveBrowseScrollAnchors(_ anchors: [String: String]) {
+    defaults.set(anchors, forKey: Key.browseScrollAnchors)
   }
 
   func loadSourceConnections() throws -> [SourceConnection] {

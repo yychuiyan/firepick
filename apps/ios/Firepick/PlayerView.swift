@@ -67,6 +67,7 @@ struct PlayerView: View {
   @State private var danmakuComments: [DanmakuComment] = []
   @State private var danmakuEnabled = false
   @State private var showingEpisodes = false
+  @State private var didScrollEpisodeDrawer = false
   @State private var showingLines = false
   @State private var showingDanmakuSettings = false
   @State private var showControls = true
@@ -1283,6 +1284,9 @@ struct PlayerView: View {
   private func openPlayerDrawer(_ drawer: PlayerDrawer) {
     hideTask?.cancel()
     showControls = true
+    if drawer == .episodes {
+      didScrollEpisodeDrawer = false
+    }
     withAnimation(.easeInOut(duration: 0.28)) {
       showingRatePicker = drawer == .rate
       showingResolutionPicker = drawer == .resolution
@@ -1462,44 +1466,69 @@ struct PlayerView: View {
   }
 
   private var episodeDrawerPanel: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Text("选集")
-        .font(.headline)
-        .foregroundStyle(.white)
-        .padding(.top, 20)
-      ScrollView {
-        LazyVStack(spacing: 8) {
-          ForEach(currentLineEpisodes) { ep in
-            let selected = (activeEpisode ?? episode)?.value == ep.value
-            Button {
-              closePlayerDrawers()
-              Task { await switchToEpisode(ep, auto: false) }
-            } label: {
-              HStack {
-                Text(ep.name)
-                  .font(.subheadline.weight(selected ? .semibold : .regular))
-                  .lineLimit(2)
-                Spacer(minLength: 4)
-                if selected {
-                  Image(systemName: "checkmark")
-                    .font(.caption.weight(.semibold))
+    ScrollViewReader { proxy in
+      VStack(alignment: .leading, spacing: 10) {
+        Text("选集")
+          .font(.headline)
+          .foregroundStyle(.white)
+          .padding(.top, 20)
+        ScrollView {
+          LazyVStack(spacing: 8) {
+            ForEach(currentLineEpisodes) { ep in
+              let selected = (activeEpisode ?? episode)?.value == ep.value
+              Button {
+                closePlayerDrawers()
+                Task { await switchToEpisode(ep, auto: false) }
+              } label: {
+                HStack {
+                  Text(ep.name)
+                    .font(.subheadline.weight(selected ? .semibold : .regular))
+                    .lineLimit(2)
+                  Spacer(minLength: 4)
+                  if selected {
+                    Image(systemName: "checkmark")
+                      .font(.caption.weight(.semibold))
+                  }
                 }
+                .foregroundStyle(selected ? Color.orange : Color.white)
+                .padding(.vertical, 10)
+                .padding(.horizontal, 12)
+                .background(
+                  Color.white.opacity(selected ? 0.16 : 0.06),
+                  in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
               }
-              .foregroundStyle(selected ? Color.orange : Color.white)
-              .padding(.vertical, 10)
-              .padding(.horizontal, 12)
-              .background(
-                Color.white.opacity(selected ? 0.16 : 0.06),
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-              )
+              .buttonStyle(.plain)
+              .id(ep.id)
             }
-            .buttonStyle(.plain)
           }
         }
+        .onAppear {
+          scrollToPlayingEpisode(using: proxy)
+        }
+        .onChange(of: currentLineEpisodes.map(\.value)) { _, _ in
+          scrollToPlayingEpisode(using: proxy)
+        }
+      }
+      .padding(.horizontal, 14)
+      .padding(.bottom, 16)
+    }
+  }
+
+  private var playingEpisodeID: String? {
+    (activeEpisode ?? episode)?.id
+  }
+
+  private func scrollToPlayingEpisode(using proxy: ScrollViewProxy) {
+    guard !didScrollEpisodeDrawer, let playingEpisodeID else { return }
+    didScrollEpisodeDrawer = true
+    Task { @MainActor in
+      // The trailing drawer animates in; wait for LazyVStack layout before seeking.
+      try? await Task.sleep(for: .milliseconds(180))
+      withAnimation(.easeInOut(duration: 0.22)) {
+        proxy.scrollTo(playingEpisodeID, anchor: .center)
       }
     }
-    .padding(.horizontal, 14)
-    .padding(.bottom, 16)
   }
 
   private var menuButton: some View {

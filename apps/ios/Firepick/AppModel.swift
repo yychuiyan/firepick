@@ -251,6 +251,9 @@ final class AppModel {
   var browseListBelongsToTypeId: String?
   /// Cache key of the list currently on screen — used for skeleton while silent swap.
   var browseDisplayedCacheKey: String?
+  /// Per-site/category card anchor. Menus restore independently after tab,
+  /// pull-to-refresh, detail navigation, and relaunch.
+  var browseScrollAnchors: [String: String] = [:]
   var homeResult: MediaResult?
   var detailResult: MediaResult?
   var categoryFilters: [SourceFilter] = []
@@ -271,6 +274,7 @@ final class AppModel {
 
   enum RecoverableAction: Equatable {
     case reloadHome
+    case refreshBrowseCategory
     case search
     case refreshLive
     case loadDetail(MediaItem)
@@ -580,6 +584,7 @@ final class AppModel {
     lastLiveURLIndex = persistence?.lastLiveURLIndex ?? 0
     sourceConnections = (try? persistence?.loadSourceConnections()) ?? []
     searchHistory = persistence?.searchHistory ?? []
+    browseScrollAnchors = persistence?.loadBrowseScrollAnchors() ?? [:]
     let persistedActive = persistence?.loadActiveCMSProviders(mode: contentMode) ?? []
     let allowedActive =
       contentMode.allowsAdultProviders
@@ -2273,6 +2278,8 @@ final class AppModel {
     switch lastRecoverableAction {
     case .reloadHome, .none:
       await reloadHome()
+    case .refreshBrowseCategory:
+      await refreshCurrentCategory()
     case .search:
       await search()
     case .refreshLive:
@@ -2580,7 +2587,97 @@ final class AppModel {
     } catch {
       guard generation == categoryLoadGeneration else { return }
       guard selectedCategory?.typeId == category.typeId else { return }
-      presentRecoverableError(error.localizedDescription, action: .reloadHome)
+      presentRecoverableError(error.localizedDescription, action: .refreshBrowseCategory)
+    }
+  }
+
+  func browseScrollAnchor(for key: String) -> String? {
+    browseScrollAnchors[key]
+  }
+
+  func rememberBrowseScrollAnchor(_ id: String?, for key: String) {
+    guard let id, !id.isEmpty, browseScrollAnchors[key] != id else { return }
+    browseScrollAnchors[key] = id
+    persistence?.saveBrowseScrollAnchors(browseScrollAnchors)
+  }
+
+  /// Refresh only the visible category. Menu state, other category caches,
+  /// and their scroll anchors stay intact.
+  func refreshCurrentCategory() async {
+    guard let site = selectedSite, let category = selectedCategory else {
+      await reloadHome()
+      return
+    }
+    guard !isLoadingHome else { return }
+
+    let typeId = category.typeId
+    let cacheKey = categoryCacheKey(
+      site: site,
+      typeId: typeId,
+      selections: filterSelections,
+      filters: categoryFilters
+    )
+    let previous = homeResult
+    let extend = filterSelections
+    isLoadingHome = true
+    loadMoreFailed = false
+    defer { isLoadingHome = false }
+
+    categoryLoadGeneration += 1
+    let generation = categoryLoadGeneration
+    do {
+      let provider = try await provider(for: site)
+      var result = try await withThrowingTaskGroup(of: MediaResult.self) { group in
+        group.addTask {
+          try await provider.categoryContent(
+            typeId: typeId,
+            page: 1,
+            filter: true,
+            extend: extend
+          )
+        }
+        group.addTask {
+          try await Task.sleep(for: .seconds(20))
+          throw FirepickError.network("分类刷新超时，请重试")
+        }
+        let first = try await group.next()!
+        group.cancelAll()
+        return first
+      }
+      guard generation == categoryLoadGeneration,
+        selectedSite?.key == site.key,
+        selectedCategory?.typeId == typeId
+      else { return }
+      if result.list.isEmpty, let previous, !previous.list.isEmpty {
+        homeResult = previous
+        errorMessage = nil
+        return
+      }
+      if let menu = previous?.classes, !menu.isEmpty {
+        result.classes = menu
+      }
+      if result.filters == nil {
+        result.filters = previous?.filters
+      }
+      attachSourceKey(site.key, to: &result)
+      storeCategoryCache(result, cacheKey: cacheKey, page: 1)
+      homeResult = result
+      browseListBelongsToTypeId = typeId
+      browseDisplayedCacheKey = cacheKey
+      currentPage = 1
+      errorMessage = nil
+      PosterPrefetch.warm(items: result.list, limit: 12)
+      persistBrowseCategoryCache(siteKey: site.key)
+    } catch {
+      guard generation == categoryLoadGeneration,
+        selectedCategory?.typeId == typeId
+      else { return }
+      if let previous, !previous.list.isEmpty {
+        homeResult = previous
+        errorMessage = nil
+      } else {
+        presentRecoverableError(error.localizedDescription, action: .refreshBrowseCategory)
+      }
     }
   }
 
