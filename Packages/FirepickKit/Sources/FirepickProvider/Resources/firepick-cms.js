@@ -1727,9 +1727,22 @@ export default class extends Spider {
     const providers = providersForMode(configuredProviders, this.adultMode).filter(
       function (provider) { return bucket === 'adult' || provider.adult !== true; }
     );
+    // Adult pages must test dedicated sources first. General CMS hosts rarely
+    // publish an 成人 class and previously burned the whole first-paint budget.
+    if (bucket === 'adult') {
+      providers.sort(function (a, b) {
+        return Number(b.adult === true) - Number(a.adult === true);
+      });
+    }
     const providerKeys = new Set(providers.map(function (provider) {
       return provider.key;
     }));
+    const adultFirstProviders = bucket === 'adult'
+      ? providers.filter(function (provider) { return provider.adult === true; })
+      : [];
+    const firstPaintProviders = adultFirstProviders.length
+      ? adultFirstProviders
+      : providers;
     const requestedPage = Math.max(1, Number(pg) || 1);
     const self = this;
     const classKey = String((extend && extend.class) || '');
@@ -1852,7 +1865,7 @@ export default class extends Spider {
     if (requestedPage === 1 && !filtered) {
       const want = FIRST_SCREEN;
       list = await collectProviderLists(
-        providers,
+        firstPaintProviders,
         1,
         want * 2,
         extra,

@@ -624,7 +624,7 @@ final class AppModel {
       : persistedActive.filter { !$0.isAdult }
     activeCMSProviders =
       allowedActive.isEmpty
-      ? Self.defaultActiveCMSProviders
+      ? Self.fallbackActiveCMSProviders(for: contentMode)
       : allowedActive
     consolidateWarehouseConnections()
     if let currentURL = persistence?.currentConnectionURL {
@@ -650,6 +650,24 @@ final class AppModel {
   static var defaultActiveCMSProviders: [ActiveCMSProvider] {
     firepickCMSProviders.map {
       ActiveCMSProvider(key: $0.key, name: $0.name, api: $0.api)
+    }
+  }
+
+  static func fallbackActiveCMSProviders(for mode: ContentMode) -> [ActiveCMSProvider] {
+    guard mode.allowsAdultProviders else {
+      return defaultActiveCMSProviders
+    }
+    let adult = CMSProviderCatalog.bundledCandidates().filter { $0.adult == true }
+    guard !adult.isEmpty else {
+      return defaultActiveCMSProviders
+    }
+    return adult.prefix(activeCMSPoolSize).map {
+      ActiveCMSProvider(
+        key: $0.key,
+        name: CMSProviderCatalog.displayName(for: $0),
+        api: $0.api,
+        adult: true
+      )
     }
   }
 
@@ -1137,7 +1155,7 @@ final class AppModel {
       return cached
     }
     if let missedAt = posterRepairMisses[key] {
-      if Date().timeIntervalSince(missedAt) < 10 * 60 {
+      if Date().timeIntervalSince(missedAt) < 2 * 60 {
         return []
       }
       posterRepairMisses.removeValue(forKey: key)
@@ -1478,7 +1496,7 @@ final class AppModel {
       : saved.filter { !$0.isAdult }
     activeCMSProviders =
       allowed.isEmpty
-      ? Self.defaultActiveCMSProviders
+      ? Self.fallbackActiveCMSProviders(for: mode)
       : allowed
     collectionStationLatencyMS = [:]
     didProbeCollectionStations = false
@@ -1491,8 +1509,14 @@ final class AppModel {
     if selectedSite?.key == "firepick_cms", let site = selectedSite {
       selectedSite = siteWithActiveCMSProviders(site)
     }
-    await probeCollectionStationLatencies()
     await reloadHome()
+    Task { @MainActor in
+      await probeCollectionStationLatencies()
+      guard contentMode == mode, selectedSite?.key == "firepick_cms",
+        homeResult != nil
+      else { return }
+      await refreshCurrentCategory()
+    }
   }
 
   /// 采集站管理：拾萤线路全量获取最佳线路；其它线路只测当前展示站。
@@ -1574,9 +1598,18 @@ final class AppModel {
     async let bestTask = CMSProviderCatalog.loadBestCandidates(timeout: 2)
     async let catalogTask = CMSProviderCatalog.loadRemoteCandidates(timeout: 2)
     let (remoteBest, remoteCatalog) = await (bestTask, catalogTask)
+    let probeMode = contentMode
     let allowsAdult = contentMode.allowsAdultProviders
-    let best = remoteBest.filter { allowsAdult || $0.adult != true }
-    let catalog = (remoteCatalog ?? []).filter { allowsAdult || $0.adult != true }
+    func preferredEntries(
+      _ entries: [CMSProviderCatalog.Entry]
+    ) -> [CMSProviderCatalog.Entry] {
+      let eligible = entries.filter { allowsAdult || $0.adult != true }
+      guard allowsAdult else { return eligible }
+      return eligible.filter { $0.adult == true }
+        + eligible.filter { $0.adult != true }
+    }
+    let best = preferredEntries(remoteBest)
+    let catalog = preferredEntries(remoteCatalog ?? [])
     let saved = activeCMSProviders
       .filter { allowsAdult || !$0.isAdult }
       .map {
@@ -1605,7 +1638,7 @@ final class AppModel {
       )
     }
     if pool.isEmpty {
-      pool = Self.defaultActiveCMSProviders.map {
+      pool = Self.fallbackActiveCMSProviders(for: contentMode).map {
         CMSProviderCatalog.Entry(
           key: $0.key,
           name: $0.name,
@@ -1623,6 +1656,17 @@ final class AppModel {
     }
 
     let targetCount = Self.activeCMSPoolSize
+    let requiredAdultHosts =
+      allowsAdult
+      ? min(
+        4,
+        Set(
+          pool.filter { $0.adult == true }.compactMap {
+            URL(string: $0.api)?.host?.lowercased()
+          }
+        ).count
+      )
+      : 0
     let hits: [ProbeHit] = await withTaskGroup(of: ProbeHit?.self) { group in
       var results: [ProbeHit] = []
       // Fire all at once (TVBox-style). Short timeout drops dead hosts fast.
@@ -1648,7 +1692,11 @@ final class AppModel {
         let uniqueHosts = Set(
           results.compactMap { URL(string: $0.entry.api)?.host?.lowercased() }
         )
-        if uniqueHosts.count >= targetCount {
+        let adultHosts = Set(
+          results.filter { $0.entry.adult == true }
+            .compactMap { URL(string: $0.entry.api)?.host?.lowercased() }
+        )
+        if uniqueHosts.count >= targetCount, adultHosts.count >= requiredAdultHosts {
           group.cancelAll()
           break
         }
@@ -1657,10 +1705,18 @@ final class AppModel {
     }
 
     let ranked = hits.sorted { $0.ms < $1.ms }
+    let orderedHits: [ProbeHit]
+    if allowsAdult {
+      orderedHits =
+        Array(ranked.filter { $0.entry.adult == true }.prefix(4))
+        + ranked.filter { $0.entry.adult != true }
+    } else {
+      orderedHits = ranked
+    }
     var seenHosts = Set<String>()
     var picked: [ActiveCMSProvider] = []
     var latency: [String: Int] = [:]
-    for hit in ranked {
+    for hit in orderedHits {
       let host = URL(string: hit.entry.api)?.host?.lowercased() ?? hit.entry.key
       if seenHosts.contains(host) { continue }
       seenHosts.insert(host)
@@ -1683,6 +1739,7 @@ final class AppModel {
       collectionStationProbeStatus = "暂未获取到可用线路，仍用当前活跃池"
       return
     }
+    guard contentMode == probeMode else { return }
 
     activeCMSProviders = picked
     persistence?.saveActiveCMSProviders(picked, mode: contentMode)

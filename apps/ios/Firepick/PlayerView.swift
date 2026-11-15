@@ -124,6 +124,7 @@ struct PlayerView: View {
   @State private var showingRatePicker = false
   @State private var showingResolutionPicker = false
   @State private var showingInlineRatePicker = false
+  @State private var showingDanmakuDrawer = false
   @State private var streamResolution: StreamResolution = .automatic
   /// Auto mode stepped down after stall / constrained network; clears when path recovers.
   @State private var autoQualityDegraded = false
@@ -1028,7 +1029,7 @@ struct PlayerView: View {
   }
 
   private var isPlayerDrawerOpen: Bool {
-    showingRatePicker || showingResolutionPicker || showingEpisodes
+    showingRatePicker || showingResolutionPicker || showingEpisodes || showingDanmakuDrawer
   }
 
   /// True when we still have a visible picture (freeze or live frame) to cover handoff.
@@ -1254,6 +1255,8 @@ struct PlayerView: View {
             resolutionDrawerPanel
           } else if showingEpisodes {
             episodeDrawerPanel
+          } else if showingDanmakuDrawer {
+            danmakuSettingsDrawerPanel
           }
         }
         .frame(width: drawerPanelWidth)
@@ -1269,6 +1272,7 @@ struct PlayerView: View {
     .animation(.easeInOut(duration: 0.28), value: showingRatePicker)
     .animation(.easeInOut(duration: 0.28), value: showingResolutionPicker)
     .animation(.easeInOut(duration: 0.28), value: showingEpisodes)
+    .animation(.easeInOut(duration: 0.28), value: showingDanmakuDrawer)
   }
 
   private var drawerPanelWidth: CGFloat {
@@ -1279,6 +1283,7 @@ struct PlayerView: View {
     case rate
     case resolution
     case episodes
+    case danmaku
   }
 
   private func openPlayerDrawer(_ drawer: PlayerDrawer) {
@@ -1291,6 +1296,7 @@ struct PlayerView: View {
       showingRatePicker = drawer == .rate
       showingResolutionPicker = drawer == .resolution
       showingEpisodes = drawer == .episodes
+      showingDanmakuDrawer = drawer == .danmaku
       showingLines = false
     }
   }
@@ -1313,6 +1319,7 @@ struct PlayerView: View {
       showingRatePicker = false
       showingResolutionPicker = false
       showingEpisodes = false
+      showingDanmakuDrawer = false
       showingLines = false
     }
     scheduleHideControls()
@@ -1531,10 +1538,203 @@ struct PlayerView: View {
     }
   }
 
+  private var danmakuSettingsDrawerPanel: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 14) {
+        HStack(spacing: 7) {
+          Image(systemName: "text.bubble.fill")
+            .foregroundStyle(.orange)
+          Text("弹幕")
+            .font(.headline)
+            .foregroundStyle(.white)
+        }
+        .padding(.top, 20)
+
+        VStack(alignment: .leading, spacing: 5) {
+          drawerToggle("显示弹幕", isOn: $danmakuEnabled)
+            .disabled(danmakuComments.isEmpty)
+            .opacity(danmakuComments.isEmpty ? 0.48 : 1)
+          Text(danmakuComments.isEmpty ? "当前影片没有弹幕。" : "只影响当前播放页。")
+            .font(.caption2)
+            .foregroundStyle(.white.opacity(0.48))
+        }
+
+        drawerDivider
+
+        drawerToggle(
+          "默认显示弹幕",
+          isOn: Binding(
+            get: { model.danmakuEnabledByDefault },
+            set: { model.setDanmakuEnabledByDefault($0) }
+          )
+        )
+        drawerToggle(
+          "自动匹配弹幕",
+          isOn: Binding(
+            get: { model.danmakuAutoMatch },
+            set: { model.setDanmakuAutoMatch($0) }
+          )
+        )
+
+        drawerDivider
+
+        Menu {
+          ForEach(DanmakuDisplayArea.allCases) { area in
+            Button {
+              model.setDanmakuDisplayArea(area)
+            } label: {
+              if model.danmakuDisplayArea == area {
+                Label(area.title, systemImage: "checkmark")
+              } else {
+                Text(area.title)
+              }
+            }
+          }
+        } label: {
+          HStack(spacing: 6) {
+            Text("显示区域")
+              .font(.subheadline)
+            Spacer(minLength: 4)
+            Text(model.danmakuDisplayArea.title)
+              .font(.caption)
+              .foregroundStyle(.white.opacity(0.62))
+            Image(systemName: "chevron.up.chevron.down")
+              .font(.caption2.weight(.semibold))
+              .foregroundStyle(.white.opacity(0.45))
+          }
+          .foregroundStyle(.white)
+          .padding(.vertical, 10)
+          .padding(.horizontal, 11)
+          .background(
+            Color.white.opacity(0.06),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+          )
+        }
+
+        drawerSlider(
+          "透明度",
+          value: Binding(
+            get: { model.danmakuOpacity },
+            set: { model.setDanmakuOpacity($0) }
+          ),
+          range: 0.2...1,
+          step: 0.05,
+          valueLabel: "\(Int((model.danmakuOpacity * 100).rounded()))%"
+        )
+        drawerSlider(
+          "大小",
+          value: Binding(
+            get: { model.danmakuFontScale },
+            set: { model.setDanmakuFontScale($0) }
+          ),
+          range: 0.75...1.75,
+          step: 0.05,
+          valueLabel: "\(Int((model.danmakuFontScale * 100).rounded()))%"
+        )
+        drawerSlider(
+          "速度",
+          value: Binding(
+            get: { model.danmakuSpeed },
+            set: { model.setDanmakuSpeed($0) }
+          ),
+          range: 0.5...2,
+          step: 0.1,
+          valueLabel:
+            "\(model.danmakuSpeed.formatted(.number.precision(.fractionLength(1))))×"
+        )
+
+        drawerDivider
+
+        VStack(alignment: .leading, spacing: 6) {
+          Text("弹幕聚合 API（可选）")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white.opacity(0.62))
+          TextField(
+            "https://host/token",
+            text: Binding(
+              get: { model.danmakuCustomAPIBase },
+              set: { model.setDanmakuCustomAPIBase($0) }
+            )
+          )
+          .font(.caption)
+          .foregroundStyle(.white)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .keyboardType(.URL)
+          .padding(.horizontal, 10)
+          .frame(height: 38)
+          .background(
+            Color.white.opacity(0.07),
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+          )
+        }
+
+        Button {
+          model.resetDanmakuSettings()
+        } label: {
+          Text("恢复默认值")
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(.orange)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(
+              Color.orange.opacity(0.10),
+              in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+        }
+        .buttonStyle(.plain)
+      }
+      .padding(.horizontal, 14)
+      .padding(.bottom, 22)
+    }
+    .scrollIndicators(.hidden)
+  }
+
+  private func drawerToggle(_ title: String, isOn: Binding<Bool>) -> some View {
+    Toggle(isOn: isOn) {
+      Text(title)
+        .font(.subheadline)
+        .foregroundStyle(.white)
+    }
+    .toggleStyle(.switch)
+    .tint(.orange)
+  }
+
+  private func drawerSlider(
+    _ title: String,
+    value: Binding<Double>,
+    range: ClosedRange<Double>,
+    step: Double,
+    valueLabel: String
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack {
+        Text(title)
+          .font(.subheadline)
+        Spacer()
+        Text(valueLabel)
+          .font(.caption.monospacedDigit())
+          .foregroundStyle(.white.opacity(0.58))
+      }
+      .foregroundStyle(.white)
+      Slider(value: value, in: range, step: step)
+        .tint(.orange)
+    }
+  }
+
+  private var drawerDivider: some View {
+    Divider()
+      .overlay(.white.opacity(0.10))
+  }
+
   private var menuButton: some View {
     Menu {
       Button {
-        showingDanmakuSettings = true
+        if chrome == .immersive {
+          openPlayerDrawerAfterMenuDismissal(.danmaku)
+        } else {
+          showingDanmakuSettings = true
+        }
       } label: {
         Label("弹幕设置", systemImage: "text.bubble")
       }

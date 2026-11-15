@@ -694,6 +694,7 @@ struct CachedRemoteImage<Placeholder: View>: View {
         } else {
           image = nil
           failed = true
+          await retryAfterShowingFailure(for: nil)
         }
       }
       return
@@ -735,12 +736,11 @@ struct CachedRemoteImage<Placeholder: View>: View {
     if failed, !didResolveAlternatives, let alternativeURLs {
       didResolveAlternatives = true
       if let repaired = await firstAvailableAlternative(from: await alternativeURLs()) {
-        let key = RemoteImageCache.cacheKey(for: url, maxPixelSize: maxPixelSize)
-        RemoteImageCache.storeMemory(repaired, for: key)
-        RemoteImageCache.queueDiskWrite(repaired, for: key)
-        image = repaired
-        failed = false
+        commit(repaired, for: url)
       }
+    }
+    if failed {
+      await retryAfterShowingFailure(for: url)
     }
   }
 
@@ -755,5 +755,45 @@ struct CachedRemoteImage<Placeholder: View>: View {
       }
     }
     return nil
+  }
+
+  /// Failed cards are cheap to keep alive. Retry three times with a wide
+  /// backoff, then leave the visible refresh control for an explicit retry.
+  private func retryAfterShowingFailure(for originalURL: URL?) async {
+    for delay in [
+      Duration.seconds(20),
+      .seconds(90),
+      .seconds(300),
+    ] {
+      try? await Task.sleep(for: delay)
+      guard !Task.isCancelled else { return }
+      if let originalURL,
+        let repaired = await RemoteImagePipeline.shared.image(
+          for: originalURL,
+          maxPixelSize: maxPixelSize
+        )
+      {
+        commit(repaired, for: originalURL)
+        return
+      }
+      guard let alternativeURLs else { continue }
+      if let repaired = await firstAvailableAlternative(from: await alternativeURLs()) {
+        if let originalURL {
+          commit(repaired, for: originalURL)
+        } else {
+          image = repaired
+          failed = false
+        }
+        return
+      }
+    }
+  }
+
+  private func commit(_ image: UIImage, for originalURL: URL) {
+    let key = RemoteImageCache.cacheKey(for: originalURL, maxPixelSize: maxPixelSize)
+    RemoteImageCache.storeMemory(image, for: key)
+    RemoteImageCache.queueDiskWrite(image, for: key)
+    self.image = image
+    failed = false
   }
 }
