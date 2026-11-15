@@ -19,9 +19,9 @@
 当前公开发布版本：
 
 ```text
-Version: 0.1.36
-Build:   37
-SHA-256: 04c6dfaff3e92a6ea27b7bdbcb4458f1fbeadf4051da9784de67369e9fa494b3
+Version: 0.1.37
+Build:   38
+SHA-256: c2a34b9eb231d6dfaf07608135d4b2c8016e2e39eb70f57d01168063dced652a
 ```
 
 SideStore 更新源：
@@ -33,7 +33,7 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 当前 IPA 下载地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/Firepick-0.1.36.ipa
+https://dl.yychuiyan.com/firepick/Firepick-0.1.37.ipa
 ```
 
 ## 功能概览
@@ -405,7 +405,7 @@ FIREPICK_CURL_DOH_URL="https://223.5.5.5/dns-query" \
 
 版本规则：
 
-- 后续补丁版本依次使用 `0.1.10` 至 `0.1.36`，不跳到 `0.2.0`。
+- 后续补丁版本依次使用 `0.1.10` 至 `0.1.37`，不跳到 `0.2.0`。
 - 每次发布增加 `MARKETING_VERSION`。
 - 同一版本重新构建时仍应增加 `CURRENT_PROJECT_VERSION`。
 - 不复用旧版本号发布不同代码。
