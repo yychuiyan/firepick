@@ -298,7 +298,7 @@ private struct ContentModeSettingsView: View {
       }
       Button("取消", role: .cancel) {}
     } message: {
-      Text("成人线路将参与测速、成人菜单、搜索、详情和播放。开启后会重新获取最佳线路。")
+      Text("成人线路将参与测速、成人菜单、搜索、详情和播放。最佳线路会在后台更新，不会重载当前菜单。")
     }
   }
 

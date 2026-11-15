@@ -1500,8 +1500,6 @@ final class AppModel {
       : allowed
     collectionStationLatencyMS = [:]
     didProbeCollectionStations = false
-    persistence?.clearBrowseCategoryCache()
-    homeResult = nil
     detailResult = nil
     searchSections = []
     liveSearchResults = []
@@ -1509,13 +1507,41 @@ final class AppModel {
     if selectedSite?.key == "firepick_cms", let site = selectedSite {
       selectedSite = siteWithActiveCMSProviders(site)
     }
-    await reloadHome()
+
+    if var current = homeResult {
+      var classes = current.classes
+      if mode.allowsAdultProviders {
+        if !classes.contains(where: { $0.typeId == "bucket|adult" }) {
+          classes.append(Category(typeId: "bucket|adult", typeName: "成人"))
+        }
+      } else {
+        classes.removeAll { $0.typeId == "bucket|adult" }
+      }
+      current.classes = classes
+      homeResult = current
+
+      if !mode.allowsAdultProviders, selectedCategory?.typeId == "bucket|adult" {
+        let replacement =
+          classes.first(where: { $0.typeId == "bucket|recommend" })
+          ?? classes.first
+        selectedCategory = replacement
+        categoryFilters = []
+        filterSelections = [:]
+        browseDisplayedCacheKey = nil
+        if let replacement {
+          await loadCategory(replacement)
+        }
+      } else if selectedCategory == nil, let first = classes.first {
+        selectedCategory = first
+        await loadCategory(first)
+      }
+    } else {
+      await reloadHome()
+    }
+
     Task { @MainActor in
       await probeCollectionStationLatencies()
-      guard contentMode == mode, selectedSite?.key == "firepick_cms",
-        homeResult != nil
-      else { return }
-      await refreshCurrentCategory()
+      guard contentMode == mode, selectedSite?.key == "firepick_cms" else { return }
     }
   }
 
