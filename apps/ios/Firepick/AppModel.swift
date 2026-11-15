@@ -347,6 +347,14 @@ final class AppModel {
   /// Category switch / loadMore only — must not cancel `prefetchCategories`.
   private var categoryLoadGeneration = 0
   private var searchLoadGeneration = 0
+  private var aiSearchTask: Task<Void, Never>?
+  private var aiAPIKey: String?
+  private var aiKeyInvalid = false
+  private var aiCooldownUntil: Date?
+  private var aiPersistentAssistant: (any DeepSeekTitleAssistProviding)?
+  private var aiEphemeralAssistant: (any DeepSeekTitleAssistProviding)?
+  private var aiInFlight: [String: Task<DeepSeekTitleAssistResult?, Never>] = [:]
+  private var recoveredPosterURLs: [String: String] = [:]
   var connectionLatencyMS: [String: Int] = [:]
   /// CMS / site probe results for 采集站管理 (keyed by CollectionStation.id).
   var collectionStationLatencyMS: [String: Int] = [:]
@@ -369,6 +377,10 @@ final class AppModel {
   var adSkipPreference: AdSkipPreference = .off
   var backgroundPlaybackEnabled = false
   var incognitoModeEnabled = false
+  var aiEnhancementEnabled = false
+  var aiEnhancementKeyConfigured = false
+  var aiEnhancementTesting = false
+  var aiEnhancementStatus: String?
   var multiSourceSearchEnabled = false
   var bufferPreference: BufferPreference = .standard
   var subtitleFontPreference: SubtitleFontPreference = .medium
@@ -584,6 +596,21 @@ final class AppModel {
     if let value = persistence?.incognitoModeEnabled {
       incognitoModeEnabled = value
     }
+    aiEnhancementEnabled = persistence?.aiEnhancementEnabled ?? false
+    do {
+      aiAPIKey = try persistence?.loadDeepSeekAPIKey()?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      aiEnhancementKeyConfigured = !(aiAPIKey?.isEmpty ?? true)
+      if aiEnhancementKeyConfigured {
+        aiEnhancementStatus = aiEnhancementEnabled ? "已开启后台增强" : "已配置，尚未开启"
+      }
+    } catch {
+      aiAPIKey = nil
+      aiEnhancementKeyConfigured = false
+      aiEnhancementStatus = error.localizedDescription
+    }
+    recoveredPosterURLs = persistence?.loadRecoveredPosterURLs() ?? [:]
+    rebuildAIAssistants()
     if let value = persistence?.multiSourceSearchEnabled {
       multiSourceSearchEnabled = value
     }
@@ -1030,6 +1057,259 @@ final class AppModel {
     persistence?.saveIncognitoModeEnabled(value)
   }
 
+  func setAIEnhancementEnabled(_ value: Bool) {
+    if value, !aiEnhancementKeyConfigured {
+      aiEnhancementEnabled = false
+      aiEnhancementStatus = "请先保存 DeepSeek API Key"
+      persistence?.saveAIEnhancementEnabled(false)
+      return
+    }
+    if value, aiKeyInvalid {
+      aiEnhancementEnabled = false
+      aiEnhancementStatus = "API Key 无效，请重新保存或测试连接"
+      persistence?.saveAIEnhancementEnabled(false)
+      return
+    }
+    aiEnhancementEnabled = value
+    aiCooldownUntil = nil
+    aiEnhancementStatus = value ? "已开启后台增强" : "AI 增强已关闭"
+    persistence?.saveAIEnhancementEnabled(value)
+    if !value { cancelAIEnhancementWork() }
+  }
+
+  @discardableResult
+  func saveDeepSeekAPIKey(_ rawValue: String) async -> Bool {
+    let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else {
+      aiEnhancementStatus = "API Key 不能为空"
+      return false
+    }
+    do {
+      try persistence?.saveDeepSeekAPIKey(value)
+      aiAPIKey = value
+      aiEnhancementKeyConfigured = true
+      aiKeyInvalid = false
+      aiCooldownUntil = nil
+      cancelAIEnhancementWork()
+      rebuildAIAssistants()
+      return await testDeepSeekConnection()
+    } catch {
+      aiAPIKey = nil
+      aiEnhancementKeyConfigured = false
+      aiEnhancementStatus = error.localizedDescription
+      rebuildAIAssistants()
+      return false
+    }
+  }
+
+  func clearDeepSeekAPIKey() {
+    persistence?.clearDeepSeekAPIKey()
+    persistence?.clearDeepSeekCache()
+    aiAPIKey = nil
+    aiEnhancementKeyConfigured = false
+    aiEnhancementEnabled = false
+    aiKeyInvalid = false
+    aiCooldownUntil = nil
+    aiEnhancementStatus = "API Key 已移除"
+    persistence?.saveAIEnhancementEnabled(false)
+    aiPersistentAssistant = nil
+    aiEphemeralAssistant = nil
+    cancelAIEnhancementWork()
+  }
+
+  @discardableResult
+  func testDeepSeekConnection() async -> Bool {
+    guard let apiKey = aiAPIKey, !apiKey.isEmpty else {
+      aiEnhancementStatus = "请先保存 API Key"
+      return false
+    }
+    aiEnhancementTesting = true
+    defer { aiEnhancementTesting = false }
+    do {
+      let assistant = DeepSeekTitleAssistant(
+        apiKey: apiKey,
+        cacheFileURL: nil
+      )
+      try await assistant.validateAPIKey()
+      aiKeyInvalid = false
+      aiEnhancementStatus = "连接成功 · deepseek-flash"
+      return true
+    } catch DeepSeekAssistError.invalidKey {
+      markAIKeyInvalid()
+      return false
+    } catch {
+      aiEnhancementStatus = error.localizedDescription
+      return false
+    }
+  }
+
+  var isAIEnhancementAvailable: Bool {
+    canUseAIAssist()
+  }
+
+  var aiEnhancementReady: Bool {
+    aiEnhancementKeyConfigured && !aiKeyInvalid
+  }
+
+  private func rebuildAIAssistants() {
+    aiPersistentAssistant = nil
+    aiEphemeralAssistant = nil
+    guard let apiKey = aiAPIKey, !apiKey.isEmpty else { return }
+    aiPersistentAssistant = DeepSeekTitleAssistant(
+      apiKey: apiKey,
+      cacheFileURL: persistence?.deepSeekCacheURL
+    )
+    aiEphemeralAssistant = DeepSeekTitleAssistant(
+      apiKey: apiKey,
+      cacheFileURL: nil
+    )
+  }
+
+  private func canUseAIAssist() -> Bool {
+    guard aiEnhancementEnabled,
+      aiEnhancementKeyConfigured,
+      !aiKeyInvalid,
+      isNetworkAvailable,
+      currentAIAssistant() != nil
+    else { return false }
+    if let until = aiCooldownUntil, until > Date() { return false }
+    return true
+  }
+
+  private func currentAIAssistant() -> (any DeepSeekTitleAssistProviding)? {
+    incognitoModeEnabled ? aiEphemeralAssistant : aiPersistentAssistant
+  }
+
+  private func markAIKeyInvalid() {
+    aiKeyInvalid = true
+    aiEnhancementEnabled = false
+    aiEnhancementStatus = "API Key 无效，AI 增强已关闭"
+    persistence?.saveAIEnhancementEnabled(false)
+    cancelAIEnhancementWork()
+  }
+
+  private func cancelAIEnhancementWork() {
+    aiSearchTask?.cancel()
+    aiSearchTask = nil
+    aiInFlight.values.forEach { $0.cancel() }
+    aiInFlight.removeAll()
+  }
+
+  private func handleAIError(_ error: Error) {
+    switch error {
+    case DeepSeekAssistError.invalidKey:
+      markAIKeyInvalid()
+    case DeepSeekAssistError.rateLimited,
+      DeepSeekAssistError.serverUnavailable,
+      DeepSeekAssistError.timeout,
+      DeepSeekAssistError.invalidResponse:
+      aiCooldownUntil = Date().addingTimeInterval(10 * 60)
+      aiEnhancementStatus = "AI 暂时不可用，稍后自动重试"
+    default:
+      break
+    }
+  }
+
+  func aiMetadata(for item: MediaItem) -> DeepSeekMediaMetadata {
+    let actors =
+      (item.actor ?? "")
+      .components(separatedBy: CharacterSet(charactersIn: ",，/、|"))
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    return DeepSeekMediaMetadata(
+      title: item.name,
+      year: item.year,
+      type: item.typeName,
+      area: item.area,
+      actors: actors
+    )
+  }
+
+  private func aiTitleAssist(
+    query: String,
+    metadata: DeepSeekMediaMetadata,
+    candidates: [DeepSeekTitleCandidate] = []
+  ) async -> DeepSeekTitleAssistResult? {
+    guard canUseAIAssist(), let assistant = currentAIAssistant() else { return nil }
+    let key = [
+      "title",
+      contentMode.rawValue,
+      query,
+      metadata.title ?? "",
+      metadata.year ?? "",
+      metadata.type ?? "",
+      metadata.area ?? "",
+      metadata.actors.joined(separator: ","),
+      candidates.map(\.id).sorted().joined(separator: ","),
+    ].joined(separator: "|")
+    if let existing = aiInFlight[key] {
+      return await existing.value
+    }
+    let task = Task<DeepSeekTitleAssistResult?, Never> {
+      do {
+        return try await assistant.titleMatch(
+          query: query,
+          metadata: metadata,
+          candidates: candidates,
+          contentMode: contentMode.rawValue
+        )
+      } catch {
+        handleAIError(error)
+        return nil
+      }
+    }
+    aiInFlight[key] = task
+    let result = await task.value
+    aiInFlight.removeValue(forKey: key)
+    return result
+  }
+
+  func aiEpisodeMatchID(
+    mediaTitle: String,
+    currentEpisode: String,
+    candidates: [DeepSeekEpisodeCandidate]
+  ) async -> String? {
+    guard canUseAIAssist(), let assistant = currentAIAssistant(),
+      !candidates.isEmpty
+    else { return nil }
+    let key = [
+      "episode",
+      contentMode.rawValue,
+      mediaTitle,
+      currentEpisode,
+      candidates.map(\.id).joined(separator: ","),
+      candidates.map(\.name).joined(separator: ","),
+    ].joined(separator: "|")
+    let result: DeepSeekTitleAssistResult?
+    if let existing = aiInFlight[key] {
+      result = await existing.value
+    } else {
+      let task = Task<DeepSeekTitleAssistResult?, Never> {
+        do {
+          return try await assistant.episodeMatch(
+            mediaTitle: mediaTitle,
+            currentEpisode: currentEpisode,
+            candidates: candidates,
+            contentMode: contentMode.rawValue
+          )
+        } catch {
+          handleAIError(error)
+          return nil
+        }
+      }
+      aiInFlight[key] = task
+      result = await task.value
+      aiInFlight.removeValue(forKey: key)
+    }
+    guard let result,
+      result.confidence >= 0.85,
+      let match = result.episodeMatch,
+      match.confidence >= 0.85,
+      candidates.contains(where: { $0.id == match.id })
+    else { return nil }
+    return match.id
+  }
+
   func setMultiSourceSearchEnabled(_ value: Bool) {
     multiSourceSearchEnabled = value
     persistence?.saveMultiSourceSearchEnabled(value)
@@ -1151,6 +1431,16 @@ final class AppModel {
   func alternativePosterURLs(for item: MediaItem) async -> [URL] {
     let key = Self.posterRepairKey(for: item)
     guard !key.isEmpty else { return [] }
+    let persistentKey = posterPersistentCacheKey(for: item)
+    if let saved = recoveredPosterURLs[persistentKey],
+      let savedURL = URL(string: saved)
+    {
+      let current = item.pic.flatMap { RemoteImageCache.normalizedURL(from: $0) }
+      if current?.absoluteString != saved {
+        return [savedURL]
+      }
+      forgetRecoveredPosterURL(for: item)
+    }
     if let cached = posterRepairCache[key] {
       return cached
     }
@@ -1182,6 +1472,26 @@ final class AppModel {
     return urls
   }
 
+  func rememberRecoveredPosterURL(_ url: URL, for item: MediaItem) {
+    let key = posterPersistentCacheKey(for: item)
+    guard !key.isEmpty else { return }
+    recoveredPosterURLs[key] = url.absoluteString
+    persistence?.saveRecoveredPosterURL(url.absoluteString, for: key)
+  }
+
+  func forgetRecoveredPosterURL(for item: MediaItem) {
+    let key = posterPersistentCacheKey(for: item)
+    guard !key.isEmpty else { return }
+    recoveredPosterURLs.removeValue(forKey: key)
+    persistence?.removeRecoveredPosterURL(for: key)
+  }
+
+  private func posterPersistentCacheKey(for item: MediaItem) -> String {
+    let base = Self.posterRepairKey(for: item)
+    guard !base.isEmpty else { return "" }
+    return "\(base)|\(contentMode.rawValue)"
+  }
+
   private func searchAlternativePosterURLs(for item: MediaItem) async -> [URL] {
     let preferredKey = item.sourceKey ?? selectedSite?.key
     var sites: [SiteConfiguration] = []
@@ -1203,6 +1513,32 @@ final class AppModel {
     }
     guard let coordinator else { return [] }
 
+    let currentURL = item.pic
+      .flatMap { RemoteImageCache.normalizedURL(from: $0) }
+      .map { $0.absoluteString.lowercased() }
+    var ranked: [(url: URL, score: Int)] = []
+    var seenURLs = Set<String>()
+    func appendPosterResults(_ results: [String: Result<MediaResult, Error>]) {
+      for result in results.values {
+        guard case .success(let media) = result else { continue }
+        for candidate in media.list {
+          guard
+            let titleScore = Self.posterTitleMatchScore(
+              target: item,
+              candidate: candidate
+            ),
+            let raw = candidate.pic,
+            let url = RemoteImageCache.normalizedURL(from: raw)
+          else { continue }
+          let absolute = url.absoluteString
+          guard absolute.lowercased() != currentURL,
+            seenURLs.insert(absolute).inserted
+          else { continue }
+          let hostScore = Self.posterHealthScore(absolute)
+          ranked.append((url, titleScore - hostScore))
+        }
+      }
+    }
     let results = await coordinator.search(
       sites: sites,
       keyword: item.name,
@@ -1210,28 +1546,32 @@ final class AppModel {
       timeout: .seconds(6),
       maxConcurrent: 3
     )
-    let currentURL = item.pic
-      .flatMap { RemoteImageCache.normalizedURL(from: $0) }
-      .map { $0.absoluteString.lowercased() }
-    var ranked: [(url: URL, score: Int)] = []
-    var seenURLs = Set<String>()
-    for result in results.values {
-      guard case .success(let media) = result else { continue }
-      for candidate in media.list {
-        guard
-          let titleScore = Self.posterTitleMatchScore(
-            target: item,
-            candidate: candidate
-          ),
-          let raw = candidate.pic,
-          let url = RemoteImageCache.normalizedURL(from: raw)
-        else { continue }
-        let absolute = url.absoluteString
-        guard absolute.lowercased() != currentURL,
-          seenURLs.insert(absolute).inserted
-        else { continue }
-        let hostScore = Self.posterHealthScore(absolute)
-        ranked.append((url, titleScore - hostScore))
+    appendPosterResults(results)
+    if ranked.isEmpty, canUseAIAssist(),
+      let assist = await aiTitleAssist(
+        query: item.name,
+        metadata: aiMetadata(for: item)
+      )
+    {
+      var seen = Set([Self.normalizedTitle(item.name)])
+      let terms = ([assist.canonicalTitle].compactMap { $0 }
+        + assist.aliases
+        + assist.searchTerms)
+        .filter {
+          let key = Self.normalizedTitle($0)
+          return !key.isEmpty && seen.insert(key).inserted
+        }
+        .prefix(4)
+      for term in terms where ranked.isEmpty {
+        if Task.isCancelled { break }
+        let expanded = await coordinator.search(
+          sites: sites,
+          keyword: term,
+          quick: false,
+          timeout: .seconds(6),
+          maxConcurrent: 2
+        )
+        appendPosterResults(expanded)
       }
     }
     return Array(ranked.sorted { $0.score < $1.score }.prefix(5).map(\.url))
@@ -3098,6 +3438,10 @@ final class AppModel {
   func search() async {
     let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !keyword.isEmpty else { return }
+    searchLoadGeneration += 1
+    let generation = searchLoadGeneration
+    aiSearchTask?.cancel()
+    aiSearchTask = nil
     recordSearchHistory(keyword)
     isLoading = true
     isLoadingSearch = true
@@ -3183,6 +3527,146 @@ final class AppModel {
     } else {
       errorMessage = nil
     }
+    scheduleAISearchEnhancement(
+      keyword: keyword,
+      sites: sites,
+      generation: generation
+    )
+  }
+
+  func cancelAISearchEnhancement() {
+    searchLoadGeneration += 1
+    aiSearchTask?.cancel()
+    aiSearchTask = nil
+  }
+
+  private func scheduleAISearchEnhancement(
+    keyword: String,
+    sites: [SiteConfiguration],
+    generation: Int
+  ) {
+    guard canUseAIAssist(), !hasStrongTitleMatch(for: keyword) else { return }
+    aiSearchTask?.cancel()
+    aiSearchTask = Task { [weak self] in
+      await self?.enhanceSearchWithAI(
+        keyword: keyword,
+        sites: sites,
+        generation: generation
+      )
+    }
+  }
+
+  private func hasStrongTitleMatch(for keyword: String) -> Bool {
+    let target = Self.normalizedTitle(keyword)
+    guard !target.isEmpty else { return false }
+    for section in searchSections {
+      for item in section.result.list {
+        if let rank = Self.titleMatchRank(target: target, candidate: item.name),
+          rank < 100
+        {
+          return true
+        }
+      }
+    }
+    return false
+  }
+
+  private func enhanceSearchWithAI(
+    keyword: String,
+    sites: [SiteConfiguration],
+    generation: Int
+  ) async {
+    guard generation == searchLoadGeneration, !Task.isCancelled,
+      canUseAIAssist(),
+      let result = await aiTitleAssist(
+        query: keyword,
+        metadata: DeepSeekMediaMetadata(title: keyword)
+      )
+    else { return }
+    let normalizedOriginal = Self.normalizedTitle(keyword)
+    var seen = Set([normalizedOriginal])
+    let terms = ([result.canonicalTitle].compactMap { $0 }
+      + result.aliases
+      + result.searchTerms)
+      .filter { term in
+        let normalized = Self.normalizedTitle(term)
+        return !normalized.isEmpty && seen.insert(normalized).inserted
+      }
+      .prefix(4)
+    guard !terms.isEmpty else { return }
+    guard let coordinator else { return }
+
+    for term in terms {
+      guard generation == searchLoadGeneration, !Task.isCancelled else { return }
+      let results = await coordinator.search(
+        sites: sites,
+        keyword: term,
+        timeout: .seconds(6),
+        maxConcurrent: 2
+      )
+      guard generation == searchLoadGeneration, !Task.isCancelled else { return }
+      mergeAIExpandedSearchResults(results, keyword: keyword, result: result)
+    }
+  }
+
+  private func mergeAIExpandedSearchResults(
+    _ results: [String: Result<MediaResult, Error>],
+    keyword: String,
+    result: DeepSeekTitleAssistResult
+  ) {
+    let targets = ([keyword, result.canonicalTitle].compactMap { $0 }
+      + result.aliases
+      + result.searchTerms)
+      .map(Self.normalizedTitle)
+      .filter { !$0.isEmpty }
+    guard !targets.isEmpty else { return }
+
+    for (siteKey, searchResult) in results {
+      guard case .success(var media) = searchResult,
+        let site = configuration.sites.first(where: { $0.key == siteKey })
+      else { continue }
+      media.list = media.list.filter { item in
+        let title = Self.normalizedTitle(item.name)
+        return targets.contains { target in
+          Self.titleMatchRank(target: target, candidate: title) != nil
+        }
+      }
+      guard !media.list.isEmpty else { continue }
+      attachSourceKey(site.key, to: &media)
+
+      if let index = searchSections.firstIndex(where: { $0.id == siteKey }) {
+        var section = searchSections[index]
+        var combined = section.result.list
+        var ids = Set(combined.map(\.vodId))
+        var titles = Set(combined.map { Self.normalizedTitle($0.name) })
+        for item in media.list {
+          let titleKey = Self.normalizedTitle(item.name)
+          guard ids.insert(item.vodId).inserted,
+            titles.insert(titleKey).inserted
+          else { continue }
+          combined.append(item)
+        }
+        var merged = section.result
+        merged.list = combined
+        section = SearchSection(
+          id: section.id,
+          siteName: section.siteName,
+          result: merged
+        )
+        searchSections[index] = section
+      } else {
+        searchSections.append(
+          SearchSection(id: site.key, siteName: site.name, result: media)
+        )
+      }
+    }
+    searchSections.sort {
+      $0.siteName.localizedCompare($1.siteName) == .orderedAscending
+    }
+    PosterPrefetch.warm(
+      items: searchSections.flatMap(\.result.list),
+      limit: 24
+    )
   }
 
   func clearSearchHistory() {
@@ -3241,7 +3725,8 @@ final class AppModel {
   func findItem(
     named title: String,
     in site: SiteConfiguration,
-    preferredProviderKey: String?
+    preferredProviderKey: String?,
+    metadata: DeepSeekMediaMetadata? = nil
   ) async throws -> MediaItem? {
     let provider = try await provider(for: site)
     let search = try await provider.searchContent(keyword: title, quick: false, page: 1)
@@ -3252,20 +3737,46 @@ final class AppModel {
     if let preferredProviderKey, !preferredProviderKey.isEmpty {
       let scoped = candidates.filter { $0.vodId.hasPrefix(preferredProviderKey + "|") }
       // Strict: never fall back to another站 — that made 来源 chips look stuck.
-      guard !scoped.isEmpty else { return nil }
       candidates = scoped
     }
-    let target = Self.normalizedTitle(title)
-    guard !target.isEmpty else { return nil }
-    let ranked = candidates.compactMap { item -> (MediaItem, Int)? in
-      guard let rank = Self.titleMatchRank(target: target, candidate: item.name) else {
-        return nil
-      }
-      return (item, rank)
+    let targets = [Self.normalizedTitle(title)].filter { !$0.isEmpty }
+    if let best = Self.bestTitleCandidate(candidates, targets: targets) {
+      var item = best
+      item.sourceKey = site.key
+      return item
     }
-    guard var best = ranked.min(by: { $0.1 < $1.1 })?.0 else { return nil }
-    best.sourceKey = site.key
-    return best
+
+    guard canUseAIAssist(),
+      let assist = await aiTitleAssist(
+        query: title,
+        metadata: metadata ?? DeepSeekMediaMetadata(title: title)
+      ),
+      assist.confidence >= 0.8
+    else { return nil }
+    var seen = Set([title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()])
+    let aiTerms = ([assist.canonicalTitle].compactMap { $0 }
+      + assist.aliases
+      + assist.searchTerms)
+      .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+      .prefix(4)
+    guard !aiTerms.isEmpty else { return nil }
+    let allTargets = targets + aiTerms.map(Self.normalizedTitle).filter { !$0.isEmpty }
+    for term in aiTerms {
+      if Task.isCancelled { return nil }
+      let expanded = try await provider.searchContent(keyword: term, quick: false, page: 1)
+      var expandedCandidates = expanded.list
+      if let preferredProviderKey, !preferredProviderKey.isEmpty {
+        expandedCandidates = expandedCandidates.filter {
+          $0.vodId.hasPrefix(preferredProviderKey + "|")
+        }
+      }
+      if let best = Self.bestTitleCandidate(expandedCandidates, targets: allTargets) {
+        var item = best
+        item.sourceKey = site.key
+        return item
+      }
+    }
+    return nil
   }
 
   /// Provider keys (e.g. `sdzy`) that return a title match for the current show.
@@ -3283,10 +3794,55 @@ final class AppModel {
         let key = String(item.vodId[..<bar])
         if !key.isEmpty { keys.insert(key) }
       }
+      if keys.isEmpty, canUseAIAssist(),
+        let assist = await aiTitleAssist(
+          query: title,
+          metadata: DeepSeekMediaMetadata(title: title)
+        ),
+        assist.confidence >= 0.8
+      {
+        let terms = ([assist.canonicalTitle].compactMap { $0 }
+          + assist.aliases
+          + assist.searchTerms)
+          .prefix(4)
+        let targets = ([title] + terms).map(Self.normalizedTitle)
+        for term in terms {
+          let expanded = try await provider.searchContent(
+            keyword: term,
+            quick: false,
+            page: 1
+          )
+          for item in expanded.list {
+            let matches = targets.contains {
+              Self.titleMatchRank(target: $0, candidate: item.name) != nil
+            }
+            guard matches, let bar = item.vodId.firstIndex(of: "|") else { continue }
+            let key = String(item.vodId[..<bar])
+            if !key.isEmpty { keys.insert(key) }
+          }
+          if !keys.isEmpty { break }
+        }
+      }
       return keys
     } catch {
       return []
     }
+  }
+
+  private static func bestTitleCandidate(
+    _ candidates: [MediaItem],
+    targets: [String]
+  ) -> MediaItem? {
+    guard !targets.isEmpty else { return nil }
+    return candidates
+      .compactMap { item -> (MediaItem, Int)? in
+        let rank = targets.compactMap {
+          titleMatchRank(target: $0, candidate: item.name)
+        }.min()
+        return rank.map { (item, $0) }
+      }
+      .min { $0.1 < $1.1 }?
+      .0
   }
 
   /// Episode/期 count for a CMS provider after resolving title → detail.

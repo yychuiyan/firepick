@@ -614,6 +614,8 @@ struct CachedRemoteImage<Placeholder: View>: View {
   var maxPixelSize: CGFloat = 720
   /// Called only after the normal mirror/Referer/fallback passes fail.
   var alternativeURLs: (() async -> [URL])? = nil
+  var onAlternativeResolved: ((URL) -> Void)? = nil
+  var onFinalFailure: (() -> Void)? = nil
   /// Shown after both the original pipeline and cross-source repair fail.
   var failureArtwork: AnyView? = nil
   @ViewBuilder var placeholder: () -> Placeholder
@@ -622,6 +624,7 @@ struct CachedRemoteImage<Placeholder: View>: View {
   @State private var failed = false
   @State private var reloadToken = 0
   @State private var didResolveAlternatives = false
+  @State private var didReportFinalFailure = false
 
   var body: some View {
     Group {
@@ -641,6 +644,7 @@ struct CachedRemoteImage<Placeholder: View>: View {
             Button {
               failed = false
               didResolveAlternatives = false
+              didReportFinalFailure = false
               reloadToken += 1
             } label: {
               Image(systemName: "arrow.clockwise")
@@ -660,11 +664,13 @@ struct CachedRemoteImage<Placeholder: View>: View {
       image = nil
       failed = false
       didResolveAlternatives = false
+      didReportFinalFailure = false
     }
     .onAppear {
       // Flaky CMS CDNs often succeed on a later pass once the gate frees up.
       if failed, image == nil {
         failed = false
+        didReportFinalFailure = false
         reloadToken += 1
       }
     }
@@ -689,12 +695,17 @@ struct CachedRemoteImage<Placeholder: View>: View {
       if !didResolveAlternatives, let alternativeURLs {
         didResolveAlternatives = true
         if let repaired = await firstAvailableAlternative(from: await alternativeURLs()) {
-          image = repaired
+          onAlternativeResolved?(repaired.url)
+          image = repaired.image
           failed = false
         } else {
           image = nil
           failed = true
-          await retryAfterShowingFailure(for: nil)
+          let recovered = await retryAfterShowingFailure(for: nil)
+          if !recovered, !didReportFinalFailure {
+            didReportFinalFailure = true
+            onFinalFailure?()
+          }
         }
       }
       return
@@ -736,22 +747,27 @@ struct CachedRemoteImage<Placeholder: View>: View {
     if failed, !didResolveAlternatives, let alternativeURLs {
       didResolveAlternatives = true
       if let repaired = await firstAvailableAlternative(from: await alternativeURLs()) {
-        commit(repaired, for: url)
+        onAlternativeResolved?(repaired.url)
+        commit(repaired.image, for: url)
       }
     }
     if failed {
-      await retryAfterShowingFailure(for: url)
+      let recovered = await retryAfterShowingFailure(for: url)
+      if !recovered, !didReportFinalFailure {
+        didReportFinalFailure = true
+        onFinalFailure?()
+      }
     }
   }
 
-  private func firstAvailableAlternative(from candidates: [URL]) async -> UIImage? {
+  private func firstAvailableAlternative(from candidates: [URL]) async -> (url: URL, image: UIImage)? {
     for candidate in candidates {
       guard !Task.isCancelled else { return nil }
       if let repaired = await RemoteImagePipeline.shared.image(
         for: candidate,
         maxPixelSize: maxPixelSize
       ) {
-        return repaired
+        return (candidate, repaired)
       }
     }
     return nil
@@ -759,14 +775,14 @@ struct CachedRemoteImage<Placeholder: View>: View {
 
   /// Failed cards are cheap to keep alive. Retry three times with a wide
   /// backoff, then leave the visible refresh control for an explicit retry.
-  private func retryAfterShowingFailure(for originalURL: URL?) async {
+  private func retryAfterShowingFailure(for originalURL: URL?) async -> Bool {
     for delay in [
       Duration.seconds(20),
       .seconds(90),
       .seconds(300),
     ] {
       try? await Task.sleep(for: delay)
-      guard !Task.isCancelled else { return }
+      guard !Task.isCancelled else { return false }
       if let originalURL,
         let repaired = await RemoteImagePipeline.shared.image(
           for: originalURL,
@@ -774,19 +790,21 @@ struct CachedRemoteImage<Placeholder: View>: View {
         )
       {
         commit(repaired, for: originalURL)
-        return
+        return true
       }
       guard let alternativeURLs else { continue }
       if let repaired = await firstAvailableAlternative(from: await alternativeURLs()) {
+        onAlternativeResolved?(repaired.url)
         if let originalURL {
-          commit(repaired, for: originalURL)
+          commit(repaired.image, for: originalURL)
         } else {
-          image = repaired
+          image = repaired.image
           failed = false
         }
-        return
+        return true
       }
     }
+    return false
   }
 
   private func commit(_ image: UIImage, for originalURL: URL) {

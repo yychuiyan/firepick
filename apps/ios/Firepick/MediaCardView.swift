@@ -47,6 +47,12 @@ struct MediaCardView: View {
           alternativeURLs: {
             await model.alternativePosterURLs(for: item)
           },
+          onAlternativeResolved: { url in
+            model.rememberRecoveredPosterURL(url, for: item)
+          },
+          onFinalFailure: {
+            model.forgetRecoveredPosterURL(for: item)
+          },
           failureArtwork: AnyView(DefaultPosterArtwork())
         ) {
           Color.black.opacity(0.12)

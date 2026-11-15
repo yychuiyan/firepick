@@ -79,6 +79,7 @@ struct SearchView: View {
           .onSubmit(runSearch)
           .onChange(of: model.searchText) { _, value in
             if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+              model.cancelAISearchEnhancement()
               model.searchHasRun = false
               model.searchSections = []
               model.liveSearchResults = []

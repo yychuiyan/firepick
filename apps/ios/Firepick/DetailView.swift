@@ -1,5 +1,6 @@
 import FirepickCore
 import FirepickPlayback
+import FirepickProvider
 import SwiftUI
 
 struct DetailView: View {
@@ -1328,7 +1329,8 @@ struct DetailView: View {
         let replacement = try await model.findItem(
           named: detail.name,
           in: site,
-          preferredProviderKey: providerKey
+          preferredProviderKey: providerKey,
+          metadata: model.aiMetadata(for: detail)
         )
       else {
         clearSourceHandoff()
@@ -1390,7 +1392,9 @@ struct DetailView: View {
     showingEpisodeDrawer = false
     await model.loadDetail(replacement)
     currentItem = replacement
-    if let keepEpisodeName, let match = matchEpisode(named: keepEpisodeName) {
+    if let keepEpisodeName,
+      let match = await matchEpisodeWithAI(named: keepEpisodeName)
+    {
       selectedFlag = match.line.name
       focusEpisodeName = match.episode.name
     } else {
@@ -1421,7 +1425,7 @@ struct DetailView: View {
       return titleHistoryHint.map { max(0, $0.position) }
     }()
 
-    if let preferredName, let match = matchEpisode(named: preferredName) {
+    if let preferredName, let match = await matchEpisodeWithAI(named: preferredName) {
       selectedFlag = match.line.name
       focusEpisodeName = match.episode.name
       await play(
@@ -1460,6 +1464,40 @@ struct DetailView: View {
       }
     }
     return nil
+  }
+
+  private func matchEpisodeWithAI(
+    named name: String
+  ) async -> (line: PlaybackLine, episode: Episode)? {
+    if let local = matchEpisode(named: name) {
+      return local
+    }
+    var candidates: [DeepSeekEpisodeCandidate] = []
+    var lookup: [String: (PlaybackLine, Episode)] = [:]
+    for (lineIndex, line) in lines.enumerated() {
+      for (episodeIndex, episode) in line.episodes.enumerated()
+      where candidates.count < 200
+      {
+        let id = "l\(lineIndex)e\(episodeIndex)"
+        candidates.append(.init(id: id, name: episode.name))
+        lookup[id] = (line, episode)
+      }
+    }
+    guard !candidates.isEmpty,
+      let matchedID = await model.aiEpisodeMatchID(
+        mediaTitle: detail.name,
+        currentEpisode: name,
+        candidates: candidates
+      ),
+      let matched = lookup[matchedID]
+    else { return nil }
+    if let expected = Self.episodeIndex(name),
+      let actual = Self.episodeIndex(matched.1.name),
+      expected != actual
+    {
+      return nil
+    }
+    return matched
   }
 
   /// True only when both labels are plain episode numbers (第3集 / 03), not dates.

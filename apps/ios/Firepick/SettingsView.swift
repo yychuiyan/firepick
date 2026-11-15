@@ -7,6 +7,7 @@ enum SettingsDestination: Hashable {
   case addConnection
   case sources
   case playback
+  case aiEnhancement
 }
 
 struct SettingsView: View {
@@ -21,6 +22,7 @@ struct SettingsView: View {
         linesSection
         playbackSection
         contentSection
+        aiSection
         storageSection
         ProvisioningExpirySection()
       }
@@ -49,6 +51,8 @@ struct SettingsView: View {
           SourceManagementView()
         case .playback:
           PlaybackSettingsView()
+        case .aiEnhancement:
+          AIEnhancementSettingsView()
         }
       }
       .alert(
@@ -238,6 +242,17 @@ struct SettingsView: View {
         Text(status)
           .font(.footnote)
           .foregroundStyle(.secondary)
+      }
+    }
+  }
+
+  private var aiSection: some View {
+    Section("智能") {
+      NavigationLink(value: SettingsDestination.aiEnhancement) {
+        LabeledContent(
+          "AI 增强",
+          value: model.aiEnhancementEnabled ? "已开启" : "关闭"
+        )
       }
     }
   }

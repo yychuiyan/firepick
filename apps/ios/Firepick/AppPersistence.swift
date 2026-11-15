@@ -50,6 +50,9 @@ final class AppPersistence {
     static let activeCMSProvidersProbedAt = "activeCMSProvidersProbedAt"
     static let activeCMSProvidersAdult = "activeCMSProvidersAdult"
     static let activeCMSProvidersAdultProbedAt = "activeCMSProvidersAdultProbedAt"
+    static let aiEnhancementEnabled = "aiEnhancementEnabled"
+    static let simulatorDeepSeekAPIKey = "simulatorDeepSeekAPIKey"
+    static let recoveredPosterURLs = "recoveredPosterURLs"
   }
 
   private let defaults = UserDefaults.standard
@@ -58,6 +61,7 @@ final class AppPersistence {
   private let configurationURL: URL
   private let liveGroupsCacheURL: URL
   private let browseCategoryCacheURL: URL
+  private let aiCacheURL: URL
 
   /// Disk snapshot of browse category lists (incl. Douban-ordered first screens).
   struct BrowseCategoryCacheFile: Codable, Sendable {
@@ -83,6 +87,113 @@ final class AppPersistence {
     liveGroupsCacheURL = directory.appending(path: "live-groups-cache.json")
     // v2: discard cached CMS data produced by the broken /upload/ host rewrite.
     browseCategoryCacheURL = directory.appending(path: "browse-category-cache-v2.json")
+    aiCacheURL = directory.appending(path: "deepseek-title-assist-v1.json")
+  }
+
+  var deepSeekCacheURL: URL { aiCacheURL }
+
+  var aiEnhancementEnabled: Bool {
+    defaults.bool(forKey: Key.aiEnhancementEnabled)
+  }
+
+  func saveAIEnhancementEnabled(_ value: Bool) {
+    defaults.set(value, forKey: Key.aiEnhancementEnabled)
+  }
+
+  func loadDeepSeekAPIKey() throws -> String? {
+    var query = aiBaseQuery
+    query[kSecReturnData as String] = true
+    query[kSecMatchLimit as String] = kSecMatchLimitOne
+    var result: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &result)
+    if status == errSecItemNotFound {
+      return nil
+    }
+    if status == errSecMissingEntitlement {
+      #if targetEnvironment(simulator)
+        return defaults.string(forKey: Key.simulatorDeepSeekAPIKey)
+      #endif
+    }
+    guard status == errSecSuccess, let data = result as? Data,
+      let value = String(data: data, encoding: .utf8)
+    else {
+      NSLog("Firepick DeepSeek Keychain read failed: %d", status)
+      throw PersistenceError.keychain(status)
+    }
+    return value
+  }
+
+  func saveDeepSeekAPIKey(_ value: String) throws {
+    let data = Data(value.utf8)
+    SecItemDelete(aiBaseQuery as CFDictionary)
+    var query = aiBaseQuery
+    query[kSecValueData as String] = data
+    query[kSecAttrAccessible as String] =
+      kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    let status = SecItemAdd(query as CFDictionary, nil)
+    if status == errSecMissingEntitlement {
+      #if targetEnvironment(simulator)
+        defaults.set(value, forKey: Key.simulatorDeepSeekAPIKey)
+        return
+      #endif
+    }
+    guard status == errSecSuccess else {
+      NSLog("Firepick DeepSeek Keychain write failed: %d", status)
+      throw PersistenceError.keychain(status)
+    }
+  }
+
+  func clearDeepSeekAPIKey() {
+    SecItemDelete(aiBaseQuery as CFDictionary)
+    defaults.removeObject(forKey: Key.simulatorDeepSeekAPIKey)
+  }
+
+  func clearDeepSeekCache() {
+    try? fileManager.removeItem(at: aiCacheURL)
+  }
+
+  func loadRecoveredPosterURLs() -> [String: String] {
+    let records = loadRecoveredPosterRecords()
+    let cutoff = Date().addingTimeInterval(-30 * 24 * 60 * 60)
+    let valid = records.filter { $0.value.savedAt >= cutoff }
+    if valid.count != records.count {
+      saveRecoveredPosterRecords(valid)
+    }
+    return valid.mapValues(\.url)
+  }
+
+  func saveRecoveredPosterURL(_ value: String, for key: String) {
+    var values = loadRecoveredPosterRecords()
+    values[key] = RecoveredPosterRecord(url: value, savedAt: Date())
+    saveRecoveredPosterRecords(values)
+  }
+
+  func removeRecoveredPosterURL(for key: String) {
+    var values = loadRecoveredPosterRecords()
+    values.removeValue(forKey: key)
+    saveRecoveredPosterRecords(values)
+  }
+
+  private struct RecoveredPosterRecord: Codable {
+    var url: String
+    var savedAt: Date
+  }
+
+  private func loadRecoveredPosterRecords() -> [String: RecoveredPosterRecord] {
+    guard let data = defaults.data(forKey: Key.recoveredPosterURLs),
+      let records = try? JSONDecoder().decode(
+        [String: RecoveredPosterRecord].self,
+        from: data
+      )
+    else { return [:] }
+    return records
+  }
+
+  private func saveRecoveredPosterRecords(
+    _ records: [String: RecoveredPosterRecord]
+  ) {
+    guard let data = try? JSONEncoder().encode(records) else { return }
+    defaults.set(data, forKey: Key.recoveredPosterURLs)
   }
 
   var configurationData: Data? {
@@ -578,6 +689,14 @@ final class AppPersistence {
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: "com.firepick.app.bridge",
       kSecAttrAccount as String: "default",
+    ]
+  }
+
+  private var aiBaseQuery: [String: Any] {
+    [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: "com.firepick.app.ai",
+      kSecAttrAccount as String: "deepseek",
     ]
   }
 }
