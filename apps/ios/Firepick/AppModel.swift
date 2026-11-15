@@ -6,6 +6,34 @@ import Foundation
 import Network
 import Observation
 
+private actor PosterRepairGate {
+  private let limit: Int
+  private var active = 0
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  init(limit: Int) {
+    self.limit = max(1, limit)
+  }
+
+  func acquire() async {
+    if active < limit {
+      active += 1
+      return
+    }
+    await withCheckedContinuation { continuation in
+      waiters.append(continuation)
+    }
+  }
+
+  func release() {
+    if waiters.isEmpty {
+      active = max(0, active - 1)
+    } else {
+      waiters.removeFirst().resume()
+    }
+  }
+}
+
 struct SourceConnection: Codable, Identifiable, Equatable {
   var url: String
   var name: String
@@ -289,6 +317,10 @@ final class AppModel {
   private var categoryPageByKey: [String: Int] = [:]
   private var prefetchTask: Task<Void, Never>?
   private var cacheSizeTask: Task<Void, Never>?
+  private let posterRepairGate = PosterRepairGate(limit: 2)
+  private var posterRepairTasks: [String: Task<[URL], Never>] = [:]
+  private var posterRepairCache: [String: [URL]] = [:]
+  private var posterRepairMisses: [String: Date] = [:]
   private var liveRefreshTask: Task<[LiveGroup], Never>?
   private var liveLoadGeneration = 0
   private var activeLiveCacheDigest = ""
@@ -1093,6 +1125,141 @@ final class AppModel {
   /// Persist a healthier cover into history/favorites when the stored CDN is dead.
   func itemWithHealthierPoster(_ item: MediaItem) -> MediaItem {
     libraryDisplayItem(from: item)
+  }
+
+  /// Last-resort cover repair after every image for the current row failed.
+  /// Searches the current source and up to two other on-device sources, then
+  /// returns strict title/year matches ordered by cover-host health.
+  func alternativePosterURLs(for item: MediaItem) async -> [URL] {
+    let key = Self.posterRepairKey(for: item)
+    guard !key.isEmpty else { return [] }
+    if let cached = posterRepairCache[key] {
+      return cached
+    }
+    if let missedAt = posterRepairMisses[key] {
+      if Date().timeIntervalSince(missedAt) < 10 * 60 {
+        return []
+      }
+      posterRepairMisses.removeValue(forKey: key)
+    }
+    if let task = posterRepairTasks[key] {
+      return await task.value
+    }
+
+    let task = Task<[URL], Never> { [weak self] in
+      guard let self else { return [] }
+      await self.posterRepairGate.acquire()
+      let urls = await self.searchAlternativePosterURLs(for: item)
+      await self.posterRepairGate.release()
+      return urls
+    }
+    posterRepairTasks[key] = task
+    let urls = await task.value
+    posterRepairTasks.removeValue(forKey: key)
+    if urls.isEmpty {
+      posterRepairMisses[key] = Date()
+    } else {
+      posterRepairCache[key] = urls
+    }
+    return urls
+  }
+
+  private func searchAlternativePosterURLs(for item: MediaItem) async -> [URL] {
+    let preferredKey = item.sourceKey ?? selectedSite?.key
+    var sites: [SiteConfiguration] = []
+    var seen = Set<String>()
+    let ordered =
+      onDeviceSites.filter { $0.key == preferredKey }
+      + onDeviceSites.filter { $0.key == "firepick_cms" && $0.key != preferredKey }
+      + onDeviceSites.filter { $0.key != preferredKey && $0.key != "firepick_cms" }
+    for site in ordered where seen.insert(site.key).inserted {
+      var searchable = site
+      searchable.searchable = 1
+      searchable.quickSearch = 1
+      sites.append(searchable)
+      if sites.count == 3 { break }
+    }
+    guard !sites.isEmpty else { return [] }
+    if coordinator == nil {
+      coordinator = makeCoordinator(client: bridgeClient)
+    }
+    guard let coordinator else { return [] }
+
+    let results = await coordinator.search(
+      sites: sites,
+      keyword: item.name,
+      quick: false,
+      timeout: .seconds(6),
+      maxConcurrent: 3
+    )
+    let currentURL = item.pic
+      .flatMap { RemoteImageCache.normalizedURL(from: $0) }
+      .map { $0.absoluteString.lowercased() }
+    var ranked: [(url: URL, score: Int)] = []
+    var seenURLs = Set<String>()
+    for result in results.values {
+      guard case .success(let media) = result else { continue }
+      for candidate in media.list {
+        guard
+          let titleScore = Self.posterTitleMatchScore(
+            target: item,
+            candidate: candidate
+          ),
+          let raw = candidate.pic,
+          let url = RemoteImageCache.normalizedURL(from: raw)
+        else { continue }
+        let absolute = url.absoluteString
+        guard absolute.lowercased() != currentURL,
+          seenURLs.insert(absolute).inserted
+        else { continue }
+        let hostScore = Self.posterHealthScore(absolute)
+        ranked.append((url, titleScore - hostScore))
+      }
+    }
+    return Array(ranked.sorted { $0.score < $1.score }.prefix(5).map(\.url))
+  }
+
+  private static func posterRepairKey(for item: MediaItem) -> String {
+    let title = normalizedTitle(item.name)
+    guard !title.isEmpty else { return "" }
+    let year = item.year?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return "\(title)|\(year)"
+  }
+
+  /// Exact and edition-family titles only. Different years are rejected when
+  /// both rows provide them, avoiding same-name remake posters.
+  private static func posterTitleMatchScore(
+    target: MediaItem,
+    candidate: MediaItem
+  ) -> Int? {
+    let targetTitle = normalizedTitle(target.name)
+    let candidateTitle = normalizedTitle(candidate.name)
+    guard !targetTitle.isEmpty, !candidateTitle.isEmpty else { return nil }
+
+    let base: Int
+    if candidateTitle == targetTitle {
+      base = 0
+    } else if coverFamilyKey(candidate.name) == coverFamilyKey(target.name) {
+      base = 20
+    } else {
+      return nil
+    }
+
+    let targetYear = normalizedYear(target.year)
+    let candidateYear = normalizedYear(candidate.year)
+    if let targetYear, let candidateYear {
+      guard targetYear == candidateYear else { return nil }
+    } else if targetYear != nil {
+      return base + 5
+    }
+    return base
+  }
+
+  private static func normalizedYear(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let matches = value.matches(of: /\d{4}/)
+    guard let first = matches.first else { return nil }
+    return String(first.output)
   }
 
   private func healthierPoster(for item: MediaItem) -> String? {

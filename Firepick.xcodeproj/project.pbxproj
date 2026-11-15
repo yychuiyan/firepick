@@ -30,6 +30,7 @@
 		6AAAE625EA55B2029E96C868 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F681642E64727908F3D814 /* RootView.swift */; };
 		6DCAA6E4EEB68FB484294C7B /* AddConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C35B16A94D7AA26325664D11 /* AddConnectionView.swift */; };
 		6E52C53515C87FAAD5CE1D6B /* AppPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77048C5D133AC644C55D1DFA /* AppPersistence.swift */; };
+		7CBDDC1842047AD3615CCA84 /* DefaultPosterArtwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7728D90D37F11FEA65FC22B5 /* DefaultPosterArtwork.swift */; };
 		7EFE794F4C6AF4246CBB00C1 /* ProvisioningExpiryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4676A26293D75A95757D4A8C /* ProvisioningExpiryView.swift */; };
 		8ED4F4BF9811684D667A99AB /* DanmakuSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68964CAC4A11B003ADE5EF23 /* DanmakuSettingsView.swift */; };
 		8FDDEAE7CE94E79DD0336FA4 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15F1A48D7B7D4F18CD3B72E0 /* SettingsView.swift */; };
@@ -68,6 +69,7 @@
 		6BC21A200FE9C9BFD4788016 /* MediaCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaCardView.swift; sourceTree = "<group>"; };
 		6FDE13CAB540B13E2B4F2A9E /* LivePlaybackShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePlaybackShell.swift; sourceTree = "<group>"; };
 		77048C5D133AC644C55D1DFA /* AppPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPersistence.swift; sourceTree = "<group>"; };
+		7728D90D37F11FEA65FC22B5 /* DefaultPosterArtwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultPosterArtwork.swift; sourceTree = "<group>"; };
 		7E005EBC553012053DA2B5A3 /* ErrorBannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorBannerView.swift; sourceTree = "<group>"; };
 		8445B9D7C5CEFB67C6D3AED3 /* FirepickKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = FirepickKit; path = Packages/FirepickKit; sourceTree = SOURCE_ROOT; };
 		8673FB9E8206EB91065D0EA7 /* TabBarChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarChrome.swift; sourceTree = "<group>"; };
@@ -151,6 +153,7 @@
 				95ED5FFE00DFDB9AD9DB5FCB /* ConfigurationManagementView.swift */,
 				EA39056A48812EA9CFFA470E /* ConnectionDetailView.swift */,
 				68964CAC4A11B003ADE5EF23 /* DanmakuSettingsView.swift */,
+				7728D90D37F11FEA65FC22B5 /* DefaultPosterArtwork.swift */,
 				39D426E5BF64F85D713A6F25 /* DetailView.swift */,
 				41AC6E1084DB23277EA497FF /* DLNACastView.swift */,
 				7E005EBC553012053DA2B5A3 /* ErrorBannerView.swift */,
@@ -283,6 +286,7 @@
 				5557EA796FAB927080A9F546 /* ConnectionDetailView.swift in Sources */,
 				B65DEC177A516442A1C7236A /* DLNACastView.swift in Sources */,
 				8ED4F4BF9811684D667A99AB /* DanmakuSettingsView.swift in Sources */,
+				7CBDDC1842047AD3615CCA84 /* DefaultPosterArtwork.swift in Sources */,
 				088AD96810B59C6A1F9B6E6E /* DetailView.swift in Sources */,
 				BA452F0F6A1170B74F93D428 /* ErrorBannerView.swift in Sources */,
 				0B3CD1CE5CBFBA4990B72433 /* FirepickApp.swift in Sources */,

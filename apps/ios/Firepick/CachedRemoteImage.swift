@@ -612,22 +612,35 @@ private extension UIImage {
 struct CachedRemoteImage<Placeholder: View>: View {
   let url: URL?
   var maxPixelSize: CGFloat = 720
+  /// Called only after the normal mirror/Referer/fallback passes fail.
+  var alternativeURLs: (() async -> [URL])? = nil
+  /// Shown after both the original pipeline and cross-source repair fail.
+  var failureArtwork: AnyView? = nil
   @ViewBuilder var placeholder: () -> Placeholder
 
   @State private var image: UIImage?
   @State private var failed = false
   @State private var reloadToken = 0
+  @State private var didResolveAlternatives = false
 
   var body: some View {
     Group {
       if let image = displayedImage {
         Image(uiImage: image)
           .resizable()
-      } else if failed {
-        placeholder()
-          .overlay {
+      } else if showsFailureSurface {
+        Group {
+          if let failureArtwork {
+            failureArtwork
+          } else {
+            placeholder()
+          }
+        }
+        .overlay {
+          if failed || url != nil {
             Button {
               failed = false
+              didResolveAlternatives = false
               reloadToken += 1
             } label: {
               Image(systemName: "arrow.clockwise")
@@ -638,6 +651,7 @@ struct CachedRemoteImage<Placeholder: View>: View {
             }
             .buttonStyle(.plain)
           }
+        }
       } else {
         placeholder()
       }
@@ -645,6 +659,7 @@ struct CachedRemoteImage<Placeholder: View>: View {
     .onChange(of: url?.absoluteString) { _, _ in
       image = nil
       failed = false
+      didResolveAlternatives = false
     }
     .onAppear {
       // Flaky CMS CDNs often succeed on a later pass once the gate frees up.
@@ -665,10 +680,22 @@ struct CachedRemoteImage<Placeholder: View>: View {
     return RemoteImageCache.memoryImage(for: url, maxPixelSize: maxPixelSize)
   }
 
+  private var showsFailureSurface: Bool {
+    failed || (url == nil && failureArtwork != nil)
+  }
+
   private func load() async {
     guard let url else {
-      image = nil
-      failed = false
+      if !didResolveAlternatives, let alternativeURLs {
+        didResolveAlternatives = true
+        if let repaired = await firstAvailableAlternative(from: await alternativeURLs()) {
+          image = repaired
+          failed = false
+        } else {
+          image = nil
+          failed = true
+        }
+      }
       return
     }
     if let cached = RemoteImageCache.memoryImage(for: url, maxPixelSize: maxPixelSize) {
@@ -705,5 +732,28 @@ struct CachedRemoteImage<Placeholder: View>: View {
         failed = false
       }
     }
+    if failed, !didResolveAlternatives, let alternativeURLs {
+      didResolveAlternatives = true
+      if let repaired = await firstAvailableAlternative(from: await alternativeURLs()) {
+        let key = RemoteImageCache.cacheKey(for: url, maxPixelSize: maxPixelSize)
+        RemoteImageCache.storeMemory(repaired, for: key)
+        RemoteImageCache.queueDiskWrite(repaired, for: key)
+        image = repaired
+        failed = false
+      }
+    }
+  }
+
+  private func firstAvailableAlternative(from candidates: [URL]) async -> UIImage? {
+    for candidate in candidates {
+      guard !Task.isCancelled else { return nil }
+      if let repaired = await RemoteImagePipeline.shared.image(
+        for: candidate,
+        maxPixelSize: maxPixelSize
+      ) {
+        return repaired
+      }
+    }
+    return nil
   }
 }

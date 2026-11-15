@@ -3,6 +3,7 @@ import SwiftUI
 
 /// Poster card: tag top-leading, score top-trailing, title under the poster.
 struct MediaCardView: View {
+  @Environment(AppModel.self) private var model
   let item: MediaItem
   var progress: Double? = nil
   var subtitle: String? = nil
@@ -41,7 +42,13 @@ struct MediaCardView: View {
     Color.clear
       .modifier(PosterSizeModifier(height: compactPosterHeight, ratio: posterRatio))
       .overlay {
-        CachedRemoteImage(url: RemoteImageCache.normalizedURL(from: item.pic)) {
+        CachedRemoteImage(
+          url: RemoteImageCache.normalizedURL(from: item.pic),
+          alternativeURLs: {
+            await model.alternativePosterURLs(for: item)
+          },
+          failureArtwork: AnyView(DefaultPosterArtwork())
+        ) {
           Color.black.opacity(0.12)
             .shimmering()
         }
