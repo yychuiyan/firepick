@@ -19,9 +19,9 @@
 当前公开发布版本：
 
 ```text
-Version: 0.1.31
-Build:   32
-SHA-256: 2263dd953ed6e4ca08cc2f254a34d292a23ac0d8ff7afad4f7a0fb6973074941
+Version: 0.1.32
+Build:   33
+SHA-256: 18bd3ed23f992c028ef279b72229bd7932f2c9dd142d42e53394b8167d47e521
 ```
 
 SideStore 更新源：
@@ -33,7 +33,7 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 当前 IPA 下载地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/Firepick-0.1.31.ipa
+https://dl.yychuiyan.com/firepick/Firepick-0.1.32.ipa
 ```
 
 ## 功能概览
@@ -205,7 +205,7 @@ make bootstrap
 make test
 ```
 
-当前基线为 65 项测试、15 个 suite 全部通过。
+当前基线为 72 项测试、17 个 suite 全部通过。
 
 生成 Xcode 工程：
 
