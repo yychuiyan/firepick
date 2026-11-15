@@ -212,7 +212,10 @@ jobs:
               --CertificateType SVR
           )"
           printf '%s\n' "$upload_response"
-          certificate_id="$(jq -er '.Response.CertificateId' <<<"$upload_response")"
+          certificate_id="$(
+            jq -er '.CertificateId // .Response.CertificateId' \
+              <<<"$upload_response"
+          )"
 
           deploy_response="$(
             tccli ssl DeployCertificateInstance \
@@ -221,7 +224,10 @@ jobs:
               --ResourceType cdn
           )"
           printf '%s\n' "$deploy_response"
-          deploy_record_id="$(jq -er '.Response.DeployRecordId' <<<"$deploy_response")"
+          deploy_record_id="$(
+            jq -er '.DeployRecordId // .Response.DeployRecordId' \
+              <<<"$deploy_response"
+          )"
 
           echo "certificate_id=$certificate_id" >> "$GITHUB_STEP_SUMMARY"
           echo "deploy_record_id=$deploy_record_id" >> "$GITHUB_STEP_SUMMARY"
