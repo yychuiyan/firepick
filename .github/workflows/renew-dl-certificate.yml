@@ -22,6 +22,7 @@ concurrency:
 
 env:
   DOMAIN: dl.yychuiyan.com
+  ZONE_NAME: yychuiyan.com
   TENCENT_REGION: ap-shanghai
   ACME_EMAIL: firepick@yychuiyan.com
 
@@ -77,6 +78,45 @@ jobs:
             "$RUNNER_TEMP/acme.sh"
           git -C "$RUNNER_TEMP/acme.sh" checkout \
             7e87a310fda61afe92e3db6ac29f81efdf53b8c0
+
+      - name: Verify Cloudflare token and resolve zone
+        if: steps.expiry.outputs.renew == 'true'
+        shell: bash
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          : "${CF_API_TOKEN:?Missing GitHub secret CLOUDFLARE_API_TOKEN}"
+          api="https://api.cloudflare.com/client/v4"
+          auth_header="Authorization: Bearer ${CF_API_TOKEN}"
+
+          verification="$(
+            curl --fail-with-body --silent --show-error \
+              -H "$auth_header" \
+              "$api/user/tokens/verify"
+          )"
+          if ! jq -e '.success == true and .result.status == "active"' \
+            <<<"$verification" >/dev/null; then
+            jq '{success, errors, messages, result}' <<<"$verification" >&2
+            exit 1
+          fi
+
+          zones="$(
+            curl --fail-with-body --silent --show-error \
+              -H "$auth_header" \
+              --get --data-urlencode "name=${ZONE_NAME}" \
+              "$api/zones"
+          )"
+          zone_id="$(
+            jq -er \
+              'if .success == true and (.result | length) == 1
+               then .result[0].id
+               else error("Cloudflare zone lookup failed")
+               end' \
+              <<<"$zones"
+          )"
+          echo "Cloudflare token active; zone ${ZONE_NAME} resolved."
+          echo "CF_Zone_ID=$zone_id" >> "$GITHUB_ENV"
 
       - name: Issue Let's Encrypt certificate
         if: steps.expiry.outputs.renew == 'true'
