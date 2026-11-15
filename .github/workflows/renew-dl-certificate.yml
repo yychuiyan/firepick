@@ -23,6 +23,7 @@ concurrency:
 env:
   DOMAIN: dl.yychuiyan.com
   TENCENT_REGION: ap-shanghai
+  ACME_EMAIL: firepick@yychuiyan.com
 
 jobs:
   renew:
@@ -88,12 +89,17 @@ jobs:
           ACME="$RUNNER_TEMP/acme.sh/acme.sh"
           ACME_HOME="$RUNNER_TEMP/acme-home"
           CERT_DIR="$RUNNER_TEMP/firepick-cert"
-          mkdir -p "$CERT_DIR"
+          mkdir -p "$ACME_HOME" "$CERT_DIR"
 
           "$ACME" --home "$ACME_HOME" \
             --set-default-ca --server letsencrypt
           "$ACME" --home "$ACME_HOME" \
+            --register-account \
+            --server letsencrypt \
+            --email "$ACME_EMAIL"
+          "$ACME" --home "$ACME_HOME" \
             --issue \
+            --server letsencrypt \
             --dns dns_cf \
             --domain "$DOMAIN" \
             --keylength 2048 \
