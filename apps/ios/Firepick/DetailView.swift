@@ -21,6 +21,7 @@ struct DetailView: View {
   @State private var isPlayerExpanded = false
   /// Frozen playable 来源 order (sorted once on enter). nil = still probing silently.
   @State private var orderedPlayableStations: [AppModel.CollectionStation]?
+  @State private var probedStreamProfiles: [String: AppModel.ProviderStreamProbe] = [:]
   /// Stations dropped after unplayable / stuck — survives until probe finishes.
   @State private var droppedProviderKeys: Set<String> = []
   /// One soft recycle when every station was dropped — avoids sticky「暂无可用」.
@@ -31,6 +32,10 @@ struct DetailView: View {
   @State private var userLockedSource = false
   /// User scrubbed / mid-watch — stop silent 换站 thrashing.
   @State private var playbackSettled = false
+  /// Once any real frame appears, background optimization must never switch stations.
+  @State private var hasShownVideoFrame = false
+  /// Post-frame stalls may move to another station, but never in a tight loop.
+  @State private var stallFailoverCount = 0
   @State private var lastPlaybackTime: Double = 0
   @State private var sourceSwitchHandoff: (position: Double, episodeName: String?)?
   @State private var isSwitchingSource = false
@@ -182,10 +187,12 @@ struct DetailView: View {
       didRecyclePlayableStations = false
       didSilentRefineStations = false
       playbackSettled = false
+      hasShownVideoFrame = false
+      stallFailoverCount = 0
       orderedPlayableStations = nil
+      probedStreamProfiles = [:]
       // Seed from 采集站管理 current best pool immediately — don't wait on re-probe.
       seedPlayableStationsFromBestPool()
-      async let bestThenStations: Void = refreshBestStationsAndUpgrade()
       await model.loadDetail(currentItem)
       if let name = focusEpisodeName, let match = matchEpisode(named: name) {
         selectedFlag = match.line.name
@@ -194,12 +201,14 @@ struct DetailView: View {
       }
       // Prefer the management-page best node for first paint when different.
       if playback == nil, !lines.isEmpty {
+        // Resolve the best station before the first playback request. Starting
+        // the current line first caused a second load a few seconds later.
+        await preparePlayableStationsIfNeeded(forceRebuild: true)
         let started = await autoSelectOptimalSourceIfNeeded()
         if !started {
           await playPrimary()
         }
       }
-      await bestThenStations
     }
     .onChange(of: selectedFlag) { oldFlag, flag in
       guard let flag else { return }
@@ -271,10 +280,25 @@ struct DetailView: View {
           if time >= 5 { playbackSettled = true }
           lastPlaybackTime = time
         },
+        onPlaybackReady: {
+          hasShownVideoFrame = true
+          playbackSettled = true
+        },
+        onStalled: {
+          failoverAfterStall()
+        },
+        onWatermarkAdDetected: {
+          model.markWatermarkAdProvider(playbackProviderKey)
+        },
+        onPlaybackQualityMeasured: { height in
+          model.recordProviderPlaybackQuality(playbackProviderKey, height: height)
+        },
         onUnplayable: {
           guard let key = playbackProviderKey else { return false }
           // Mid-watch / after scrub: never cascade 换站 (was black + progress→0).
-          if playbackSettled || lastPlaybackTime >= 8 || userLockedSource {
+          if hasShownVideoFrame || playbackSettled || lastPlaybackTime >= 8
+            || userLockedSource
+          {
             return false
           }
           userLockedSource = false
@@ -552,24 +576,6 @@ struct DetailView: View {
     }
   }
 
-  /// Background 获取最佳线路；仅在开播很早且用户未拖动时才静默换站。
-  private func refreshBestStationsAndUpgrade() async {
-    seedPlayableStationsFromBestPool()
-    // Rank by cached latency + title hits; skip if user already scrubbed / watching.
-    if !playbackSettled, lastPlaybackTime < 5 {
-      await preparePlayableStationsIfNeeded(forceRebuild: true)
-      _ = await autoSelectOptimalSourceIfNeeded()
-    }
-    guard model.configuration.sites.contains(where: { $0.key == "firepick_cms" }) else {
-      return
-    }
-    // Silent re-detect in background — updates pool for next entry; upgrade only if still early.
-    await model.ensureBestCMSLinesOnEnter(maxAge: 10 * 60)
-    guard !playbackSettled, !userLockedSource, lastPlaybackTime < 5 else { return }
-    await preparePlayableStationsIfNeeded(forceRebuild: true)
-    _ = await autoSelectOptimalSourceIfNeeded()
-  }
-
   /// Probe title hits + latency + episode completeness, then freeze playable list
   /// (完整最新集/期优先，同档再按延迟：最快的为默认最优).
   private func preparePlayableStationsIfNeeded(forceRebuild: Bool = false) async {
@@ -622,6 +628,26 @@ struct DetailView: View {
     }
     // Sort by latency once (fastest first); unknown latency last. Never reshuffle later.
     let ranked = complete.sorted { a, b in
+      let aAd = model.hasWatermarkAdProvider(stationProviderKey(a))
+      let bAd = model.hasWatermarkAdProvider(stationProviderKey(b))
+      if aAd != bAd { return !aAd }
+      let aKey = stationProviderKey(a)
+      let bKey = stationProviderKey(b)
+      let aQuality = probedStreamProfiles[aKey]?.quality
+      let bQuality = probedStreamProfiles[bKey]?.quality
+      let aq = model.providerQualityRank(
+        aKey,
+        measuredHeight: aQuality.map { min($0.width, $0.height) } ?? 0,
+        measuredBandwidth: aQuality?.bandwidth ?? 0
+      )
+      let bq = model.providerQualityRank(
+        bKey,
+        measuredHeight: bQuality.map { min($0.width, $0.height) } ?? 0,
+        measuredBandwidth: bQuality?.bandwidth ?? 0
+      )
+      if aq.tier != bq.tier { return aq.tier > bq.tier }
+      if aq.reliability != bq.reliability { return aq.reliability > bq.reliability }
+      if aq.bandwidth != bq.bandwidth { return aq.bandwidth > bq.bandwidth }
       let ma = model.collectionStationLatencyMS[a.id]
       let mb = model.collectionStationLatencyMS[b.id]
       switch (ma, mb) {
@@ -660,16 +686,25 @@ struct DetailView: View {
       default: return false
       }
     }
-    let keys = ranked.map(stationProviderKey).filter { counts[$0] == nil }.prefix(8)
-    await withTaskGroup(of: (String, Int).self) { group in
-      for key in keys {
+    let keys = Array(ranked.map(stationProviderKey).filter { counts[$0] == nil }.prefix(8))
+    let preferredEpisodeName = focusEpisodeName ?? playbackEpisode?.name
+    await withTaskGroup(of: (String, AppModel.ProviderStreamProbe).self) { group in
+      for (index, key) in keys.enumerated() {
         group.addTask {
-          let n = await model.detailEpisodeCount(title: title, providerKey: key)
-          return (key, n)
+          let probe = await model.providerStreamProbe(
+            title: title,
+            providerKey: key,
+            preferredEpisodeName: preferredEpisodeName,
+            inspectQuality: index < 4
+          )
+          return (key, probe)
         }
       }
-      for await (key, n) in group {
-        counts[key] = n
+      for await (key, probe) in group {
+        counts[key] = probe.episodeCount
+        if probe.quality != nil {
+          probedStreamProfiles[key] = probe
+        }
       }
     }
     return counts
@@ -684,7 +719,9 @@ struct DetailView: View {
       playbackSettled = false
     }
     // Once watching / scrubbed — never silent-upgrade (resets progress + black loading).
-    if !force, playbackSettled || (playback != nil && lastPlaybackTime >= 5) {
+    if !force, hasShownVideoFrame || playbackSettled
+      || (playback != nil && lastPlaybackTime >= 5)
+    {
       return false
     }
     guard let stations = orderedPlayableStations, let best = stations.first else { return false }
@@ -696,8 +733,9 @@ struct DetailView: View {
 
   @discardableResult
   private func failoverToNextStation(from failedKey: String) -> Bool {
+    model.recordProviderPlaybackStall(failedKey)
     // Mid-watch: don't cascade stations after a stall / seek.
-    if playbackSettled || lastPlaybackTime >= 8 {
+    if hasShownVideoFrame || playbackSettled || lastPlaybackTime >= 8 {
       dropUnplayableStation(failedKey)
       return false
     }
@@ -733,6 +771,7 @@ struct DetailView: View {
       orderedPlayableStations = nil
       Task {
         await preparePlayableStationsIfNeeded()
+        guard !hasShownVideoFrame, !playbackSettled else { return }
         if let next = orderedPlayableStations?.first(where: {
           stationProviderKey($0) != failedKey
         }) ?? orderedPlayableStations?.first {
@@ -755,9 +794,34 @@ struct DetailView: View {
     return false
   }
 
+  /// Real post-frame stall: move to the next ranked station, at most twice per episode.
+  private func failoverAfterStall() -> Bool {
+    guard stallFailoverCount < 2, let failedKey = playbackProviderKey else {
+      return false
+    }
+    model.recordProviderPlaybackStall(failedKey)
+    dropUnplayableStation(failedKey)
+    let candidates = orderedPlayableStations ?? model.collectionStations
+    guard let next = candidates.first(where: {
+      let key = stationProviderKey($0)
+      return key != failedKey && !droppedProviderKeys.contains(key)
+    }) else {
+      return false
+    }
+    stallFailoverCount += 1
+    Task {
+      await switchCollectionStation(
+        stationProviderKey(next),
+        silent: true,
+        userInitiated: false
+      )
+    }
+    return true
+  }
+
   /// Background 测速淘金 + rebuild playable order, then switch to the new best station.
   private func silentlyRefineBestStations(excluding failedKey: String) async {
-    guard !didSilentRefineStations else { return }
+    guard !didSilentRefineStations, !hasShownVideoFrame else { return }
     didSilentRefineStations = true
     // Already mid-watch — refresh badges only, don't interrupt playback.
     if playbackSettled || lastPlaybackTime >= 8 {
@@ -834,13 +898,10 @@ struct DetailView: View {
     return playbackSourceName
   }
 
-  /// Douban score only (product rule); fall back to site score when Douban is empty.
+  /// Strict Douban score only; CMS scores are not presented as Douban ratings.
   private var displayScore: String? {
     if let douban = detail.doubanScore, douban > 0 {
       return String(format: "%.1f", douban)
-    }
-    if let score = detail.score, score > 0 {
-      return String(format: "%.1f", score)
     }
     return nil
   }
@@ -1110,28 +1171,30 @@ struct DetailView: View {
   }
 
   private var focusedEpisodeScrollID: String? {
-    if let focusEpisodeName,
-      displayedEpisodes.contains(where: { $0.name == focusEpisodeName })
-    {
-      return focusEpisodeName
-    }
     if let playbackEpisode,
-      displayedEpisodes.contains(where: { $0.name == playbackEpisode.name })
+      let match = displayedEpisodes.first(where: { $0.value == playbackEpisode.value })
     {
-      return playbackEpisode.name
+      return match.id
+    }
+    if let focusEpisodeName,
+      let match = displayedEpisodes.first(where: { $0.name == focusEpisodeName })
+    {
+      return match.id
     }
     if let value = focusedEpisodeValue,
       let match = displayedEpisodes.first(where: { $0.value == value })
     {
-      return match.name
+      return match.id
     }
-    return displayedEpisodes.first?.name
+    return nil
   }
 
   private func scrollToFocusedEpisode(using proxy: ScrollViewProxy) {
     guard !didScrollToHistory, let focusID = focusedEpisodeScrollID else { return }
     didScrollToHistory = true
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+    Task { @MainActor in
+      // Wait for the sheet detent + LazyVGrid to finish their first layout.
+      try? await Task.sleep(for: .milliseconds(350))
       withAnimation(.easeInOut(duration: 0.25)) {
         proxy.scrollTo(focusID, anchor: .center)
       }
@@ -1424,6 +1487,10 @@ struct DetailView: View {
       previousEpisodeName != nil && previousEpisodeName != episode.name
     if episodeChanged {
       userLockedSource = false
+      playbackSettled = false
+      hasShownVideoFrame = false
+      stallFailoverCount = 0
+      lastPlaybackTime = 0
     }
 
     do {

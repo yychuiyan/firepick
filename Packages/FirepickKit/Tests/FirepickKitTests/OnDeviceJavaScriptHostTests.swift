@@ -263,9 +263,144 @@ struct OnDeviceJavaScriptHostTests {
     await host.destroy()
   }
 
+  @Test
+  func firepickAggregatorCompletelyBlocksAdultProvidersInStandardMode() async throws {
+    let normalPayload = #"""
+      {
+        "class": [
+          {"type_id": "1", "type_name": "电影"},
+          {"type_id": "2", "type_name": "无码专区"}
+        ],
+        "list": [
+          {"vod_id": "1", "vod_name": "普通电影", "type_id": "1", "type_name": "电影"},
+          {"vod_id": "2", "vod_name": "成人测试", "type_id": "2", "type_name": "无码专区"}
+        ]
+      }
+      """#
+    let adultPayload = #"""
+      {
+        "class": [
+          {"type_id": "1", "type_name": "电影"},
+          {"type_id": "2", "type_name": "无码专区"},
+          {"type_id": "3", "type_name": "国产自拍"},
+          {"type_id": "4", "type_name": "网红主播"}
+        ],
+        "list": [
+          {
+            "vod_id": "3",
+            "vod_name": "成人测试",
+            "vod_class": "无码专区",
+            "type_id": "1",
+            "type_name": "电影"
+          },
+          {
+            "vod_id": "4",
+            "vod_name": "自拍测试",
+            "vod_class": "国产自拍",
+            "type_id": "3",
+            "type_name": "国产自拍"
+          },
+          {
+            "vod_id": "5",
+            "vod_name": "主播测试",
+            "vod_class": "网红主播",
+            "type_id": "4",
+            "type_name": "网红主播"
+          }
+        ]
+      }
+      """#
+    let session = try Self.makeSession(
+      routes: ["/normal": normalPayload, "/adult": adultPayload]
+    )
+    let host = OnDeviceJavaScriptHost(session: session)
+    let api = "https://dl.yychuiyan.com/firepick/firepick-cms.js?v=21"
+
+    func ext(adultMode: Bool) -> JSONValue {
+      .object([
+        "adultMode": .bool(adultMode),
+        "providers": .array([
+          .object([
+            "key": .string("normal"),
+            "name": .string("普通"),
+            "api": .string("https://fixture.local/normal"),
+            "adult": .bool(false),
+          ]),
+          .object([
+            "key": .string("adult"),
+            "name": .string("成人"),
+            "api": .string("https://fixture.local/adult"),
+            "adult": .bool(true),
+          ]),
+        ]),
+      ])
+    }
+
+    let standard = try await host.invoke(
+      api: api,
+      ext: ext(adultMode: false),
+      method: .homeContent,
+      arguments: [.bool(false)]
+    )
+    #expect(!JSFixtureURLProtocol.requestedPaths.contains("/adult"))
+    #expect(standard.list.contains { $0.name == "普通电影" })
+    #expect(!standard.list.contains { $0.name == "成人测试" })
+    #expect(!standard.classes.contains { $0.typeId == "bucket|adult" })
+    #expect(standard.filters?["bucket|adult"] == nil)
+    await host.destroy()
+
+    let adultHost = OnDeviceJavaScriptHost(session: session)
+    let adult = try await adultHost.invoke(
+      api: api,
+      ext: ext(adultMode: true),
+      method: .homeContent,
+      arguments: [.bool(false)]
+    )
+    #expect(!JSFixtureURLProtocol.requestedPaths.contains("/adult"))
+    #expect(!adult.list.isEmpty)
+    #expect(adult.classes.contains { $0.typeId == "bucket|adult" && $0.typeName == "成人" })
+    let adultFilters = try #require(adult.filters?["bucket|adult"])
+    #expect(adultFilters.map(\.key) == ["class", "year", "by"])
+    let adultClasses = try #require(adultFilters.first { $0.key == "class" })
+    #expect(
+      adultClasses.value.map(\.name)
+        == ["全部", "国产", "自拍", "主播", "传媒", "人妻", "制服", "无码", "三级", "动漫", "欧美", "女优"]
+    )
+    let adultSort = try #require(adultFilters.first { $0.key == "by" })
+    #expect(adultSort.value.map(\.name) == ["热门", "最多播放", "最新更新"])
+    let adultColumn = try await adultHost.invoke(
+      api: api,
+      ext: ext(adultMode: true),
+      method: .categoryContent,
+      arguments: [
+        .string("bucket|adult"),
+        .string("1"),
+        .bool(false),
+        .object([:]),
+      ]
+    )
+    #expect(JSFixtureURLProtocol.requestedPaths.contains("/adult"))
+    #expect(adultColumn.list.contains { $0.name == "成人测试" })
+    #expect(adultColumn.list.contains { $0.name == "自拍测试" })
+    let selfieColumn = try await adultHost.invoke(
+      api: api,
+      ext: ext(adultMode: true),
+      method: .categoryContent,
+      arguments: [
+        .string("bucket|adult"),
+        .string("1"),
+        .bool(false),
+        .object(["class": .string("自拍")]),
+      ]
+    )
+    #expect(selfieColumn.list.map(\.name).sorted() == ["自拍测试"])
+    await adultHost.destroy()
+  }
+
   private static func makeSession(routes: [String: String]) throws -> URLSession {
     JSFixtureURLProtocol.statusCodes = [:]
     JSFixtureURLProtocol.routes = routes.mapValues { Data($0.utf8) }
+    JSFixtureURLProtocol.requestedPaths = []
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [JSFixtureURLProtocol.self]
     return URLSession(configuration: configuration)
@@ -275,6 +410,7 @@ struct OnDeviceJavaScriptHostTests {
 private final class JSFixtureURLProtocol: URLProtocol, @unchecked Sendable {
   nonisolated(unsafe) static var routes: [String: Data] = [:]
   nonisolated(unsafe) static var statusCodes: [String: Int] = [:]
+  nonisolated(unsafe) static var requestedPaths: [String] = []
 
   override class func canInit(with request: URLRequest) -> Bool { true }
 
@@ -282,6 +418,7 @@ private final class JSFixtureURLProtocol: URLProtocol, @unchecked Sendable {
 
   override func startLoading() {
     let path = request.url?.path ?? "/"
+    Self.requestedPaths.append(path)
     let body = Self.routes[path] ?? Data("not found".utf8)
     let status =
       Self.statusCodes[path]

@@ -6,13 +6,15 @@ public enum CMSProviderCatalog {
     public var key: String
     public var name: String
     public var api: String
+    public var adult: Bool?
 
     public var id: String { key }
 
-    public init(key: String, name: String, api: String) {
+    public init(key: String, name: String, api: String, adult: Bool? = nil) {
       self.key = key
       self.name = name
       self.api = api
+      self.adult = adult
     }
   }
 
@@ -92,15 +94,85 @@ public enum CMSProviderCatalog {
     return file.providers
   }
 
-  /// Prefer remote catalog when reachable; otherwise bundled.
+  public static let defaultRemoteCandidateURLs: [URL] = [
+    URL(string: "https://sources.yychuiyan.com/api/v1/cms-candidates.json")!,
+    URL(
+      string:
+        "https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick-monitor/data/cms-candidates.json"
+    )!,
+    URL(string: "https://sources.yychuiyan.com/data/cms-candidates.json")!,
+  ]
+
+  public static let defaultRemoteBestURLs: [URL] = [
+    URL(string: "https://sources.yychuiyan.com/api/v1/best.json")!,
+    URL(
+      string:
+        "https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick-monitor/data/best.json"
+    )!,
+    URL(string: "https://sources.yychuiyan.com/data/best.json")!,
+  ]
+
+  /// Prefer the monitor catalog, then fall back to the bundled pool.
   public static func loadCandidates(
-    remoteURL: URL? = URL(
-      string: "https://dl.yychuiyan.com/firepick/sources/cms-candidates.json"
-    ),
+    remoteURL: URL? = nil,
     session: URLSession = .shared,
     timeout: TimeInterval = 4
   ) async -> [Entry] {
-    if let remoteURL {
+    let urls = remoteURL.map { [$0] } ?? defaultRemoteCandidateURLs
+    return await fetchRemoteCandidates(urls: urls, session: session, timeout: timeout)
+      ?? bundledCandidates()
+  }
+
+  /// Returns only remotely fetched candidates. This lets callers distinguish
+  /// a monitor outage from a successful bundled fallback.
+  public static func loadRemoteCandidates(
+    remoteURL: URL? = nil,
+    session: URLSession = .shared,
+    timeout: TimeInterval = 4
+  ) async -> [Entry]? {
+    let urls = remoteURL.map { [$0] } ?? defaultRemoteCandidateURLs
+    return await fetchRemoteCandidates(urls: urls, session: session, timeout: timeout)
+  }
+
+  /// Keeps the monitor shortlist first, then fills the probe budget from the
+  /// larger online catalog. Saved/default pools are fallback-only.
+  public static func prioritizedCandidates(
+    best: [Entry],
+    catalog: [Entry],
+    fallback: [Entry],
+    limit: Int
+  ) -> [Entry] {
+    guard limit > 0 else { return [] }
+    var seenHosts = Set<String>()
+    var result: [Entry] = []
+    for entry in best + catalog + fallback {
+      let host = URL(string: entry.api)?.host?.lowercased() ?? entry.key
+      guard seenHosts.insert(host).inserted else { continue }
+      result.append(entry)
+      if result.count >= limit { break }
+    }
+    return result
+  }
+
+  /// Load the monitor's best-line shortlist. An empty result means every remote
+  /// endpoint failed, allowing callers to preserve their local active pool.
+  public static func loadBestCandidates(
+    session: URLSession = .shared,
+    timeout: TimeInterval = 2
+  ) async -> [Entry] {
+    await fetchRemoteCandidates(
+      urls: defaultRemoteBestURLs,
+      session: session,
+      timeout: timeout
+    ) ?? []
+  }
+
+  private static func fetchRemoteCandidates(
+    urls: [URL],
+    session: URLSession,
+    timeout: TimeInterval
+  ) async -> [Entry]? {
+    for remoteURL in urls {
       var request = URLRequest(url: remoteURL, timeoutInterval: timeout)
       request.cachePolicy = .reloadIgnoringLocalCacheData
       if let (data, response) = try? await session.data(for: request),
@@ -112,6 +184,6 @@ public enum CMSProviderCatalog {
         return file.providers
       }
     }
-    return bundledCandidates()
+    return nil
   }
 }

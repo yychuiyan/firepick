@@ -51,6 +51,22 @@ final class AppModel {
     case settings
   }
 
+  enum ContentMode: String, Codable, CaseIterable, Identifiable {
+    case standard
+    case adult
+
+    var id: String { rawValue }
+
+    var title: String {
+      switch self {
+      case .standard: "标准模式"
+      case .adult: "成人模式"
+      }
+    }
+
+    var allowsAdultProviders: Bool { self == .adult }
+  }
+
   enum PlaybackPreference: String, CaseIterable, Identifiable {
     case automatic
     case avPlayer
@@ -221,6 +237,7 @@ final class AppModel {
   }
 
   var selectedTab: Tab = .vod
+  var contentMode: ContentMode = .standard
   /// Live TV immersive fullscreen — drives root tab-bar visibility.
   var liveFullscreenActive = false
   /// When fullscreen, swipe-up can temporarily reveal the tab bar.
@@ -342,6 +359,8 @@ final class AppModel {
   var sourceConnections: [SourceConnection] = []
   var currentConnection: SourceConnection?
   var liveGroups: [LiveGroup] = []
+  /// Independent M3U/TXT/JSON live feeds merged with the current VOD line.
+  var standaloneLiveSources: [LiveConfiguration] = []
   var epgPrograms: [String: [LiveProgram]] = [:]
   var epgStatus: String?
   var liveRefreshStatus: String?
@@ -361,6 +380,9 @@ final class AppModel {
   /// Optional 弹弹兼容 API root (e.g. https://host/token) covering 爱优腾芒哔.
   var danmakuCustomAPIBase = ""
   var danmakuDisplayArea: DanmakuDisplayArea = .full
+  /// Providers observed inserting burned-in sponsor/domain watermarks.
+  var watermarkAdProviderKeys: Set<String> = []
+  var providerPlaybackQuality: [String: ProviderPlaybackQuality] = [:]
   var cacheStatus: String?
   var cacheSizeText = "计算中"
   private var configDigest = ""
@@ -461,6 +483,11 @@ final class AppModel {
   }
 
   private func loadPreferences() {
+    if let raw = persistence?.contentMode,
+      let value = ContentMode(rawValue: raw)
+    {
+      contentMode = value
+    }
     if let raw = persistence?.playbackPreference,
       let value = PlaybackPreference(rawValue: raw)
     {
@@ -494,6 +521,9 @@ final class AppModel {
     {
       danmakuDisplayArea = area
     }
+    watermarkAdProviderKeys = Set(persistence?.watermarkAdProviderKeys ?? [])
+    providerPlaybackQuality = persistence?.loadProviderPlaybackQuality() ?? [:]
+    standaloneLiveSources = persistence?.loadStandaloneLiveSources() ?? []
     if let raw = persistence?.videoOutputPreference,
       let value = VideoOutputPreference(rawValue: raw)
     {
@@ -550,11 +580,15 @@ final class AppModel {
     lastLiveURLIndex = persistence?.lastLiveURLIndex ?? 0
     sourceConnections = (try? persistence?.loadSourceConnections()) ?? []
     searchHistory = persistence?.searchHistory ?? []
-    let persistedActive = persistence?.loadActiveCMSProviders() ?? []
+    let persistedActive = persistence?.loadActiveCMSProviders(mode: contentMode) ?? []
+    let allowedActive =
+      contentMode.allowsAdultProviders
+      ? persistedActive
+      : persistedActive.filter { !$0.isAdult }
     activeCMSProviders =
-      persistedActive.isEmpty
+      allowedActive.isEmpty
       ? Self.defaultActiveCMSProviders
-      : persistedActive
+      : allowedActive
     consolidateWarehouseConnections()
     if let currentURL = persistence?.currentConnectionURL {
       currentConnection = sourceConnections.first { $0.url == currentURL && $0.enabled }
@@ -563,17 +597,17 @@ final class AppModel {
 
   /// Fallback active pool before first in-app 测速淘金.
   /// Keep in sync with firepick-cms.js DEFAULT_PROVIDERS (probe: scripts/probe-cms-providers.mjs).
-    static let firepickCMSProviders: [(key: String, name: String, api: String)] = [
-    ("maoyan", "猫眼", "https://api.maoyanapi.top/api.php/provide/vod"),
-    ("ruyi", "如意", "https://cj.rycjapi.com/api.php/provide/vod"),
+      static let firepickCMSProviders: [(key: String, name: String, api: String)] = [
     ("haohua", "豪华", "https://hhzyapi.com/api.php/provide/vod"),
-    ("subo", "速播", "https://subocaiji.com/api.php/provide/vod"),
+    ("maoyan", "猫眼", "https://api.maoyanapi.top/api.php/provide/vod"),
     ("huya", "虎牙", "https://www.huyaapi.com/api.php/provide/vod"),
-    ("jinying", "金鹰", "https://jyzyapi.com/provide/vod/from/jinyingyun/at/json"),
+    ("wujin_com", "无尽", "https://api.wujinapi.com/api.php/provide/vod"),
     ("lzi", "量子", "https://cj.lziapi.com/api.php/provide/vod"),
     ("lzcaiji", "量子", "https://cj.lzcaiji.com/api.php/provide/vod"),
-    ("ffzy_cj", "非凡", "https://cj.ffzyapi.com/api.php/provide/vod"),
-    ("zuid_me", "最大", "https://zuidazy.me/api.php/provide/vod"),
+    ("bfzy", "暴风", "https://bfzyapi.com/api.php/provide/vod"),
+    ("jinyingzy", "金鹰", "https://jinyingzy.com/api.php/provide/vod"),
+    ("ruyi", "如意", "https://cj.rycjapi.com/api.php/provide/vod"),
+    ("zuid", "最大", "https://api.zuidapi.com/api.php/provide/vod"),
   ]
 
   static var defaultActiveCMSProviders: [ActiveCMSProvider] {
@@ -603,7 +637,7 @@ final class AppModel {
         CollectionStation(
           id: "cms:\($0.key)",
           name: $0.name,
-          detail: "拾萤聚合 · 自动选用",
+          detail: "拾萤聚合 · 自动选用\($0.isAdult ? " · 成人" : "")",
           probeURL: $0.api
         )
       }
@@ -622,7 +656,22 @@ final class AppModel {
     var key: String
     var name: String
     var api: String
+    var adult: Bool?
     var id: String { key }
+
+    var isAdult: Bool { adult == true }
+  }
+
+  struct ProviderPlaybackQuality: Codable, Equatable, Sendable {
+    var bestHeight: Int
+    var successCount: Int
+    var stallCount: Int
+    var updatedAt: Date
+  }
+
+  struct ProviderStreamProbe: Sendable {
+    var episodeCount: Int
+    var quality: HLSQualityProfile?
   }
 
   struct CollectionStation: Identifiable, Equatable {
@@ -1223,7 +1272,7 @@ final class AppModel {
     }
     let needsRefine =
       activeCMSProviders.isEmpty
-      || persistence?.activeCMSProvidersProbedAt.map {
+      || persistence?.activeCMSProvidersProbedAt(mode: contentMode).map {
         Date().timeIntervalSince($0) >= maxAge
       } ?? true
     if needsRefine {
@@ -1240,9 +1289,38 @@ final class AppModel {
     else { return }
     Task(priority: .utility) { @MainActor in
       // Don't contend with first-screen posters / Douban.
-      try? await Task.sleep(for: .milliseconds(900))
-      await ensureBestCMSLinesOnEnter(maxAge: 10 * 60)
+      try? await Task.sleep(for: .milliseconds(350))
+      await ensureBestCMSLinesOnEnter(maxAge: 0)
     }
+  }
+
+  func setContentMode(_ mode: ContentMode) async {
+    guard contentMode != mode else { return }
+    contentMode = mode
+    persistence?.saveContentMode(mode.rawValue)
+
+    let saved = persistence?.loadActiveCMSProviders(mode: mode) ?? []
+    let allowed =
+      mode.allowsAdultProviders
+      ? saved
+      : saved.filter { !$0.isAdult }
+    activeCMSProviders =
+      allowed.isEmpty
+      ? Self.defaultActiveCMSProviders
+      : allowed
+    collectionStationLatencyMS = [:]
+    didProbeCollectionStations = false
+    persistence?.clearBrowseCategoryCache()
+    homeResult = nil
+    detailResult = nil
+    searchSections = []
+    liveSearchResults = []
+    await coordinator?.invalidate(sourceKey: "firepick_cms")
+    if selectedSite?.key == "firepick_cms", let site = selectedSite {
+      selectedSite = siteWithActiveCMSProviders(site)
+    }
+    await probeCollectionStationLatencies()
+    await reloadHome()
   }
 
   /// 采集站管理：拾萤线路全量获取最佳线路；其它线路只测当前展示站。
@@ -1283,7 +1361,7 @@ final class AppModel {
   func maybeAutoProbeCollectionStations(maxAge: TimeInterval = 10 * 60) async {
     guard !isCollectionProbeRunning else { return }
     guard configuration.sites.contains(where: { $0.key == "firepick_cms" }) else { return }
-    if let last = persistence?.activeCMSProvidersProbedAt,
+    if let last = persistence?.activeCMSProvidersProbedAt(mode: contentMode),
       Date().timeIntervalSince(last) < maxAge
     {
       return
@@ -1318,15 +1396,52 @@ final class AppModel {
   /// early-exit once TopN unique hosts answer — wall clock ≈ fastest N, not slowest.
   private func refineActiveCMSProviders() async {
     collectionStationProbeStatus = "正在获取最佳线路…"
-    // Bundled pool starts immediately — do not wait on remote catalog (was +1–1.5s).
-    var pool = CMSProviderCatalog.bundledCandidates()
+    // The saved active pool remains visible immediately. Prefer the monitor's
+    // shortlist, then fill the probe budget from the larger online catalog.
+    // Saved and bundled pools are used only when remote data is insufficient.
+    async let bestTask = CMSProviderCatalog.loadBestCandidates(timeout: 2)
+    async let catalogTask = CMSProviderCatalog.loadRemoteCandidates(timeout: 2)
+    let (remoteBest, remoteCatalog) = await (bestTask, catalogTask)
+    let allowsAdult = contentMode.allowsAdultProviders
+    let best = remoteBest.filter { allowsAdult || $0.adult != true }
+    let catalog = (remoteCatalog ?? []).filter { allowsAdult || $0.adult != true }
+    let saved = activeCMSProviders
+      .filter { allowsAdult || !$0.isAdult }
+      .map {
+        CMSProviderCatalog.Entry(
+          key: $0.key,
+          name: $0.name,
+          api: $0.api,
+          adult: $0.adult
+        )
+      }
+    let poolLimit = Self.activeCMSPoolSize * 3
+    var pool = CMSProviderCatalog.prioritizedCandidates(
+      best: best,
+      catalog: catalog,
+      fallback: saved,
+      limit: poolLimit
+    )
+    if pool.count < Self.activeCMSPoolSize {
+      let bundled = CMSProviderCatalog.bundledCandidates()
+        .filter { allowsAdult || $0.adult != true }
+      pool = CMSProviderCatalog.prioritizedCandidates(
+        best: pool,
+        catalog: bundled,
+        fallback: [],
+        limit: poolLimit
+      )
+    }
     if pool.isEmpty {
       pool = Self.defaultActiveCMSProviders.map {
-        CMSProviderCatalog.Entry(key: $0.key, name: $0.name, api: $0.api)
+        CMSProviderCatalog.Entry(
+          key: $0.key,
+          name: $0.name,
+          api: $0.api,
+          adult: $0.adult
+        )
       }
     }
-    // Prefer unique hosts up front so early-exit doesn't burn slots on mirrors.
-    pool = Self.uniqueHostCandidates(pool)
     probingCollectionStationIDs = Set(pool.map { "cms:\($0.key)" })
     defer { probingCollectionStationIDs = [] }
 
@@ -1379,7 +1494,12 @@ final class AppModel {
       seenHosts.insert(host)
       let name = CMSProviderCatalog.displayName(for: hit.entry)
       picked.append(
-        ActiveCMSProvider(key: hit.entry.key, name: name, api: hit.entry.api)
+        ActiveCMSProvider(
+          key: hit.entry.key,
+          name: name,
+          api: hit.entry.api,
+          adult: hit.entry.adult
+        )
       )
       latency["cms:\(hit.entry.key)"] = hit.ms
       if picked.count >= targetCount { break }
@@ -1393,7 +1513,7 @@ final class AppModel {
     }
 
     activeCMSProviders = picked
-    persistence?.saveActiveCMSProviders(picked)
+    persistence?.saveActiveCMSProviders(picked, mode: contentMode)
     collectionStationLatencyMS = latency
     didProbeCollectionStations = true
     collectionStationProbeStatus = "已获取 \(picked.count) 条最佳线路"
@@ -1402,25 +1522,6 @@ final class AppModel {
     if selectedSite?.key == "firepick_cms", let site = selectedSite {
       selectedSite = siteWithActiveCMSProviders(site)
     }
-
-    // Quietly refresh remote catalog for next round — never blocks this pass.
-    Task.detached(priority: .utility) {
-      _ = await CMSProviderCatalog.loadCandidates(timeout: 3)
-    }
-  }
-
-  nonisolated private static func uniqueHostCandidates(
-    _ pool: [CMSProviderCatalog.Entry]
-  ) -> [CMSProviderCatalog.Entry] {
-    var seen = Set<String>()
-    var out: [CMSProviderCatalog.Entry] = []
-    for entry in pool {
-      let host = URL(string: entry.api)?.host?.lowercased() ?? entry.key
-      if seen.insert(host).inserted {
-        out.append(entry)
-      }
-    }
-    return out
   }
 
   private func siteWithActiveCMSProviders(_ site: SiteConfiguration) -> SiteConfiguration {
@@ -1433,13 +1534,19 @@ final class AppModel {
         "key": .string(item.key),
         "name": .string(item.name),
         "api": .string(item.api),
+        "adult": .bool(item.isAdult),
       ])
     }
+    let modeValue = JSONValue.bool(contentMode.allowsAdultProviders)
     if case .object(var object) = site.ext {
       object["providers"] = .array(providerValues)
+      object["adultMode"] = modeValue
       site.ext = .object(object)
     } else {
-      site.ext = .object(["providers": .array(providerValues)])
+      site.ext = .object([
+        "providers": .array(providerValues),
+        "adultMode": modeValue,
+      ])
     }
     return site
   }
@@ -1629,6 +1736,75 @@ final class AppModel {
   func setDanmakuDisplayArea(_ value: DanmakuDisplayArea) {
     danmakuDisplayArea = value
     persistence?.saveDanmakuDisplayArea(value.rawValue)
+  }
+
+  func markWatermarkAdProvider(_ providerKey: String?) {
+    guard let providerKey, !providerKey.isEmpty else { return }
+    watermarkAdProviderKeys.insert(providerKey)
+    persistence?.saveWatermarkAdProviderKeys(watermarkAdProviderKeys)
+  }
+
+  func hasWatermarkAdProvider(_ providerKey: String) -> Bool {
+    watermarkAdProviderKeys.contains(providerKey)
+  }
+
+  func recordProviderPlaybackQuality(_ providerKey: String?, height: Int) {
+    guard let providerKey, !providerKey.isEmpty, height > 0 else { return }
+    var quality =
+      providerPlaybackQuality[providerKey]
+      ?? ProviderPlaybackQuality(
+        bestHeight: 0,
+        successCount: 0,
+        stallCount: 0,
+        updatedAt: .now
+      )
+    quality.bestHeight = max(quality.bestHeight, height)
+    quality.successCount += 1
+    quality.updatedAt = .now
+    providerPlaybackQuality[providerKey] = quality
+    persistence?.saveProviderPlaybackQuality(providerPlaybackQuality)
+  }
+
+  func recordProviderPlaybackStall(_ providerKey: String?) {
+    guard let providerKey, !providerKey.isEmpty else { return }
+    var quality =
+      providerPlaybackQuality[providerKey]
+      ?? ProviderPlaybackQuality(
+        bestHeight: 0,
+        successCount: 0,
+        stallCount: 0,
+        updatedAt: .now
+      )
+    quality.stallCount += 1
+    quality.updatedAt = .now
+    providerPlaybackQuality[providerKey] = quality
+    persistence?.saveProviderPlaybackQuality(providerPlaybackQuality)
+  }
+
+  /// Higher is better: known HD > unknown > known low-quality > repeated stalls.
+  func providerQualityRank(
+    _ providerKey: String,
+    measuredHeight: Int = 0,
+    measuredBandwidth: Int = 0
+  ) -> (tier: Int, reliability: Int, bandwidth: Int) {
+    let quality = providerPlaybackQuality[providerKey]
+    let bestHeight = max(measuredHeight, quality?.bestHeight ?? 0)
+    let tier: Int
+    if measuredHeight == 0, quality == nil {
+      return (2, 0, measuredBandwidth)
+    }
+    switch bestHeight {
+    case 2000...: tier = 5
+    case 1000...: tier = 4
+    case 700...: tier = 3
+    case 480...: tier = 1
+    default: tier = 0
+    }
+    return (
+      tier,
+      (quality?.successCount ?? 0) - (quality?.stallCount ?? 0) * 2,
+      measuredBandwidth
+    )
   }
 
   func recordSearchHistory(_ keyword: String) {
@@ -2181,7 +2357,10 @@ final class AppModel {
       if Task.isCancelled || generation != homeLoadGeneration || selectedTab != .vod {
         return
       }
-      let preferred = ["bucket|tv", "bucket|movie", "bucket|variety", "bucket|anime"]
+      var preferred = ["bucket|tv", "bucket|movie", "bucket|variety", "bucket|anime"]
+      if contentMode == .adult {
+        preferred.append("bucket|adult")
+      }
       let targets =
         preferred.compactMap { id in classes.first(where: { $0.typeId == id }) }
         + classes.filter { cat in
@@ -2688,6 +2867,15 @@ final class AppModel {
     do {
       let provider = try await provider(for: site)
       var result = try await provider.detailContent(id: item.vodId)
+      // Detail APIs often omit the Douban field even though the list row carried
+      // it. Preserve that exact-title score across list → detail navigation.
+      if let score = item.doubanScore, score > 0,
+        var detailItem = result.list.first,
+        detailItem.doubanScore == nil || (detailItem.doubanScore ?? 0) <= 0
+      {
+        detailItem.doubanScore = score
+        result.list[0] = detailItem
+      }
       attachSourceKey(site.key, to: &result)
       detailResult = result
     } catch {
@@ -2772,6 +2960,80 @@ final class AppModel {
       return Self.playbackEpisodeCount(playFrom: detail.playFrom, playURL: detail.playURL)
     } catch {
       return 0
+    }
+  }
+
+  /// Resolve one candidate provider's current episode and inspect its HLS
+  /// master playlist before the first playback request.
+  func providerStreamProbe(
+    title: String,
+    providerKey: String,
+    preferredEpisodeName: String?,
+    inspectQuality: Bool = true
+  ) async -> ProviderStreamProbe {
+    guard let site = selectedSite, !providerKey.isEmpty else {
+      return ProviderStreamProbe(episodeCount: 0, quality: nil)
+    }
+    do {
+      guard
+        let item = try await findItem(
+          named: title,
+          in: site,
+          preferredProviderKey: providerKey
+        )
+      else {
+        return ProviderStreamProbe(episodeCount: 0, quality: nil)
+      }
+      let provider = try await provider(for: site)
+      let result = try await provider.detailContent(id: item.vodId)
+      guard let detail = result.list.first else {
+        return ProviderStreamProbe(episodeCount: 0, quality: nil)
+      }
+      let lines = EpisodeParser.lines(playFrom: detail.playFrom, playURL: detail.playURL)
+      let count = lines.map(\.episodes.count).max() ?? 0
+      guard inspectQuality else {
+        return ProviderStreamProbe(episodeCount: count, quality: nil)
+      }
+      let selected =
+        lines.lazy.compactMap { line -> (PlaybackLine, Episode)? in
+          if let preferredEpisodeName,
+            let episode = line.episodes.first(where: { $0.name == preferredEpisodeName })
+          {
+            return (line, episode)
+          }
+          return nil
+        }.first
+        ?? lines.lazy.compactMap { line in
+          line.episodes.first.map { (line, $0) }
+        }.first
+      guard let selected else {
+        return ProviderStreamProbe(episodeCount: count, quality: nil)
+      }
+
+      var stream = selected.1.value
+      var headers = result.header ?? site.headerDictionary
+      if !stream.lowercased().contains("m3u8") {
+        if let played = try? await provider.playerContent(
+          flag: selected.0.name,
+          id: selected.1.value,
+          vipFlags: configuration.flags ?? []
+        ), let value = played.url?.stringValue {
+          stream = value
+          if let extra = played.header {
+            extra.forEach { headers[$0.key] = $0.value }
+          }
+        }
+      }
+      guard let url = URL(string: stream),
+        let scheme = url.scheme?.lowercased(),
+        scheme == "http" || scheme == "https"
+      else {
+        return ProviderStreamProbe(episodeCount: count, quality: nil)
+      }
+      let quality = await HLSQualityProbe.probe(url: url, headers: headers)
+      return ProviderStreamProbe(episodeCount: count, quality: quality)
+    } catch {
+      return ProviderStreamProbe(episodeCount: 0, quality: nil)
     }
   }
 
@@ -3045,7 +3307,8 @@ final class AppModel {
   /// Restore cached channels when entering TV, without loading M3U feeds on app launch.
   func ensureLiveSourcesLoaded() async {
     guard liveGroups.isEmpty else { return }
-    if !activeLiveCacheDigest.isEmpty,
+    if standaloneLiveSources.isEmpty,
+      !activeLiveCacheDigest.isEmpty,
       let cached = persistence?.loadLiveGroupsCache(for: activeLiveCacheDigest),
       !cached.isEmpty
     {
@@ -3060,14 +3323,19 @@ final class AppModel {
   /// Entering 电视 early still calls `ensureLiveSourcesLoaded` as the default path.
   func prefetchLiveSourcesAfterHomeIfNeeded() {
     guard currentConnection != nil else { return }
-    guard !liveGroups.isEmpty || !(configuration.lives ?? []).isEmpty else { return }
+    guard !liveGroups.isEmpty || !combinedLiveConfigurations.isEmpty else { return }
     Task(priority: .utility) {
       await ensureLiveSourcesLoaded()
     }
   }
 
   func refreshLiveSources() async {
-    guard let lives = configuration.lives, !lives.isEmpty else { return }
+    let lives = combinedLiveConfigurations
+    guard !lives.isEmpty else {
+      liveGroups = []
+      liveRefreshStatus = nil
+      return
+    }
     let generation = liveLoadGeneration
     let baseURL = configurationBaseURL
     let task =
@@ -3091,6 +3359,117 @@ final class AppModel {
     if !activeLiveCacheDigest.isEmpty {
       try? persistence?.saveLiveGroupsCache(groups, configurationDigest: activeLiveCacheDigest)
     }
+  }
+
+  var combinedLiveConfigurations: [LiveConfiguration] {
+    (configuration.lives ?? []) + standaloneLiveSources
+  }
+
+  var standaloneLiveSourceSummary: String {
+    standaloneLiveSources.isEmpty ? "未添加" : "\(standaloneLiveSources.count) 个"
+  }
+
+  /// Add a live-only feed without replacing the current VOD configuration.
+  @discardableResult
+  func addStandaloneLiveSource(urlString: String) async -> Bool {
+    let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let url = URL(string: trimmed),
+      url.scheme == "http" || url.scheme == "https"
+    else {
+      errorMessage = "直播源地址无效"
+      return false
+    }
+    isLoadingLive = true
+    defer { isLoadingLive = false }
+    do {
+      let downloaded = try await downloadConfiguration(from: url)
+      let data = try ConfigurationDecoder.normalize(downloaded.data)
+      var additions: [LiveConfiguration] = []
+      switch try ConfigurationDetector.detect(data) {
+      case .live(let detectedName, let groups):
+        guard !groups.isEmpty else {
+          throw FirepickError.invalidConfiguration("直播源中没有识别到频道")
+        }
+        let jsonObject = try? JSONSerialization.jsonObject(with: data)
+        let object = jsonObject as? [String: Any]
+        if object?["lives"] != nil {
+          let document = try JSONDecoder().decode(LiveConfigurationDocument.self, from: data)
+          additions = document.lives.map { resolveLiveConfiguration($0, baseURL: downloaded.url) }
+        } else {
+          additions = [
+            LiveConfiguration(name: detectedName, url: downloaded.url.absoluteString)
+          ]
+        }
+      case .vod(let config):
+        additions = (config.lives ?? []).map {
+          resolveLiveConfiguration($0, baseURL: downloaded.url)
+        }
+        guard !additions.isEmpty else {
+          throw FirepickError.invalidConfiguration("该配置中没有直播源")
+        }
+      case .depot:
+        throw FirepickError.invalidConfiguration("仓库地址不能直接作为直播源")
+      }
+
+      var seen = Set<String>()
+      standaloneLiveSources = (standaloneLiveSources + additions).filter { source in
+        seen.insert(Self.liveSourceIdentity(source)).inserted
+      }
+      persistence?.saveStandaloneLiveSources(standaloneLiveSources)
+      liveLoadGeneration += 1
+      liveRefreshTask?.cancel()
+      liveRefreshTask = nil
+      liveGroups = []
+      activeLiveCacheDigest = ""
+      errorMessage = nil
+      await refreshLiveSources()
+      selectedTab = .live
+      return true
+    } catch {
+      errorMessage = error.localizedDescription
+      return false
+    }
+  }
+
+  func removeStandaloneLiveSource(_ source: LiveConfiguration) async {
+    let identity = Self.liveSourceIdentity(source)
+    standaloneLiveSources.removeAll { Self.liveSourceIdentity($0) == identity }
+    persistence?.saveStandaloneLiveSources(standaloneLiveSources)
+    liveLoadGeneration += 1
+    liveRefreshTask?.cancel()
+    liveRefreshTask = nil
+    liveGroups = []
+    activeLiveCacheDigest = ""
+    await refreshLiveSources()
+  }
+
+  func refreshStandaloneLiveSources() async {
+    guard !standaloneLiveSources.isEmpty else { return }
+    liveGroups = []
+    activeLiveCacheDigest = ""
+    await refreshLiveSources()
+  }
+
+  private func resolveLiveConfiguration(
+    _ source: LiveConfiguration,
+    baseURL: URL
+  ) -> LiveConfiguration {
+    var copy = source
+    if let raw = copy.url,
+      let resolved = URL(string: raw, relativeTo: baseURL)?.absoluteURL
+    {
+      copy.url = resolved.absoluteString
+    }
+    if let raw = copy.epg,
+      let resolved = URL(string: raw, relativeTo: baseURL)?.absoluteURL
+    {
+      copy.epg = resolved.absoluteString
+    }
+    return copy
+  }
+
+  private static func liveSourceIdentity(_ source: LiveConfiguration) -> String {
+    "\(source.name)|\(source.url ?? source.api ?? "")"
   }
 
   func currentProgram(for channel: LiveChannel) -> LiveProgram? {

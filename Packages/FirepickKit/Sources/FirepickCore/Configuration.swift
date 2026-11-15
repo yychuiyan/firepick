@@ -192,6 +192,38 @@ public struct LiveConfiguration: Codable, Equatable, Sendable {
         case header, timeout, boot
     }
 
+    public init(
+        name: String,
+        url: String? = nil,
+        api: String? = nil,
+        ext: JSONValue? = nil,
+        jar: String? = nil,
+        groups: JSONValue? = nil,
+        epg: String? = nil,
+        logo: String? = nil,
+        ua: String? = nil,
+        origin: String? = nil,
+        referer: String? = nil,
+        header: [String: String]? = nil,
+        timeout: Int? = nil,
+        boot: Bool? = nil
+    ) {
+        self.name = name
+        self.url = url
+        self.api = api
+        self.ext = ext
+        self.jar = jar
+        self.groups = groups
+        self.epg = epg
+        self.logo = logo
+        self.ua = ua
+        self.origin = origin
+        self.referer = referer
+        self.header = header
+        self.timeout = timeout
+        self.boot = boot
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? "直播源"

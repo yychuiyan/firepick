@@ -6,6 +6,8 @@ struct PlayerTitleLabel: View {
   var font: Font = .subheadline.weight(.semibold)
   /// Caps the visible title so side chrome keeps room for controls.
   var maxWidth: CGFloat? = 200
+  /// Inline chrome centers the title; immersive chrome keeps it beside 返回.
+  var contentAlignment: Alignment = .center
   var fadeWidth: CGFloat = 18
   /// Points per second while marquee is active.
   var speed: CGFloat = 28
@@ -58,26 +60,30 @@ struct PlayerTitleLabel: View {
         Text(text)
           .font(font)
           .lineLimit(1)
-          .frame(maxWidth: .infinity, alignment: .center)
+          .frame(maxWidth: .infinity, alignment: contentAlignment)
       }
     }
     .frame(width: capWidth, alignment: .leading)
     .clipped()
     .mask {
-      HStack(spacing: 0) {
-        LinearGradient(
-          colors: [.clear, .black],
-          startPoint: .leading,
-          endPoint: .trailing
-        )
-        .frame(width: fadeWidth)
+      if needsMarquee {
+        HStack(spacing: 0) {
+          LinearGradient(
+            colors: [.clear, .black],
+            startPoint: .leading,
+            endPoint: .trailing
+          )
+          .frame(width: fadeWidth)
+          Color.black
+          LinearGradient(
+            colors: [.black, .clear],
+            startPoint: .leading,
+            endPoint: .trailing
+          )
+          .frame(width: fadeWidth)
+        }
+      } else {
         Color.black
-        LinearGradient(
-          colors: [.black, .clear],
-          startPoint: .leading,
-          endPoint: .trailing
-        )
-        .frame(width: fadeWidth)
       }
     }
     .background {

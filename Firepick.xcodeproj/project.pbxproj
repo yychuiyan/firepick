@@ -37,6 +37,7 @@
 		9D51269D1491C27F603C131A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 62DE027BA3F9570841E293A3 /* Assets.xcassets */; };
 		A5A5148787DEBEFEB8739A4E /* PlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE02C211147015A1AB863F08 /* PlayerView.swift */; };
 		AF66FAD2E87E5362D92E9174 /* PlaybackSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34A7BD6C53152DA71F3E87B9 /* PlaybackSettingsView.swift */; };
+		B2EA92071F17853A78454D86 /* LiveSourceManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F822016A9B9C4EF1BAC18867 /* LiveSourceManagementView.swift */; };
 		B65DEC177A516442A1C7236A /* DLNACastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41AC6E1084DB23277EA497FF /* DLNACastView.swift */; };
 		BA452F0F6A1170B74F93D428 /* ErrorBannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E005EBC553012053DA2B5A3 /* ErrorBannerView.swift */; };
 		BF1A3F1798B55D3F26950C26 /* SourcePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE5F82CABA149E98E879DC20 /* SourcePickerView.swift */; };
@@ -85,6 +86,7 @@
 		DFA9ED955AF984C5A966B98D /* BrowseFilterSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowseFilterSheet.swift; sourceTree = "<group>"; };
 		E50EB6262D056DF6B19AFBF6 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		EA39056A48812EA9CFFA470E /* ConnectionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionDetailView.swift; sourceTree = "<group>"; };
+		F822016A9B9C4EF1BAC18867 /* LiveSourceManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSourceManagementView.swift; sourceTree = "<group>"; };
 		F88D10AD716AA7E5E2E1F4A1 /* MiddleTruncatingText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiddleTruncatingText.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -161,6 +163,7 @@
 				0FB576A57EE586D7F004EAE7 /* KeyboardDismissOnTap.swift */,
 				E50EB6262D056DF6B19AFBF6 /* LibraryView.swift */,
 				6FDE13CAB540B13E2B4F2A9E /* LivePlaybackShell.swift */,
+				F822016A9B9C4EF1BAC18867 /* LiveSourceManagementView.swift */,
 				69D3DD2CF729D1C71CFC095E /* LiveView.swift */,
 				17E781401779AB6FE9BDF4EA /* MarqueeText.swift */,
 				6BC21A200FE9C9BFD4788016 /* MediaCardView.swift */,
@@ -287,6 +290,7 @@
 				46D1F3446B1BA73B2685F6A1 /* KeyboardDismissOnTap.swift in Sources */,
 				4C3AD8A0CC0F4F91DF9C6B37 /* LibraryView.swift in Sources */,
 				07A7395EA1AACBEE97E9A4FD /* LivePlaybackShell.swift in Sources */,
+				B2EA92071F17853A78454D86 /* LiveSourceManagementView.swift in Sources */,
 				4E0FB80FD5BD2D94AAC7CAFA /* LiveView.swift in Sources */,
 				1800B794378ED2A93DAD28E5 /* MarqueeText.swift in Sources */,
 				F5E2090170B130F768A09E0F /* MediaCardView.swift in Sources */,

@@ -111,8 +111,9 @@ AppleCMS providers (`zuid` / `lzcaiji` / `haohua` / `maoyan` / `guangsu` /
 `subo` / `jisu` / `lzi` / `ruyi` / `ffzy`), synthetic menu buckets, Douban-hot
 default lists for all media buckets, non-zero search results for probe keywords,
 a direct playback URL, and three parsed live playlists. The in-app 采集站管理
-page probes `cms-candidates.json`, persists a fresh ten-host active pool, and
-injects it into the QuickJS site. AppYs candidates are separately probed as a
+page first loads the monitor `best.json` shortlist (COS, then the monitor site),
+falls back to its bundled candidate catalog, persists a fresh ten-host active
+pool, and injects it into the QuickJS site. AppYs candidates are separately probed as a
 future source pool and are not published when no usable host survives.
 `sources/applecms.js` and `sources/appysv2.js` are standalone generic spiders
 for manually supplied AppleCMS/AppYs API roots; the 2026-11-14 AppYs probe found

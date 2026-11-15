@@ -111,13 +111,10 @@ struct MediaCardView: View {
     return false
   }
 
-  /// Douban first, then site score — same rule as detail.
+  /// Strict Douban score only; CMS scores must not drift into this capsule.
   private var displayScore: String? {
     if let douban = item.doubanScore, douban > 0 {
       return String(format: "%.1f", douban)
-    }
-    if let score = item.score, score > 0 {
-      return String(format: "%.1f", score)
     }
     return nil
   }

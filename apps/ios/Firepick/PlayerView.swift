@@ -4,6 +4,7 @@ import FirepickPlayback
 import MediaPlayer
 import SwiftUI
 import UIKit
+import Vision
 
 private enum PlayPauseGlyph: Equatable {
   case play
@@ -15,15 +16,8 @@ enum PlayerChrome: Equatable {
   case inline
 }
 
-/// Align leading/trailing chrome to the seek bar (not the time+bar stack).
-private extension VerticalAlignment {
-  private enum SeekBarCenter: AlignmentID {
-    static func defaultValue(in context: ViewDimensions) -> CGFloat {
-      context[VerticalAlignment.center]
-    }
-  }
-
-  static let seekBarCenter = VerticalAlignment(SeekBarCenter.self)
+private struct PlayerSnapshotBox: @unchecked Sendable {
+  let image: UIImage
 }
 
 struct PlayerView: View {
@@ -48,6 +42,14 @@ struct PlayerView: View {
   var onPlayEpisode: ((Episode, String, Double?) -> Void)? = nil
   /// Live clock for Detail 来源 handoff (continue from same timestamp).
   var onPlaybackTimeChange: ((Double) -> Void)? = nil
+  /// First real picture is visible — parent should stop proactive source switching.
+  var onPlaybackReady: (() -> Void)? = nil
+  /// Playback froze after a real frame — parent may perform one controlled failover.
+  var onStalled: (() -> Bool)? = nil
+  /// A burned-in sponsor/domain watermark was detected in the video pixels.
+  var onWatermarkAdDetected: (() -> Void)? = nil
+  /// Maximum decoded/presented short-edge height observed for this provider.
+  var onPlaybackQualityMeasured: ((Int) -> Void)? = nil
   /// All candidate URLs failed — return true if parent will switch 来源.
   var onUnplayable: (() -> Bool)? = nil
   /// Detail bumps this before silent 换站 network work — freeze the live frame early.
@@ -87,6 +89,9 @@ struct PlayerView: View {
   @State private var incognitoThisSession = false
   @State private var didAutoSkipIntro = false
   @State private var didHandleEnded = false
+  @State private var didNotifyPlaybackReady = false
+  @State private var didScheduleWatermarkAdScan = false
+  @State private var didReportPlaybackQuality = false
   /// After 切集, ignore spurious `.ended` for a few seconds (stops ep3→ep4尾→ep5).
   @State private var ignoreEndedUntil = Date.distantPast
   /// Mid-roll ad segments already seeked past for the current request.
@@ -117,11 +122,14 @@ struct PlayerView: View {
   @State private var remoteCommandTargets: [(command: MPRemoteCommand, target: Any)] = []
   @State private var showingRatePicker = false
   @State private var showingResolutionPicker = false
+  @State private var showingInlineRatePicker = false
   @State private var streamResolution: StreamResolution = .automatic
   /// Auto mode stepped down after stall / constrained network; clears when path recovers.
   @State private var autoQualityDegraded = false
   /// Detected output height while 自动 (from AV presentationSize).
   @State private var detectedOutputHeight: CGFloat = 0
+  /// Actual fitted picture ratio — controls align to this, not the display edges.
+  @State private var videoAspectRatio: CGFloat = 16.0 / 9.0
   /// Max short-edge height from HLS variants / URL hints (gates 4K/2K menu rows).
   @State private var streamPeakHeight: CGFloat = 0
   /// Cloud ad-skip segments resolved after first frame (not blocking open).
@@ -135,6 +143,8 @@ struct PlayerView: View {
   @State private var lastProgressWallclock = Date()
   @State private var lastProgressMediaTime: Double = -1
   @State private var stallRecoveryInFlight = false
+  /// Clock has stopped advancing while the player still intends to play.
+  @State private var isPlaybackBuffering = false
   @State private var recoverInFlight = false
   /// Caps cold-start「首帧过慢」station hops so we do not thrash the whole pool.
   @State private var firstFrameFailoverCount = 0
@@ -214,6 +224,10 @@ struct PlayerView: View {
     onCollapse: (() -> Void)? = nil,
     onPlayEpisode: ((Episode, String, Double?) -> Void)? = nil,
     onPlaybackTimeChange: ((Double) -> Void)? = nil,
+    onPlaybackReady: (() -> Void)? = nil,
+    onStalled: (() -> Bool)? = nil,
+    onWatermarkAdDetected: (() -> Void)? = nil,
+    onPlaybackQualityMeasured: ((Int) -> Void)? = nil,
     onUnplayable: (() -> Bool)? = nil,
     silentHandoffPulse: Int = 0
   ) {
@@ -230,6 +244,10 @@ struct PlayerView: View {
     self.onCollapse = onCollapse
     self.onPlayEpisode = onPlayEpisode
     self.onPlaybackTimeChange = onPlaybackTimeChange
+    self.onPlaybackReady = onPlaybackReady
+    self.onStalled = onStalled
+    self.onWatermarkAdDetected = onWatermarkAdDetected
+    self.onPlaybackQualityMeasured = onPlaybackQualityMeasured
     self.onUnplayable = onUnplayable
     self.silentHandoffPulse = silentHandoffPulse
     let kind =
@@ -401,10 +419,21 @@ struct PlayerView: View {
           }
         }
       }
+      .sheet(isPresented: $showingInlineRatePicker) {
+        inlineRatePickerSheet
+      }
   }
 
   @ViewBuilder
   private func attachPlayerLifecycle<V: View>(to content: V) -> some View {
+    attachPlaybackSystemObservers(
+      to: attachPlaybackProgressObservers(
+        to: attachPlayerSetup(to: content)
+      )
+    )
+  }
+
+  private func attachPlayerSetup<V: View>(to content: V) -> some View {
     content
       .background(VolumeProxyHost(proxy: volumeProxy).frame(width: 0, height: 0))
       .task {
@@ -471,6 +500,10 @@ struct PlayerView: View {
       ) { _ in
         scheduleResumeAfterChromeChange()
       }
+  }
+
+  private func attachPlaybackProgressObservers<V: View>(to content: V) -> some View {
+    content
       .task(id: isPlaying) {
         guard isPlaying else { return }
         lastProgressWallclock = Date()
@@ -481,7 +514,11 @@ struct PlayerView: View {
           else {
             continue
           }
-          if Date().timeIntervalSince(lastProgressWallclock) >= 8 {
+          let frozenFor = Date().timeIntervalSince(lastProgressWallclock)
+          if hasRenderableVideo, frozenFor >= 2.5 {
+            isPlaybackBuffering = true
+          }
+          if frozenFor >= 12 {
             await recoverFromStall()
           }
         }
@@ -503,12 +540,18 @@ struct PlayerView: View {
           Task { await recover(from: message) }
         }
         if state == .playing {
+          isPlaybackBuffering = false
           clearFailureIfRenderable()
           scheduleHideControls()
+        } else if state == .paused {
+          isPlaybackBuffering = false
         }
       }
       .onChange(of: avEngine.isReadyForDisplay) { _, ready in
-        if ready { clearFailureIfRenderable() }
+        if ready {
+          notifyPlaybackReadyIfNeeded()
+          clearFailureIfRenderable()
+        }
       }
       .onChange(of: mpvEngine.state) { _, state in
         handlePlaybackEnded(state)
@@ -517,10 +560,20 @@ struct PlayerView: View {
           Task { await recover(from: message) }
         }
         if state == .playing || state == .ready {
+          notifyPlaybackReadyIfNeeded()
           clearFailureIfRenderable()
         }
-        if state == .playing { scheduleHideControls() }
+        if state == .playing {
+          isPlaybackBuffering = false
+          scheduleHideControls()
+        } else if state == .paused {
+          isPlaybackBuffering = false
+        }
       }
+  }
+
+  private func attachPlaybackSystemObservers<V: View>(to content: V) -> some View {
+    content
       .onChange(of: scenePhase) { _, phase in
         if phase == .background, !model.backgroundPlaybackEnabled {
           playbackEngine.pause()
@@ -586,8 +639,8 @@ struct PlayerView: View {
     mpvEngine.stop()
   }
 
-  /// Parent `PlayerFrameModifier` owns half-screen 16:9. Fullscreen stage must
-  /// be the full window so 返回/菜单 sit on screen corners (black bars OK).
+  /// The stage fills the window; chrome follows the fitted picture inside it,
+  /// never the letterbox/pillarbox edges.
   private var playerSurface: some View {
     playerStage
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -619,12 +672,13 @@ struct PlayerView: View {
             currentTime: observedTime,
             fontSize: subtitleFontSize,
             color: subtitleColor,
-            outlined: model.subtitleOutlineEnabled
+            outlined: model.subtitleOutlineEnabled,
+            bottomPadding: showControls ? (chrome == .inline ? 70 : 82) : 44
           )
           .allowsHitTesting(false)
         }
         if showControls {
-          controlsOverlay
+          controlsOverlay(in: geo.size)
             .transition(.opacity)
         } else if isCenterLoading {
           // Controls hidden but still buffering — loading stays on play/pause slot.
@@ -805,6 +859,10 @@ struct PlayerView: View {
       // Hide live AV only for 切集/换源 freeze — ±10 seek keeps the picture.
       .opacity(shouldHideLivePlayer ? 0 : 1)
 
+      if freezeFrame == nil, !hasRenderableVideo || shouldHideLivePlayer {
+        loadingBackdrop
+      }
+
       // Hold the previous picture across 切集 / 换源 — never flash black.
       if let freezeFrame {
         Image(uiImage: freezeFrame)
@@ -813,12 +871,30 @@ struct PlayerView: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
           .background(Color.black)
           .allowsHitTesting(false)
-      } else if shouldHideLivePlayer {
-        Color.black
-          .allowsHitTesting(false)
       }
       // No standalone ProgressView here — loading is bound to center play/pause.
     }
+  }
+
+  /// Network opening / source handoff uses the poster as a soft loading canvas
+  /// instead of showing a pure black frame.
+  private var loadingBackdrop: some View {
+    ZStack {
+      LinearGradient(
+        colors: [Color(white: 0.08), Color(white: 0.16), Color(white: 0.07)],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+      )
+      if let poster = RemoteImageCache.normalizedURL(from: item.pic) {
+        CachedRemoteImage(url: poster) {
+          Color.clear
+        }
+        .scaledToFit()
+        .blur(radius: 10)
+        .opacity(0.38)
+      }
+    }
+    .allowsHitTesting(false)
   }
 
   private var shouldHideLivePlayer: Bool {
@@ -872,35 +948,75 @@ struct PlayerView: View {
     }
   }
 
-  /// Shared leading inset so immersive ✕ lines up with 下一集.
-  private var controlSidePadding: CGFloat {
-    chrome == .inline ? 8 : 16
+  private var controlContentInset: CGFloat {
+    8
   }
 
-  private var controlsOverlay: some View {
-    ZStack {
+  private func fittedVideoRect(in size: CGSize) -> CGRect {
+    guard size.width > 1, size.height > 1 else { return CGRect(origin: .zero, size: size) }
+    let ratio = min(3.2, max(0.45, videoAspectRatio))
+    let stageRatio = size.width / size.height
+    if stageRatio > ratio {
+      let width = size.height * ratio
+      return CGRect(
+        x: (size.width - width) / 2,
+        y: 0,
+        width: width,
+        height: size.height
+      )
+    }
+    let height = size.width / ratio
+    return CGRect(
+      x: 0,
+      y: (size.height - height) / 2,
+      width: size.width,
+      height: height
+    )
+  }
+
+  private func controlsOverlay(in size: CGSize) -> some View {
+    let picture = fittedVideoRect(in: size)
+    let horizontalInset = max(controlContentInset, picture.minX + controlContentInset)
+    let topInset = max(controlContentInset, picture.minY + controlContentInset)
+    let bottomInset = max(
+      controlContentInset,
+      size.height - picture.maxY + controlContentInset
+    )
+
+    return ZStack {
       VStack(spacing: 0) {
         topControls
         Spacer()
         if chrome != .inline {
           skipButtons
-            .padding(.horizontal, controlSidePadding)
             .padding(.bottom, 8)
         }
         progressBar
-          .padding(.horizontal, controlSidePadding)
-          .padding(.bottom, chrome == .inline ? 4 : 14)
-          .background(alignment: .bottom) {
-            if chrome == .inline {
-              LinearGradient(
-                colors: [.clear, .black.opacity(0.55)],
-                startPoint: .top,
-                endPoint: .bottom
-              )
-              .frame(height: 54)
-              .allowsHitTesting(false)
-            }
+          .padding(.bottom, 4)
+      }
+      .padding(.horizontal, horizontalInset)
+      .padding(.top, topInset)
+      .padding(.bottom, bottomInset)
+      .background {
+        if chrome != .inline {
+          VStack(spacing: 0) {
+            LinearGradient(
+              colors: [.black.opacity(0.38), .clear],
+              startPoint: .top,
+              endPoint: .bottom
+            )
+            .frame(height: 104)
+            Spacer(minLength: 0)
+            LinearGradient(
+              colors: [.clear, .black.opacity(0.52)],
+              startPoint: .top,
+              endPoint: .bottom
+            )
+            .frame(height: 150)
           }
+          .padding(.horizontal, max(0, picture.minX))
+          .allowsHitTesting(false)
+        }
       }
       centerPlayButton
     }
@@ -949,6 +1065,7 @@ struct PlayerView: View {
   /// Any buffering that replaces the center play/pause glyph (not a free-floating spinner).
   private var isCenterLoading: Bool {
     if displayFailure != nil { return false }
+    if isPlaybackBuffering, hasRenderableVideo { return true }
     if seekHandoff { return true }
     // Silent station upgrade with a freeze/live frame: keep picture, no center「加载」.
     if hasVisibleHandoffPicture, silentHandoff || keepLastFrame { return false }
@@ -963,12 +1080,13 @@ struct PlayerView: View {
     if displayFailure != nil {
       Color.clear.frame(width: 1, height: 1)
     } else {
-      HStack(spacing: chrome == .inline ? 36 : 48) {
+      HStack(spacing: chrome == .inline ? 36 : 54) {
         Button {
           seek(by: -10)
         } label: {
           Image(systemName: "gobackward.10")
-            .font(.title2)
+            .font(.system(size: chrome == .inline ? 22 : 28, weight: .medium))
+            .frame(width: chrome == .inline ? 44 : 50, height: chrome == .inline ? 44 : 50)
         }
         .accessibilityLabel("快退")
         .disabled(isCenterLoading)
@@ -984,7 +1102,13 @@ struct PlayerView: View {
             togglePlayPause()
           } label: {
             Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-              .font(.system(size: 34, weight: .regular))
+              .font(
+                .system(
+                  size: chrome == .inline ? 34 : 42,
+                  weight: chrome == .inline ? .regular : .semibold
+                )
+              )
+              .frame(width: chrome == .inline ? 44 : 54, height: chrome == .inline ? 44 : 54)
           }
           .accessibilityLabel(isPlaying ? "暂停" : "播放")
         }
@@ -993,7 +1117,8 @@ struct PlayerView: View {
           seek(by: 10)
         } label: {
           Image(systemName: "goforward.10")
-            .font(.title2)
+            .font(.system(size: chrome == .inline ? 22 : 28, weight: .medium))
+            .frame(width: chrome == .inline ? 44 : 50, height: chrome == .inline ? 44 : 50)
         }
         .accessibilityLabel("快进")
         .disabled(isCenterLoading)
@@ -1073,8 +1198,8 @@ struct PlayerView: View {
           }
         }
       } else {
-        // Keep title close to ✕ — immersive side padding 40 made the gap look huge.
-        HStack(spacing: 4) {
+        // Tencent-style immersive bar: plain back chevron, title, trailing menu.
+        HStack(spacing: 6) {
           Button {
             if let onCollapse {
               onCollapse()
@@ -1083,20 +1208,27 @@ struct PlayerView: View {
               dismiss()
             }
           } label: {
-            Image(systemName: "xmark")
-              .font(.body.weight(.semibold))
-              .frame(width: 36, height: 36)
-              .background(.black.opacity(0.35), in: Circle())
+            Image(systemName: "chevron.left")
+              .font(.system(size: 22, weight: .semibold))
+              .frame(width: 24, height: 40, alignment: .leading)
+              .contentShape(Rectangle())
+              .offset(x: 6)
           }
-          PlayerTitleLabel(text: headlineTitle, font: .headline, maxWidth: 280)
+          .buttonStyle(.plain)
+          .accessibilityLabel("返回")
+          PlayerTitleLabel(
+            text: headlineTitle,
+            font: .headline,
+            maxWidth: 280,
+            contentAlignment: .leading
+          )
           Spacer(minLength: 0)
           menuButton
         }
       }
     }
     .foregroundStyle(.white)
-    .padding(.horizontal, controlSidePadding)
-    .padding(.top, chrome == .inline ? 6 : 12)
+    .padding(.top, chrome == .inline ? 6 : 0)
   }
 
   /// Trailing-edge drawer for 倍速 / 清晰度 / 选集 (not full-screen sheets).
@@ -1155,6 +1287,19 @@ struct PlayerView: View {
     }
   }
 
+  /// Native Menu dismissal owns the current touch transaction. Opening the side
+  /// drawer immediately let that dismissing tap hit its backdrop and close it.
+  private func openPlayerDrawerAfterMenuDismissal(_ drawer: PlayerDrawer) {
+    Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(280))
+      if chrome == .inline, drawer == .rate {
+        showingInlineRatePicker = true
+      } else {
+        openPlayerDrawer(drawer)
+      }
+    }
+  }
+
   private func closePlayerDrawers() {
     withAnimation(.easeInOut(duration: 0.24)) {
       showingRatePicker = false
@@ -1163,6 +1308,41 @@ struct PlayerView: View {
       showingLines = false
     }
     scheduleHideControls()
+  }
+
+  private var inlineRatePickerSheet: some View {
+    NavigationStack {
+      List(Self.rateOptions, id: \.self) { rate in
+        let selected = abs(playbackRate - rate) < 0.01
+        Button {
+          playbackRate = rate
+          playbackEngine.setPlaybackRate(rate)
+          showingInlineRatePicker = false
+        } label: {
+          HStack {
+            Text(rate == 1 ? "1.0×" : "\(rate.formatted())×")
+              .foregroundStyle(.primary)
+            Spacer()
+            if selected {
+              Image(systemName: "checkmark")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.orange)
+            }
+          }
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+      }
+      .navigationTitle("播放倍速")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("完成") { showingInlineRatePicker = false }
+        }
+      }
+    }
+    .presentationDetents([.height(360)])
+    .presentationDragIndicator(.visible)
   }
 
   private var rateDrawerPanel: some View {
@@ -1323,7 +1503,7 @@ struct PlayerView: View {
       Button {
         showingDanmakuSettings = true
       } label: {
-        Label("弹幕设置", systemImage: "captions.bubble")
+        Label("弹幕设置", systemImage: "text.bubble")
       }
 
       if !(activeRequest ?? request).subtitles.isEmpty {
@@ -1351,7 +1531,7 @@ struct PlayerView: View {
       }
 
       Button {
-        openPlayerDrawer(.rate)
+        openPlayerDrawerAfterMenuDismissal(.rate)
       } label: {
         Label("倍速 \(playbackRate.formatted())×", systemImage: "gauge")
       }
@@ -1415,10 +1595,14 @@ struct PlayerView: View {
         }
       }
     } label: {
-      Image(systemName: chrome == .inline ? "gearshape" : "ellipsis.circle")
-        .font(chrome == .inline ? .body.weight(.semibold) : .title3)
-        .frame(width: 36, height: 36)
-        .background(chrome == .inline ? Color.clear : Color.black.opacity(0.35), in: Circle())
+      Image(systemName: chrome == .inline ? "gearshape" : "ellipsis")
+        .font(
+          chrome == .inline
+            ? .body.weight(.semibold)
+            : .system(size: 22, weight: .semibold)
+        )
+        .frame(width: 40, height: 40)
+        .contentShape(Rectangle())
     }
   }
 
@@ -1508,16 +1692,17 @@ struct PlayerView: View {
         }
       }
     } else {
-      // Time above the seek bar; leading/trailing keys vertically center on the bar.
-      HStack(alignment: .seekBarCenter, spacing: 10) {
-        immersiveLeadingControls
-          .alignmentGuide(.seekBarCenter) { $0[VerticalAlignment.center] }
-        VStack(alignment: .leading, spacing: 2) {
-          Text(
-            "\(format(currentTime)) / \(duration > 0 ? format(duration) : "--:--")"
-          )
-          .font(.caption.monospacedDigit())
-          .foregroundStyle(.white.opacity(0.9))
+      VStack(spacing: 8) {
+        HStack(spacing: 12) {
+          immersiveLeadingControls
+          Spacer(minLength: 12)
+          immersiveTrailingControls
+        }
+        HStack(spacing: 8) {
+          Text(format(scrubPreview ?? currentTime))
+            .font(.caption.monospacedDigit().weight(.medium))
+            .foregroundStyle(.white)
+            .frame(width: 44, alignment: .leading)
           CompactSeekBar(
             value: seekBinding,
             range: PlaybackTimeline.progressRange(duration: duration),
@@ -1525,11 +1710,12 @@ struct PlayerView: View {
             enabled: duration > 0 && !isAwaitingPlayback,
             onEditingChanged: handleSeekEditing
           )
-          .frame(height: 28)
-          .alignmentGuide(.seekBarCenter) { $0[VerticalAlignment.center] }
+          .frame(height: 24)
+          Text(duration > 0 ? format(duration) : "--:--")
+            .font(.caption.monospacedDigit().weight(.medium))
+            .foregroundStyle(.white.opacity(0.88))
+            .frame(width: 44, alignment: .trailing)
         }
-        immersiveTrailingControls
-          .alignmentGuide(.seekBarCenter) { $0[VerticalAlignment.center] }
       }
     }
   }
@@ -1604,14 +1790,16 @@ struct PlayerView: View {
 
   /// 全屏进度条左侧：下一集 / 弹幕（播放在画面中央；与顶栏 ✕ 同宽对齐对齐）
   private var immersiveLeadingControls: some View {
-    HStack(spacing: 4) {
+    HStack(spacing: 12) {
       if showsNextEpisodeControl {
         Button {
           Task { await playNextEpisode(auto: false) }
         } label: {
           Image(systemName: "forward.end.fill")
             .font(.body.weight(.semibold))
-            .frame(width: 36, height: 36)
+            .frame(width: 24, height: 36, alignment: .leading)
+            .contentShape(Rectangle())
+            .offset(x: 6)
         }
         .buttonStyle(.plain)
         .disabled(isResolvingNext || isAwaitingPlayback)
@@ -1622,9 +1810,9 @@ struct PlayerView: View {
         danmakuEnabled.toggle()
         scheduleHideControls()
       } label: {
-        Image(systemName: danmakuEnabled ? "captions.bubble.fill" : "captions.bubble")
+        Image(systemName: danmakuEnabled ? "text.bubble.fill" : "text.bubble")
           .font(.body.weight(.semibold))
-          .frame(width: 36, height: 36)
+          .frame(width: 36, height: 36, alignment: .leading)
           .opacity(danmakuEnabled ? 1 : 0.45)
       }
       .buttonStyle(.plain)
@@ -1713,6 +1901,12 @@ struct PlayerView: View {
       size.width > 1,
       size.height > 1
     else { return }
+    let ratio = size.width / size.height
+    if ratio.isFinite, ratio >= 0.45, ratio <= 3.2,
+      abs(videoAspectRatio - ratio) > 0.01
+    {
+      videoAspectRatio = ratio
+    }
     let shortEdge = min(size.width, size.height)
     if abs(shortEdge - detectedOutputHeight) > 4 {
       detectedOutputHeight = shortEdge
@@ -1720,6 +1914,7 @@ struct PlayerView: View {
     if shortEdge > streamPeakHeight {
       streamPeakHeight = shortEdge
     }
+    reportPlaybackQualityIfNeeded()
     clampResolutionSelection()
   }
 
@@ -2021,6 +2216,72 @@ struct PlayerView: View {
     if silentHandoff { endSilentVisualHandoffIfReady() }
   }
 
+  private func notifyPlaybackReadyIfNeeded() {
+    guard !didNotifyPlaybackReady, hasRenderableVideo else { return }
+    didNotifyPlaybackReady = true
+    onPlaybackReady?()
+    reportPlaybackQualityIfNeeded()
+    scheduleWatermarkAdScan()
+  }
+
+  private func reportPlaybackQualityIfNeeded() {
+    guard !didReportPlaybackQuality, hasRenderableVideo,
+      detectedOutputHeight > 0
+    else { return }
+    didReportPlaybackQuality = true
+    onPlaybackQualityMeasured?(Int(detectedOutputHeight.rounded()))
+  }
+
+  /// Detect burned-in “本片由 xxx.com 赞助发布” banners once per episode.
+  /// A hit lowers this provider for future station ranking.
+  private func scheduleWatermarkAdScan() {
+    guard !didScheduleWatermarkAdScan, onWatermarkAdDetected != nil else { return }
+    didScheduleWatermarkAdScan = true
+    Task { @MainActor in
+      try? await Task.sleep(for: .seconds(4))
+      guard isPlayerMounted, hasRenderableVideo,
+        let snapshot = playerSurfaceBox.snapshot()
+      else { return }
+      let box = PlayerSnapshotBox(image: snapshot)
+      let detected = await Task.detached(priority: .utility) {
+        Self.containsSponsorWatermark(box.image)
+      }.value
+      guard detected else { return }
+      onWatermarkAdDetected?()
+      showToast("已记录该线路有片头水印，下次优先其他线路")
+    }
+  }
+
+  private nonisolated static func containsSponsorWatermark(_ image: UIImage) -> Bool {
+    guard let cgImage = image.cgImage else { return false }
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = .fast
+    request.usesLanguageCorrection = false
+    request.recognitionLanguages = ["zh-Hans", "en-US"]
+    let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+    do {
+      try handler.perform([request])
+    } catch {
+      return false
+    }
+    let text =
+      request.results?
+      .compactMap { $0.topCandidates(1).first?.string }
+      .joined(separator: " ")
+      .lowercased() ?? ""
+    guard !text.isEmpty else { return false }
+    let hasSponsor =
+      text.contains("赞助发布")
+      || text.contains("赞助播出")
+      || (text.contains("本片由") && text.contains("赞助"))
+      || text.contains("主营：") || text.contains("主营:")
+    guard hasSponsor else { return false }
+    return text.range(
+      of: #"(?:[a-z0-9-]+\.)+(?:com|net|cc|vip|xyz|top|tv|me|co)\b"#,
+      options: [.regularExpression, .caseInsensitive]
+    ) != nil
+  }
+
   private func engine(for url: URL) -> PlaybackEngineKind {
     if let forced = model.playbackPreference.engine { return forced }
     let text = url.absoluteString.lowercased()
@@ -2302,6 +2563,7 @@ struct PlayerView: View {
     }
     if isPlaying {
       wantsPlaying = false
+      isPlaybackBuffering = false
       playbackEngine.pause()
     } else {
       wantsPlaying = true
@@ -2401,6 +2663,7 @@ struct PlayerView: View {
     if !blackClock, time > lastProgressMediaTime + 0.15 {
       lastProgressMediaTime = time
       lastProgressWallclock = Date()
+      isPlaybackBuffering = false
     }
     if !looksLikeGlitch, !blackClock {
       onPlaybackTimeChange?(time)
@@ -2481,6 +2744,21 @@ struct PlayerView: View {
   /// Playback clock frozen while "playing" — try alternate URLs, then next 来源.
   private func recoverFromStall() async {
     guard !stallRecoveryInFlight, !failingOver, !silentHandoff else { return }
+    // A picture is already on screen. Prefer a controlled one-shot failover
+    // after a real stall; ordinary short buffering only changes the center icon.
+    if hasRenderableVideo {
+      isPlaybackBuffering = true
+      lastProgressWallclock = Date()
+      if streamResolution == .automatic, !autoQualityDegraded {
+        autoQualityDegraded = true
+        applyPreferredPeakBitRate()
+      }
+      if onStalled?() == true {
+        silentHandoff = true
+        return
+      }
+      return
+    }
     // Cold start / never had a frame: first-frame watchdog owns recovery — avoid
     // thrashing 来源 every few seconds (间歇黑屏).
     if !keepLastFrame, !hasRenderableVideo, freezeFrame == nil {
@@ -2506,9 +2784,10 @@ struct PlayerView: View {
     _ = handleExhaustedPlayback("播放卡住，正在切换来源", silent: true)
   }
 
-  // Slow CMS opens often need >4.5s; hopping sooner caused black flashes every few seconds.
-  private static let firstFrameTimeoutSeconds: TimeInterval = 7.5
-  private static let maxFirstFrameFailovers = 3
+  // Weak networks need more time to produce a first frame; early hopping only
+  // multiplied buffering work and made the player look permanently stuck.
+  private static let firstFrameTimeoutSeconds: TimeInterval = 12
+  private static let maxFirstFrameFailovers = 2
 
   /// No first picture after timeout → try mirrors, then silent 换源 (API ping ≠ 开播).
   private func watchSlowFirstFrame() async {
@@ -2623,8 +2902,11 @@ struct PlayerView: View {
     didAutoSkipIntro = false
     skippedAdSegmentKeys = []
     // New episode gets a fresh first-frame budget; 换源 keeps the hop cap.
-    if !sameEpisode {
+    if !sameEpisode || isSourceHandoff {
       firstFrameFailoverCount = 0
+      didNotifyPlaybackReady = false
+      didScheduleWatermarkAdScan = false
+      didReportPlaybackQuality = false
     }
     // Reset quality gates so 换源 doesn't inherit the previous station's 4K/2K.
     detectedOutputHeight = 0

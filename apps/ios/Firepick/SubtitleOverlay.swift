@@ -99,6 +99,7 @@ struct SubtitleOverlay: View {
   var fontSize: CGFloat = 18
   var color: Color = .white
   var outlined: Bool = true
+  var bottomPadding: CGFloat = 72
 
   private var activeText: String? {
     cues.first(where: { currentTime >= $0.start && currentTime < $0.end })?.text
@@ -112,7 +113,7 @@ struct SubtitleOverlay: View {
         .multilineTextAlignment(.center)
         .shadow(color: outlined ? .black.opacity(0.9) : .clear, radius: outlined ? 1.2 : 0)
         .padding(.horizontal, 16)
-        .padding(.bottom, 72)
+        .padding(.bottom, bottomPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .allowsHitTesting(false)
     }

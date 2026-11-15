@@ -31,7 +31,12 @@ struct BrowseView: View {
   }
 
   private var visibleCategories: [FirepickCore.Category] {
-    let preferred = ["bucket|recommend", "bucket|tv", "bucket|movie", "bucket|variety", "bucket|anime"]
+    var preferred = [
+      "bucket|recommend", "bucket|tv", "bucket|movie", "bucket|variety", "bucket|anime",
+    ]
+    if model.contentMode == .adult {
+      preferred.append("bucket|adult")
+    }
     let raw = (model.homeResult?.classes ?? []).filter { category in
       let id = category.typeId
       return !id.hasSuffix("kids") && !id.hasSuffix("doc")

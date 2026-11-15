@@ -7,6 +7,7 @@ final class AppPersistence {
   private enum Key {
     static let configurationBaseURL = "configurationBaseURL"
     static let selectedSiteKey = "selectedSiteKey"
+    static let contentMode = "contentMode"
     static let playbackPreference = "playbackPreference"
     static let posterSizePreference = "posterSizePreference"
     static let danmakuEnabledByDefault = "danmakuEnabledByDefault"
@@ -16,6 +17,9 @@ final class AppPersistence {
     static let danmakuAutoMatch = "danmakuAutoMatch"
     static let danmakuCustomAPIBase = "danmakuCustomAPIBase"
     static let danmakuDisplayArea = "danmakuDisplayArea"
+    static let watermarkAdProviderKeys = "watermarkAdProviderKeys"
+    static let providerPlaybackQuality = "providerPlaybackQuality"
+    static let standaloneLiveSources = "standaloneLiveSources"
     static let sourceConnections = "sourceConnections"
     static let currentConnectionURL = "currentConnectionURL"
     static let liveGroupsCacheDigest = "liveGroupsCacheDigest"
@@ -43,6 +47,8 @@ final class AppPersistence {
     static let lastLiveShelfID = "lastLiveShelfID"
     static let activeCMSProviders = "activeCMSProviders"
     static let activeCMSProvidersProbedAt = "activeCMSProvidersProbedAt"
+    static let activeCMSProvidersAdult = "activeCMSProvidersAdult"
+    static let activeCMSProvidersAdultProbedAt = "activeCMSProvidersAdultProbedAt"
   }
 
   private let defaults = UserDefaults.standard
@@ -141,8 +147,20 @@ final class AppPersistence {
     defaults.string(forKey: Key.danmakuDisplayArea)
   }
 
+  var watermarkAdProviderKeys: [String] {
+    defaults.stringArray(forKey: Key.watermarkAdProviderKeys) ?? []
+  }
+
   var currentConnectionURL: String? {
     defaults.string(forKey: Key.currentConnectionURL)
+  }
+
+  var contentMode: String? {
+    defaults.string(forKey: Key.contentMode)
+  }
+
+  func saveContentMode(_ value: String) {
+    defaults.set(value, forKey: Key.contentMode)
   }
 
   var searchHistory: [String] {
@@ -248,6 +266,39 @@ final class AppPersistence {
 
   func saveDanmakuDisplayArea(_ value: String) {
     defaults.set(value, forKey: Key.danmakuDisplayArea)
+  }
+
+  func saveWatermarkAdProviderKeys(_ values: Set<String>) {
+    defaults.set(values.sorted(), forKey: Key.watermarkAdProviderKeys)
+  }
+
+  func loadProviderPlaybackQuality() -> [String: AppModel.ProviderPlaybackQuality]? {
+    guard let data = defaults.data(forKey: Key.providerPlaybackQuality) else {
+      return nil
+    }
+    return try? JSONDecoder().decode(
+      [String: AppModel.ProviderPlaybackQuality].self,
+      from: data
+    )
+  }
+
+  func saveProviderPlaybackQuality(
+    _ values: [String: AppModel.ProviderPlaybackQuality]
+  ) {
+    guard let data = try? JSONEncoder().encode(values) else { return }
+    defaults.set(data, forKey: Key.providerPlaybackQuality)
+  }
+
+  func loadStandaloneLiveSources() -> [LiveConfiguration]? {
+    guard let data = defaults.data(forKey: Key.standaloneLiveSources) else {
+      return nil
+    }
+    return try? JSONDecoder().decode([LiveConfiguration].self, from: data)
+  }
+
+  func saveStandaloneLiveSources(_ values: [LiveConfiguration]) {
+    guard let data = try? JSONEncoder().encode(values) else { return }
+    defaults.set(data, forKey: Key.standaloneLiveSources)
   }
 
   var videoOutputPreference: String? { defaults.string(forKey: Key.videoOutputPreference) }
@@ -367,8 +418,12 @@ final class AppPersistence {
     return defaults.integer(forKey: Key.lastLiveURLIndex)
   }
 
-  func loadActiveCMSProviders() -> [AppModel.ActiveCMSProvider] {
-    guard let data = defaults.data(forKey: Key.activeCMSProviders),
+  func loadActiveCMSProviders(mode: AppModel.ContentMode) -> [AppModel.ActiveCMSProvider] {
+    let key =
+      mode == .adult
+      ? Key.activeCMSProvidersAdult
+      : Key.activeCMSProviders
+    guard let data = defaults.data(forKey: key),
       let decoded = try? JSONDecoder().decode([AppModel.ActiveCMSProvider].self, from: data)
     else {
       return []
@@ -376,16 +431,32 @@ final class AppPersistence {
     return decoded
   }
 
-  func saveActiveCMSProviders(_ values: [AppModel.ActiveCMSProvider], probedAt: Date = .now) {
+  func saveActiveCMSProviders(
+    _ values: [AppModel.ActiveCMSProvider],
+    mode: AppModel.ContentMode,
+    probedAt: Date = .now
+  ) {
+    let key =
+      mode == .adult
+      ? Key.activeCMSProvidersAdult
+      : Key.activeCMSProviders
+    let probedAtKey =
+      mode == .adult
+      ? Key.activeCMSProvidersAdultProbedAt
+      : Key.activeCMSProvidersProbedAt
     if let data = try? JSONEncoder().encode(values) {
-      defaults.set(data, forKey: Key.activeCMSProviders)
+      defaults.set(data, forKey: key)
     }
-    defaults.set(probedAt.timeIntervalSince1970, forKey: Key.activeCMSProvidersProbedAt)
+    defaults.set(probedAt.timeIntervalSince1970, forKey: probedAtKey)
   }
 
-  var activeCMSProvidersProbedAt: Date? {
-    guard defaults.object(forKey: Key.activeCMSProvidersProbedAt) != nil else { return nil }
-    return Date(timeIntervalSince1970: defaults.double(forKey: Key.activeCMSProvidersProbedAt))
+  func activeCMSProvidersProbedAt(mode: AppModel.ContentMode) -> Date? {
+    let key =
+      mode == .adult
+      ? Key.activeCMSProvidersAdultProbedAt
+      : Key.activeCMSProvidersProbedAt
+    guard defaults.object(forKey: key) != nil else { return nil }
+    return Date(timeIntervalSince1970: defaults.double(forKey: key))
   }
 
   /// Keep browse lists across launches (maxAge). Includes filter keys + Douban order.

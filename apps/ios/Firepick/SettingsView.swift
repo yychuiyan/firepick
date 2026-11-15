@@ -20,6 +20,7 @@ struct SettingsView: View {
       Form {
         linesSection
         playbackSection
+        contentSection
         storageSection
         ProvisioningExpirySection()
       }
@@ -193,6 +194,27 @@ struct SettingsView: View {
           value: model.danmakuEnabledByDefault ? "默认开" : "默认关"
         )
       }
+      NavigationLink {
+        LiveSourceManagementView()
+      } label: {
+        LabeledContent(
+          "直播源",
+          value: model.standaloneLiveSourceSummary
+        )
+      }
+    }
+  }
+
+  private var contentSection: some View {
+    Section("内容") {
+      NavigationLink {
+        ContentModeSettingsView()
+      } label: {
+        LabeledContent(
+          "内容模式",
+          value: model.contentMode.title
+        )
+      }
     }
   }
 
@@ -234,6 +256,63 @@ struct SettingsView: View {
       }
     }
     return "尚未选择"
+  }
+}
+
+private struct ContentModeSettingsView: View {
+  @Environment(AppModel.self) private var model
+  @State private var showingAdultModeConfirmation = false
+
+  var body: some View {
+    Form {
+      Section {
+        Toggle(isOn: .constant(true)) {
+          Label("标准模式", systemImage: "checkmark.shield")
+        }
+        .disabled(true)
+      } footer: {
+        Text("标准模式默认开启且不可关闭。成人线路不会参与测速、推荐、分类、搜索、详情或播放。")
+      }
+
+      Section {
+        Toggle(isOn: adultModeBinding) {
+          Label("成人模式", systemImage: "exclamationmark.shield")
+        }
+        .tint(.red)
+      } footer: {
+        Text(
+          model.contentMode == .adult
+            ? "成人线路已完全放开，并集中显示在“成人”菜单。"
+            : "默认关闭。开启后，成人线路将参与测速、成人菜单、搜索、详情和播放。"
+        )
+      }
+    }
+    .navigationTitle("内容模式")
+    .navigationBarTitleDisplayMode(.inline)
+    .alert(
+      "开启成人模式？",
+      isPresented: $showingAdultModeConfirmation
+    ) {
+      Button("开启", role: .destructive) {
+        Task { await model.setContentMode(.adult) }
+      }
+      Button("取消", role: .cancel) {}
+    } message: {
+      Text("成人线路将参与测速、成人菜单、搜索、详情和播放。开启后会重新获取最佳线路。")
+    }
+  }
+
+  private var adultModeBinding: Binding<Bool> {
+    Binding(
+      get: { model.contentMode == .adult },
+      set: { enabled in
+        if enabled {
+          showingAdultModeConfirmation = true
+          return
+        }
+        Task { await model.setContentMode(.standard) }
+      }
+    )
   }
 }
 
