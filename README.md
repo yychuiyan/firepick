@@ -19,9 +19,9 @@
 当前公开发布版本：
 
 ```text
-Version: 0.1.32
-Build:   33
-SHA-256: 18bd3ed23f992c028ef279b72229bd7932f2c9dd142d42e53394b8167d47e521
+Version: 0.1.33
+Build:   34
+SHA-256: 4111d0e08d69e512b6ae76b086bf44a5e3dd5bdaed4ad5c935e826a994af643c
 ```
 
 SideStore 更新源：
@@ -33,7 +33,7 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 当前 IPA 下载地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/Firepick-0.1.32.ipa
+https://dl.yychuiyan.com/firepick/Firepick-0.1.33.ipa
 ```
 
 ## 功能概览
@@ -102,7 +102,8 @@ https://dl.yychuiyan.com/firepick/ios-sources.json?v=21
 - 成人模式：完全放开成人线路，并在菜单中新增“成人”；成人线路和成人分类
   内容集中展示在这里，不混入推荐、电视剧、电影、综艺和动漫。
 
-两种模式分别保存活跃线路池，切换后会清理分类缓存并重新选择最佳线路。
+两种模式分别保存活跃线路池。切换模式会保留已加载分类、卡片和滚动位置，
+只追加或移除“成人”菜单；后台更新最佳线路时也不会重载当前菜单。
 
 ---
 
@@ -382,7 +383,7 @@ FIREPICK_CURL_DOH_URL="https://223.5.5.5/dns-query" \
 
 版本规则：
 
-- 后续补丁版本依次使用 `0.1.10`、`0.1.11`、`0.1.12`、`0.1.13`、`0.1.14`、`0.1.15`、`0.1.16`、`0.1.17`、`0.1.18`、`0.1.19`、`0.1.20`、`0.1.21`、`0.1.22`、`0.1.23`、`0.1.24`、`0.1.25`、`0.1.26`、`0.1.27`、`0.1.28`、`0.1.29`、`0.1.30`，不跳到 `0.2.0`。
+- 后续补丁版本依次使用 `0.1.10` 至 `0.1.33`，不跳到 `0.2.0`。
 - 每次发布增加 `MARKETING_VERSION`。
 - 同一版本重新构建时仍应增加 `CURRENT_PROJECT_VERSION`。
 - 不复用旧版本号发布不同代码。
