@@ -949,7 +949,11 @@ struct PlayerView: View {
   }
 
   private var controlContentInset: CGFloat {
-    8
+    12
+  }
+
+  private var immersiveTimeColumnWidth: CGFloat {
+    64
   }
 
   private func fittedVideoRect(in size: CGSize) -> CGRect {
@@ -979,8 +983,8 @@ struct PlayerView: View {
     let horizontalInset = max(controlContentInset, picture.minX + controlContentInset)
     let topInset = max(controlContentInset, picture.minY + controlContentInset)
     let bottomInset = max(
-      controlContentInset,
-      size.height - picture.maxY + controlContentInset
+      controlContentInset + 2,
+      size.height - picture.maxY + controlContentInset + 2
     )
 
     return ZStack {
@@ -1692,7 +1696,7 @@ struct PlayerView: View {
         }
       }
     } else {
-      VStack(spacing: 8) {
+      VStack(spacing: 10) {
         HStack(spacing: 12) {
           immersiveLeadingControls
           Spacer(minLength: 12)
@@ -1702,7 +1706,9 @@ struct PlayerView: View {
           Text(format(scrubPreview ?? currentTime))
             .font(.caption.monospacedDigit().weight(.medium))
             .foregroundStyle(.white)
-            .frame(width: 44, alignment: .leading)
+            .lineLimit(1)
+            .minimumScaleFactor(0.82)
+            .frame(width: immersiveTimeColumnWidth, alignment: .leading)
           CompactSeekBar(
             value: seekBinding,
             range: PlaybackTimeline.progressRange(duration: duration),
@@ -1714,7 +1720,9 @@ struct PlayerView: View {
           Text(duration > 0 ? format(duration) : "--:--")
             .font(.caption.monospacedDigit().weight(.medium))
             .foregroundStyle(.white.opacity(0.88))
-            .frame(width: 44, alignment: .trailing)
+            .lineLimit(1)
+            .minimumScaleFactor(0.82)
+            .frame(width: immersiveTimeColumnWidth, alignment: .trailing)
         }
       }
     }
@@ -1788,21 +1796,18 @@ struct PlayerView: View {
     onPlaybackTimeChange?(pinned)
   }
 
-  /// 全屏进度条左侧：下一集 / 弹幕（播放在画面中央；与顶栏 ✕ 同宽对齐对齐）
+  /// 全屏底部第一行左侧：下一集 / 弹幕。
   private var immersiveLeadingControls: some View {
-    HStack(spacing: 12) {
+    HStack(spacing: 10) {
       if showsNextEpisodeControl {
         Button {
           Task { await playNextEpisode(auto: false) }
         } label: {
-          Image(systemName: "forward.end.fill")
-            .font(.body.weight(.semibold))
-            .frame(width: 24, height: 36, alignment: .leading)
-            .contentShape(Rectangle())
-            .offset(x: 6)
+          immersiveUtilityLabel("下集", systemImage: "forward.end.fill")
         }
         .buttonStyle(.plain)
         .disabled(isResolvingNext || isAwaitingPlayback)
+        .opacity(isResolvingNext || isAwaitingPlayback ? 0.45 : 1)
         .accessibilityLabel("下一集")
       }
 
@@ -1810,10 +1815,11 @@ struct PlayerView: View {
         danmakuEnabled.toggle()
         scheduleHideControls()
       } label: {
-        Image(systemName: danmakuEnabled ? "text.bubble.fill" : "text.bubble")
-          .font(.body.weight(.semibold))
-          .frame(width: 36, height: 36, alignment: .leading)
-          .opacity(danmakuEnabled ? 1 : 0.45)
+        immersiveUtilityLabel(
+          "弹幕",
+          systemImage: danmakuEnabled ? "text.bubble.fill" : "text.bubble",
+          selected: danmakuEnabled
+        )
       }
       .buttonStyle(.plain)
       .accessibilityLabel(danmakuEnabled ? "关闭弹幕" : "打开弹幕")
@@ -1821,38 +1827,73 @@ struct PlayerView: View {
     .foregroundStyle(.white)
   }
 
-  /// 全屏进度条右侧：倍速 / 清晰度 / 选集（间距收紧）
+  /// 全屏底部第一行右侧：清晰度 / 倍速 / 选集。
   private var immersiveTrailingControls: some View {
-    HStack(spacing: 8) {
-      Button {
-        openPlayerDrawer(.rate)
-      } label: {
-        Text(playbackRateLabel)
-          .font(.subheadline.weight(.semibold))
-      }
-      .buttonStyle(.plain)
-      .accessibilityLabel("倍速")
-
+    HStack(spacing: 10) {
       Button {
         openPlayerDrawer(.resolution)
       } label: {
-        Text(resolutionButtonTitle)
-          .font(.subheadline.weight(.semibold))
+        immersiveUtilityLabel("画质 \(resolutionButtonTitle)")
       }
       .buttonStyle(.plain)
-      .accessibilityLabel("清晰度")
+      .accessibilityLabel("清晰度 \(resolutionButtonTitle)")
+
+      Button {
+        openPlayerDrawer(.rate)
+      } label: {
+        immersiveUtilityLabel(playbackRateLabel)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("倍速")
 
       if !currentLineEpisodes.isEmpty {
         Button {
           openPlayerDrawer(.episodes)
         } label: {
-          Text("选集")
-            .font(.subheadline.weight(.semibold))
+          immersiveUtilityLabel("选集")
         }
         .buttonStyle(.plain)
       }
     }
     .foregroundStyle(.white)
+  }
+
+  private func immersiveUtilityLabel(
+    _ title: String,
+    systemImage: String? = nil,
+    selected: Bool = false
+  ) -> some View {
+    HStack(spacing: 5) {
+      if let systemImage {
+        Image(systemName: systemImage)
+          .font(.caption.weight(.semibold))
+      }
+      Text(title)
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .allowsTightening(true)
+    }
+    .font(.caption.weight(.semibold))
+    .padding(.horizontal, 9)
+    .frame(minHeight: 36)
+    .background {
+      Capsule()
+        .fill(
+          selected
+            ? Color.orange.opacity(0.78)
+            : Color.black.opacity(0.30)
+        )
+        .overlay {
+          Capsule()
+            .strokeBorder(
+              selected
+                ? Color.white.opacity(0.16)
+                : Color.white.opacity(0.10),
+              lineWidth: 0.5
+            )
+        }
+    }
+    .contentShape(Capsule())
   }
 
   private var playbackRateLabel: String {
