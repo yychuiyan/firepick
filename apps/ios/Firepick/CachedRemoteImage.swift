@@ -770,6 +770,7 @@ struct CachedRemoteImage<Placeholder: View>: View {
 
   private func firstAvailableAlternative(from candidates: [URL]) async -> (url: URL, image: UIImage)? {
     let targets = Array(candidates.prefix(3))
+    let pixelSize = maxPixelSize
     guard !targets.isEmpty else { return nil }
     return await withTaskGroup(
       of: (url: URL, image: UIImage)?.self
@@ -779,7 +780,7 @@ struct CachedRemoteImage<Placeholder: View>: View {
           guard !Task.isCancelled,
             let repaired = await RemoteImagePipeline.shared.image(
               for: candidate,
-              maxPixelSize: maxPixelSize
+              maxPixelSize: pixelSize
             )
           else { return nil }
           return (candidate, repaired)
