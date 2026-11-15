@@ -326,14 +326,18 @@ enum RemoteImageCache {
 enum PosterPrefetch {
   /// Warm memory/disk cache for the first-screen posters so LazyVGrid does not wait serial.
   static func warm(urls: [URL?], maxPixelSize: CGFloat = 720, limit: Int = 12) {
-    let targets = urls.compactMap { $0 }.prefix(limit)
+    let targets = Array(urls.compactMap { $0 }.prefix(limit))
     guard !targets.isEmpty else { return }
-    // userInitiated so filter/tab swaps fill posters in ~1s, not behind utility work.
+    // Bound peak network and decode work. Twelve simultaneous poster decodes
+    // are cheap in Simulator but visibly contend on older iPhones.
     Task(priority: .userInitiated) {
-      await withTaskGroup(of: Void.self) { group in
-        for url in targets {
-          group.addTask {
-            _ = await RemoteImagePipeline.shared.image(for: url, maxPixelSize: maxPixelSize)
+      for start in stride(from: 0, to: targets.count, by: 4) {
+        let end = min(start + 4, targets.count)
+        await withTaskGroup(of: Void.self) { group in
+          for url in targets[start..<end] {
+            group.addTask {
+              _ = await RemoteImagePipeline.shared.image(for: url, maxPixelSize: maxPixelSize)
+            }
           }
         }
       }

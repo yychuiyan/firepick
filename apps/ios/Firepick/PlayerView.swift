@@ -44,8 +44,6 @@ struct PlayerView: View {
   var onPlaybackTimeChange: ((Double) -> Void)? = nil
   /// First real picture is visible — parent should stop proactive source switching.
   var onPlaybackReady: (() -> Void)? = nil
-  /// Playback froze after a real frame — parent may perform one controlled failover.
-  var onStalled: (() -> Bool)? = nil
   /// A burned-in sponsor/domain watermark was detected in the video pixels.
   var onWatermarkAdDetected: (() -> Void)? = nil
   /// Maximum decoded/presented short-edge height observed for this provider.
@@ -70,7 +68,7 @@ struct PlayerView: View {
   @State private var didScrollEpisodeDrawer = false
   @State private var showingLines = false
   @State private var showingDanmakuSettings = false
-  @State private var showControls = true
+  @State private var showControls = false
   @State private var hideTask: Task<Void, Never>?
   @State private var failingOver = false
   @State private var triedURLs: [URL] = []
@@ -227,7 +225,6 @@ struct PlayerView: View {
     onPlayEpisode: ((Episode, String, Double?) -> Void)? = nil,
     onPlaybackTimeChange: ((Double) -> Void)? = nil,
     onPlaybackReady: (() -> Void)? = nil,
-    onStalled: (() -> Bool)? = nil,
     onWatermarkAdDetected: (() -> Void)? = nil,
     onPlaybackQualityMeasured: ((Int) -> Void)? = nil,
     onUnplayable: (() -> Bool)? = nil,
@@ -247,7 +244,6 @@ struct PlayerView: View {
     self.onPlayEpisode = onPlayEpisode
     self.onPlaybackTimeChange = onPlaybackTimeChange
     self.onPlaybackReady = onPlaybackReady
-    self.onStalled = onStalled
     self.onWatermarkAdDetected = onWatermarkAdDetected
     self.onPlaybackQualityMeasured = onPlaybackQualityMeasured
     self.onUnplayable = onUnplayable
@@ -1085,6 +1081,12 @@ struct PlayerView: View {
   private var centerPlayButton: some View {
     if displayFailure != nil {
       Color.clear.frame(width: 1, height: 1)
+    } else if isCenterLoading && !showControls {
+      ProgressView()
+        .tint(.white)
+        .scaleEffect(1.25)
+        .frame(width: 44, height: 44)
+        .accessibilityLabel("加载中")
     } else {
       HStack(spacing: chrome == .inline ? 36 : 54) {
         Button {
@@ -1095,7 +1097,6 @@ struct PlayerView: View {
             .frame(width: chrome == .inline ? 44 : 50, height: chrome == .inline ? 44 : 50)
         }
         .accessibilityLabel("快退")
-        .disabled(isCenterLoading)
 
         if isCenterLoading {
           ProgressView()
@@ -1127,11 +1128,9 @@ struct PlayerView: View {
             .frame(width: chrome == .inline ? 44 : 50, height: chrome == .inline ? 44 : 50)
         }
         .accessibilityLabel("快进")
-        .disabled(isCenterLoading)
       }
       .buttonStyle(.plain)
       .foregroundStyle(.white)
-      .opacity(isCenterLoading && !showControls ? 0.95 : 1)
     }
   }
 
@@ -3014,18 +3013,14 @@ struct PlayerView: View {
   /// Playback clock frozen while "playing" — try alternate URLs, then next 来源.
   private func recoverFromStall() async {
     guard !stallRecoveryInFlight, !failingOver, !silentHandoff else { return }
-    // A picture is already on screen. Prefer a controlled one-shot failover
-    // after a real stall; ordinary short buffering only changes the center icon.
+    // A picture is already on screen. Keep the station stable through ordinary
+    // buffering instead of silently hopping to another source and loading again.
     if hasRenderableVideo {
       isPlaybackBuffering = true
       lastProgressWallclock = Date()
       if streamResolution == .automatic, !autoQualityDegraded {
         autoQualityDegraded = true
         applyPreferredPeakBitRate()
-      }
-      if onStalled?() == true {
-        silentHandoff = true
-        return
       }
       return
     }
@@ -3608,6 +3603,9 @@ struct PlayerView: View {
 
   private func scheduleHideControls() {
     hideTask?.cancel()
+    // Loading starts with a clean picture: keep only the center spinner until
+    // the user taps the screen. A manual reveal stays open while buffering.
+    if isCenterLoading { return }
     // Paused: keep chrome so play is one tap away. Playing: auto-hide like hover.
     guard isPlaying else {
       showControls = true

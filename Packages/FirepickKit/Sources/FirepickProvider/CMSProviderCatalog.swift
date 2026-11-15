@@ -154,6 +154,48 @@ public enum CMSProviderCatalog {
     return result
   }
 
+  public static func activePoolLimit(adultMode: Bool) -> Int {
+    adultMode ? 20 : 10
+  }
+
+  public static func candidatePoolLimit(adultMode: Bool) -> Int {
+    adultMode ? 40 : 30
+  }
+
+  /// Keep an adult-mode pool mixed and useful for ordinary search: normal
+  /// providers occupy the leading wave, while adult providers have reserved
+  /// slots. Hosts are unique so mirrors do not consume two rows.
+  public static func balancedActivePool(
+    primary: [Entry],
+    fallback: [Entry],
+    adultMode: Bool,
+    limit: Int,
+    minimumAdult: Int = 4
+  ) -> [Entry] {
+    guard limit > 0 else { return [] }
+    let eligiblePrimary = adultMode ? primary : primary.filter { $0.adult != true }
+    let eligibleFallback = adultMode ? fallback : fallback.filter { $0.adult != true }
+    var seenHosts = Set<String>()
+    let unique = (eligiblePrimary + eligibleFallback).filter { entry in
+      let host = URL(string: entry.api)?.host?.lowercased() ?? entry.key
+      return seenHosts.insert(host).inserted
+    }
+    guard adultMode else {
+      return Array(unique.prefix(limit))
+    }
+
+    let adults = unique.filter { $0.adult == true }
+    let normals = unique.filter { $0.adult != true }
+    let adultCount = min(max(0, minimumAdult), adults.count, limit)
+    let normalReserve = max(0, limit - adultCount)
+    let normalSeed = Array(normals.prefix(normalReserve))
+    let adultSeed = Array(adults.prefix(adultCount))
+    var result = normalSeed + adultSeed
+    result.append(contentsOf: normals.dropFirst(normalSeed.count))
+    result.append(contentsOf: adults.dropFirst(adultSeed.count))
+    return Array(result.prefix(limit))
+  }
+
   /// Load the monitor's best-line shortlist. An empty result means every remote
   /// endpoint failed, allowing callers to preserve their local active pool.
   public static func loadBestCandidates(

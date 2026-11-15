@@ -4,6 +4,7 @@ struct AIEnhancementSettingsView: View {
   @Environment(AppModel.self) private var model
   @State private var keyInput = ""
   @State private var showingRemoveConfirmation = false
+  @FocusState private var keyFocused: Bool
 
   var body: some View {
     @Bindable var model = model
@@ -28,26 +29,41 @@ struct AIEnhancementSettingsView: View {
       }
 
       Section {
-        SecureField("DeepSeek API Key", text: $keyInput)
+        if model.aiEnhancementKeyConfigured {
+          LabeledContent("当前 API Key", value: model.maskedDeepSeekAPIKey)
+        }
+        SecureField(
+          model.aiEnhancementKeyConfigured
+            ? "输入新 Key 以替换"
+            : "DeepSeek API Key",
+          text: $keyInput
+        )
           .textInputAutocapitalization(.never)
           .autocorrectionDisabled()
           .privacySensitive()
-        Button(model.aiEnhancementTesting ? "正在验证…" : "保存并验证") {
+          .focused($keyFocused)
+          .submitLabel(.done)
+          .onSubmit { keyFocused = false }
+        Button {
+          keyFocused = false
           Task {
-            let valid = await model.saveDeepSeekAPIKey(keyInput)
+            let valid = await model.validateAndSaveDeepSeekAPIKey(keyInput)
             if valid {
               keyInput = ""
             }
+          }
+        } label: {
+          HStack(spacing: 8) {
+            if model.aiEnhancementTesting {
+              ProgressView()
+            }
+            Text(model.aiEnhancementTesting ? "正在验证…" : "验证并保存")
           }
         }
         .disabled(
           keyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || model.aiEnhancementTesting
         )
-        Button("测试连接") {
-          Task { _ = await model.testDeepSeekConnection() }
-        }
-        .disabled(!model.aiEnhancementKeyConfigured || model.aiEnhancementTesting)
         if model.aiEnhancementKeyConfigured {
           Button("移除 API Key", role: .destructive) {
             showingRemoveConfirmation = true
@@ -56,7 +72,7 @@ struct AIEnhancementSettingsView: View {
       } header: {
         Text("API Key")
       } footer: {
-        Text("Key 仅保存在系统钥匙串。不会发送观看历史、收藏、播放地址、源配置或请求头。")
+        Text("点击验证并保存后，会先测试 Key；测试通过才写入系统钥匙串。不会发送观看历史、收藏、播放地址、源配置或请求头。")
       }
 
       Section("数据说明") {
@@ -70,6 +86,8 @@ struct AIEnhancementSettingsView: View {
     }
     .navigationTitle("AI 增强")
     .navigationBarTitleDisplayMode(.inline)
+    .scrollDismissesKeyboard(.interactively)
+    .dismissKeyboardOnBackgroundTap()
     .alert("移除 DeepSeek API Key？", isPresented: $showingRemoveConfirmation) {
       Button("移除", role: .destructive) {
         model.clearDeepSeekAPIKey()

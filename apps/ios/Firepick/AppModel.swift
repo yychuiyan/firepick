@@ -381,6 +381,12 @@ final class AppModel {
   var aiEnhancementKeyConfigured = false
   var aiEnhancementTesting = false
   var aiEnhancementStatus: String?
+  var maskedDeepSeekAPIKey: String {
+    guard let key = aiAPIKey, !key.isEmpty else { return "未配置" }
+    let prefix = key.lowercased().hasPrefix("sk-") ? "sk-" : ""
+    let suffix = key.count > 8 ? String(key.suffix(4)) : ""
+    return "\(prefix)••••••••\(suffix)"
+  }
   var multiSourceSearchEnabled = false
   var bufferPreference: BufferPreference = .standard
   var subtitleFontPreference: SubtitleFontPreference = .medium
@@ -467,9 +473,21 @@ final class AppModel {
       library = try LibraryStore()
       persistence = try AppPersistence()
       loadPreferences()
-      try await refreshLibrary()
     } catch {
       errorMessage = error.localizedDescription
+    }
+    if library != nil {
+      // History/favorites are not needed to paint the first grid. Let SQLite
+      // load alongside configuration restore instead of blocking the UI.
+      Task(priority: .utility) { @MainActor in
+        do {
+          try await refreshLibrary()
+        } catch {
+          if errorMessage == nil {
+            errorMessage = error.localizedDescription
+          }
+        }
+      }
     }
 
     #if DEBUG
@@ -649,10 +667,10 @@ final class AppModel {
       contentMode.allowsAdultProviders
       ? persistedActive
       : persistedActive.filter { !$0.isAdult }
-    activeCMSProviders =
-      allowedActive.isEmpty
-      ? Self.fallbackActiveCMSProviders(for: contentMode)
-      : allowedActive
+    activeCMSProviders = Self.normalizedActiveCMSProviders(
+      allowedActive,
+      for: contentMode
+    )
     consolidateWarehouseConnections()
     if let currentURL = persistence?.currentConnectionURL {
       currentConnection = sourceConnections.first { $0.url == currentURL && $0.enabled }
@@ -681,24 +699,75 @@ final class AppModel {
   }
 
   static func fallbackActiveCMSProviders(for mode: ContentMode) -> [ActiveCMSProvider] {
-    guard mode.allowsAdultProviders else {
-      return defaultActiveCMSProviders
-    }
-    let adult = CMSProviderCatalog.bundledCandidates().filter { $0.adult == true }
-    guard !adult.isEmpty else {
-      return defaultActiveCMSProviders
-    }
-    return adult.prefix(activeCMSPoolSize).map {
-      ActiveCMSProvider(
-        key: $0.key,
-        name: CMSProviderCatalog.displayName(for: $0),
-        api: $0.api,
-        adult: true
-      )
-    }
+    let target = activeCMSPoolSize(for: mode)
+    let primary =
+      mode.allowsAdultProviders
+      ? []
+      : defaultActiveCMSProviders.map {
+        CMSProviderCatalog.Entry(
+          key: $0.key,
+          name: $0.name,
+          api: $0.api,
+          adult: nil
+        )
+      }
+    let balanced = CMSProviderCatalog.balancedActivePool(
+      primary: primary,
+      fallback: CMSProviderCatalog.bundledCandidates(),
+      adultMode: mode.allowsAdultProviders,
+      limit: target
+    )
+    return balanced.map { activeCMSProvider(from: $0) }
   }
 
-  static let activeCMSPoolSize = 10
+  static func activeCMSPoolSize(for mode: ContentMode) -> Int {
+    CMSProviderCatalog.activePoolLimit(adultMode: mode.allowsAdultProviders)
+  }
+
+  static func activeCMSCandidatePoolSize(for mode: ContentMode) -> Int {
+    CMSProviderCatalog.candidatePoolLimit(adultMode: mode.allowsAdultProviders)
+  }
+
+  private static let minimumAdultProvidersInAdultMode = 4
+
+  static func normalizedActiveCMSProviders(
+    _ providers: [ActiveCMSProvider],
+    for mode: ContentMode
+  ) -> [ActiveCMSProvider] {
+    let target = activeCMSPoolSize(for: mode)
+    let balanced = CMSProviderCatalog.balancedActivePool(
+      primary: providers.map {
+        CMSProviderCatalog.Entry(
+          key: $0.key,
+          name: $0.name,
+          api: $0.api,
+          adult: $0.adult
+        )
+      },
+      fallback: fallbackActiveCMSProviders(for: mode).map {
+        CMSProviderCatalog.Entry(
+          key: $0.key,
+          name: $0.name,
+          api: $0.api,
+          adult: $0.adult
+        )
+      },
+      adultMode: mode.allowsAdultProviders,
+      limit: target
+    )
+    return balanced.map { activeCMSProvider(from: $0) }
+  }
+
+  private static func activeCMSProvider(
+    from entry: CMSProviderCatalog.Entry
+  ) -> ActiveCMSProvider {
+    ActiveCMSProvider(
+      key: entry.key,
+      name: CMSProviderCatalog.displayName(for: entry),
+      api: entry.api,
+      adult: entry.adult
+    )
+  }
 
   /// Settings row summary for 采集站管理.
   var collectionStationSummary: String {
@@ -714,7 +783,9 @@ final class AppModel {
   func collectionStations(in configuration: VodConfiguration) -> [CollectionStation] {
     if configuration.sites.contains(where: { $0.key == "firepick_cms" }) {
       let providers =
-        activeCMSProviders.isEmpty ? Self.defaultActiveCMSProviders : activeCMSProviders
+        activeCMSProviders.isEmpty
+        ? Self.fallbackActiveCMSProviders(for: contentMode)
+        : activeCMSProviders
       return providers.map {
         CollectionStation(
           id: "cms:\($0.key)",
@@ -1066,7 +1137,7 @@ final class AppModel {
     }
     if value, aiKeyInvalid {
       aiEnhancementEnabled = false
-      aiEnhancementStatus = "API Key 无效，请重新保存或测试连接"
+      aiEnhancementStatus = "API Key 无效，请重新验证并保存"
       persistence?.saveAIEnhancementEnabled(false)
       return
     }
@@ -1078,10 +1149,22 @@ final class AppModel {
   }
 
   @discardableResult
-  func saveDeepSeekAPIKey(_ rawValue: String) async -> Bool {
+  func validateAndSaveDeepSeekAPIKey(_ rawValue: String) async -> Bool {
     let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !value.isEmpty else {
       aiEnhancementStatus = "API Key 不能为空"
+      return false
+    }
+    aiEnhancementTesting = true
+    defer { aiEnhancementTesting = false }
+    let assistant = DeepSeekTitleAssistant(apiKey: value, cacheFileURL: nil)
+    do {
+      try await assistant.validateAPIKey()
+    } catch DeepSeekAssistError.invalidKey {
+      aiEnhancementStatus = "API Key 无效，未保存"
+      return false
+    } catch {
+      aiEnhancementStatus = "验证失败：\(error.localizedDescription)"
       return false
     }
     do {
@@ -1092,12 +1175,13 @@ final class AppModel {
       aiCooldownUntil = nil
       cancelAIEnhancementWork()
       rebuildAIAssistants()
-      return await testDeepSeekConnection()
+      aiEnhancementStatus =
+        aiEnhancementEnabled
+        ? "验证成功 · 后台增强已开启"
+        : "验证成功 · API Key 已保存"
+      return true
     } catch {
-      aiAPIKey = nil
-      aiEnhancementKeyConfigured = false
-      aiEnhancementStatus = error.localizedDescription
-      rebuildAIAssistants()
+      aiEnhancementStatus = "验证成功，但保存失败：\(error.localizedDescription)"
       return false
     }
   }
@@ -1115,32 +1199,6 @@ final class AppModel {
     aiPersistentAssistant = nil
     aiEphemeralAssistant = nil
     cancelAIEnhancementWork()
-  }
-
-  @discardableResult
-  func testDeepSeekConnection() async -> Bool {
-    guard let apiKey = aiAPIKey, !apiKey.isEmpty else {
-      aiEnhancementStatus = "请先保存 API Key"
-      return false
-    }
-    aiEnhancementTesting = true
-    defer { aiEnhancementTesting = false }
-    do {
-      let assistant = DeepSeekTitleAssistant(
-        apiKey: apiKey,
-        cacheFileURL: nil
-      )
-      try await assistant.validateAPIKey()
-      aiKeyInvalid = false
-      aiEnhancementStatus = "连接成功 · deepseek-flash"
-      return true
-    } catch DeepSeekAssistError.invalidKey {
-      markAIKeyInvalid()
-      return false
-    } catch {
-      aiEnhancementStatus = error.localizedDescription
-      return false
-    }
   }
 
   var isAIEnhancementAvailable: Bool {
@@ -1818,9 +1876,11 @@ final class AppModel {
       || !collectionStations.isEmpty
     else { return }
     Task(priority: .utility) { @MainActor in
-      // Don't contend with first-screen posters / Douban.
-      try? await Task.sleep(for: .milliseconds(350))
-      await ensureBestCMSLinesOnEnter(maxAge: 0)
+      // Real devices are still downloading the first 12 posters at 350ms.
+      // Let that screen settle before opening 30–40 CMS probe connections.
+      try? await Task.sleep(for: .seconds(12))
+      guard !isNetworkConstrained else { return }
+      await ensureBestCMSLinesOnEnter(maxAge: 10 * 60)
     }
   }
 
@@ -1834,10 +1894,7 @@ final class AppModel {
       mode.allowsAdultProviders
       ? saved
       : saved.filter { !$0.isAdult }
-    activeCMSProviders =
-      allowed.isEmpty
-      ? Self.fallbackActiveCMSProviders(for: mode)
-      : allowed
+    activeCMSProviders = Self.normalizedActiveCMSProviders(allowed, for: mode)
     collectionStationLatencyMS = [:]
     didProbeCollectionStations = false
     detailResult = nil
@@ -1969,10 +2026,7 @@ final class AppModel {
     func preferredEntries(
       _ entries: [CMSProviderCatalog.Entry]
     ) -> [CMSProviderCatalog.Entry] {
-      let eligible = entries.filter { allowsAdult || $0.adult != true }
-      guard allowsAdult else { return eligible }
-      return eligible.filter { $0.adult == true }
-        + eligible.filter { $0.adult != true }
+      entries.filter { allowsAdult || $0.adult != true }
     }
     let best = preferredEntries(remoteBest)
     let catalog = preferredEntries(remoteCatalog ?? [])
@@ -1986,23 +2040,21 @@ final class AppModel {
           adult: $0.adult
         )
       }
-    let poolLimit = Self.activeCMSPoolSize * 3
-    var pool = CMSProviderCatalog.prioritizedCandidates(
+    let targetCount = Self.activeCMSPoolSize(for: contentMode)
+    let poolLimit = Self.activeCMSCandidatePoolSize(for: contentMode)
+    let merged = CMSProviderCatalog.prioritizedCandidates(
       best: best,
       catalog: catalog,
       fallback: saved,
-      limit: poolLimit
+      limit: 512
     )
-    if pool.count < Self.activeCMSPoolSize {
-      let bundled = CMSProviderCatalog.bundledCandidates()
-        .filter { allowsAdult || $0.adult != true }
-      pool = CMSProviderCatalog.prioritizedCandidates(
-        best: pool,
-        catalog: bundled,
-        fallback: [],
-        limit: poolLimit
-      )
-    }
+    var pool = CMSProviderCatalog.balancedActivePool(
+      primary: merged,
+      fallback: CMSProviderCatalog.bundledCandidates(),
+      adultMode: allowsAdult,
+      limit: poolLimit,
+      minimumAdult: Self.minimumAdultProvidersInAdultMode
+    )
     if pool.isEmpty {
       pool = Self.fallbackActiveCMSProviders(for: contentMode).map {
         CMSProviderCatalog.Entry(
@@ -2021,17 +2073,29 @@ final class AppModel {
       var ms: Int
     }
 
-    let targetCount = Self.activeCMSPoolSize
+    let adultHostCount =
+      allowsAdult
+      ? Set(
+        pool.filter { $0.adult == true }.compactMap {
+          URL(string: $0.api)?.host?.lowercased()
+        }
+      ).count
+      : 0
     let requiredAdultHosts =
       allowsAdult
-      ? min(
-        4,
-        Set(
-          pool.filter { $0.adult == true }.compactMap {
-            URL(string: $0.api)?.host?.lowercased()
-          }
-        ).count
-      )
+      ? min(Self.minimumAdultProvidersInAdultMode, adultHostCount)
+      : 0
+    let normalHostCount =
+      allowsAdult
+      ? Set(
+        pool.filter { $0.adult != true }.compactMap {
+          URL(string: $0.api)?.host?.lowercased()
+        }
+      ).count
+      : 0
+    let requiredNormalHosts =
+      allowsAdult
+      ? min(max(0, targetCount - requiredAdultHosts), normalHostCount)
       : 0
     let hits: [ProbeHit] = await withTaskGroup(of: ProbeHit?.self) { group in
       var results: [ProbeHit] = []
@@ -2062,7 +2126,14 @@ final class AppModel {
           results.filter { $0.entry.adult == true }
             .compactMap { URL(string: $0.entry.api)?.host?.lowercased() }
         )
-        if uniqueHosts.count >= targetCount, adultHosts.count >= requiredAdultHosts {
+        let normalHosts = Set(
+          results.filter { $0.entry.adult != true }
+            .compactMap { URL(string: $0.entry.api)?.host?.lowercased() }
+        )
+        if uniqueHosts.count >= targetCount,
+          adultHosts.count >= requiredAdultHosts,
+          normalHosts.count >= requiredNormalHosts
+        {
           group.cancelAll()
           break
         }
@@ -2071,21 +2142,19 @@ final class AppModel {
     }
 
     let ranked = hits.sorted { $0.ms < $1.ms }
-    let orderedHits: [ProbeHit]
-    if allowsAdult {
-      orderedHits =
-        Array(ranked.filter { $0.entry.adult == true }.prefix(4))
-        + ranked.filter { $0.entry.adult != true }
-    } else {
-      orderedHits = ranked
-    }
-    var seenHosts = Set<String>()
+    let orderedEntries = CMSProviderCatalog.balancedActivePool(
+      primary: ranked.map(\.entry),
+      fallback: [],
+      adultMode: allowsAdult,
+      limit: targetCount,
+      minimumAdult: Self.minimumAdultProvidersInAdultMode
+    )
     var picked: [ActiveCMSProvider] = []
     var latency: [String: Int] = [:]
-    for hit in orderedHits {
-      let host = URL(string: hit.entry.api)?.host?.lowercased() ?? hit.entry.key
-      if seenHosts.contains(host) { continue }
-      seenHosts.insert(host)
+    for entry in orderedEntries {
+      guard let hit = ranked.first(where: { $0.entry.key == entry.key }) else {
+        continue
+      }
       let name = CMSProviderCatalog.displayName(for: hit.entry)
       picked.append(
         ActiveCMSProvider(
@@ -2096,7 +2165,6 @@ final class AppModel {
         )
       )
       latency["cms:\(hit.entry.key)"] = hit.ms
-      if picked.count >= targetCount { break }
     }
 
     if picked.isEmpty {
@@ -2123,7 +2191,9 @@ final class AppModel {
     guard site.key == "firepick_cms" else { return site }
     var site = site
     let providers =
-      activeCMSProviders.isEmpty ? Self.defaultActiveCMSProviders : activeCMSProviders
+      activeCMSProviders.isEmpty
+      ? Self.fallbackActiveCMSProviders(for: contentMode)
+      : activeCMSProviders
     let providerValues: [JSONValue] = providers.map { item in
       .object([
         "key": .string(item.key),
@@ -2722,7 +2792,7 @@ final class AppModel {
     }
     let siteChanged = selectedSite?.key != site.key
     // Pull-to-refresh: keep posters on screen (avoid full-screen「正在加载中」).
-    let softRefresh = preserveBrowse && !siteChanged && homeResult?.list.isEmpty == false
+    let softRefresh = preserveBrowse && homeResult?.list.isEmpty == false
     let previousHome = softRefresh ? homeResult : nil
     selectedSite = site
     if siteChanged {
@@ -2793,8 +2863,21 @@ final class AppModel {
         errorMessage = nil
         return
       }
-      homeResult = result
-      PosterPrefetch.warm(items: result.list, limit: 12)
+      let showingRecommendation =
+        selectedCategory?.typeId.contains("recommend") ?? true
+      if !softRefresh || showingRecommendation {
+        homeResult = result
+        PosterPrefetch.warm(items: result.list, limit: 12)
+      } else {
+        // The user already moved to another tab while stale 推荐 was refreshing.
+        // Cache the incoming home payload without replacing their visible grid.
+        let recommendKey = categoryCacheKey(
+          site: site,
+          typeId: "bucket|recommend"
+        )
+        storeCategoryCache(result, cacheKey: recommendKey, page: 1)
+        persistBrowseCategoryCache(siteKey: site.key)
+      }
       errorMessage = nil
       if !softRefresh {
         categoryCache = [:]
@@ -2950,10 +3033,12 @@ final class AppModel {
     prefetchTask?.cancel()
     let generation = homeLoadGeneration
     prefetchTask = Task { @MainActor in
-      try? await Task.sleep(for: .milliseconds(200))
+      // Let the first-screen posters take the connection pool first.
+      try? await Task.sleep(for: .seconds(1))
       if Task.isCancelled || generation != homeLoadGeneration || selectedTab != .vod {
         return
       }
+      guard !isNetworkConstrained else { return }
       var preferred = ["bucket|tv", "bucket|movie", "bucket|variety", "bucket|anime"]
       if contentMode == .adult {
         preferred.append("bucket|adult")
@@ -2968,7 +3053,7 @@ final class AppModel {
         let typeId = category.typeId
         let cacheKey = categoryCacheKey(site: site, typeId: typeId)
         if let existing = categoryCache[cacheKey], !existing.list.isEmpty {
-          PosterPrefetch.warm(items: existing.list, limit: 12)
+          PosterPrefetch.warm(items: existing.list, limit: 4)
           continue
         }
         do {
@@ -2982,7 +3067,7 @@ final class AppModel {
           if Task.isCancelled || generation != homeLoadGeneration { return }
           attachSourceKey(site.key, to: &result)
           storeCategoryCache(result, cacheKey: cacheKey, page: 1)
-          PosterPrefetch.warm(items: result.list, limit: 12)
+          PosterPrefetch.warm(items: result.list, limit: 4)
           if selectedCategory?.typeId == typeId,
             currentBrowseCacheKey == cacheKey,
             !result.list.isEmpty
@@ -3041,9 +3126,35 @@ final class AppModel {
     else { return }
     categoryCache = disk.results
     categoryPageByKey = disk.pages
-    for (_, result) in disk.results {
-      PosterPrefetch.warm(items: result.list, limit: 8)
-    }
+    // Hidden tabs load their posters on first selection. Prewarming every
+    // cached category caused up to 40 redundant image requests on launch.
+  }
+
+  /// Paint the last 推荐 grid while the network request refreshes it in the
+  /// background. A cold real device otherwise shows a blank loader for the
+  /// full aggregate + Douban + CMS round trip.
+  private func restoreInitialBrowseCacheIfNeeded(site: SiteConfiguration) {
+    guard selectedSite == nil, homeResult == nil,
+      let disk = persistence?.loadBrowseCategoryCache(),
+      disk.siteKey == site.key,
+      !disk.results.isEmpty
+    else { return }
+
+    let typeId = "bucket|recommend"
+    let cacheKey = categoryCacheKey(site: site, typeId: typeId)
+    guard let cached = disk.results[cacheKey] else { return }
+    categoryCache = disk.results
+    categoryPageByKey = disk.pages
+    let category =
+      cached.classes.first(where: { $0.typeId == typeId })
+      ?? cached.classes.first
+    selectedCategory = category
+    homeResult = cached
+    browseListBelongsToTypeId = category?.typeId
+    browseDisplayedCacheKey = cacheKey
+    currentPage = disk.pages[cacheKey] ?? 1
+    errorMessage = nil
+    PosterPrefetch.warm(items: cached.list, limit: 6)
   }
 
   func loadCategory(_ category: FirepickCore.Category, site: SiteConfiguration? = nil) async {
@@ -4226,6 +4337,7 @@ final class AppModel {
   /// Entering 电视 early still calls `ensureLiveSourcesLoaded` as the default path.
   func prefetchLiveSourcesAfterHomeIfNeeded() {
     guard currentConnection != nil else { return }
+    guard !isNetworkConstrained else { return }
     guard !liveGroups.isEmpty || !combinedLiveConfigurations.isEmpty else { return }
     Task(priority: .utility) {
       await ensureLiveSourcesLoaded()
@@ -4842,7 +4954,8 @@ final class AppModel {
       let display = connection.displayAddress
       Task { @MainActor in
         // Keep cold start focused on the first home paint and poster requests.
-        try? await Task.sleep(for: .seconds(2.5))
+        try? await Task.sleep(for: .seconds(6))
+        guard !isNetworkConstrained else { return }
         guard currentConnection?.url == connectionURL else { return }
         errorMessage = nil
         let refreshed = await applyConfiguration(
@@ -5009,7 +5122,8 @@ final class AppModel {
     let httpFirst = onDeviceSites.first(where: { router.route($0).runtime == .http })
     let anyOnDevice = onDeviceSites.first
     if let site = persisted ?? httpFirst ?? anyOnDevice {
-      await selectSite(site)
+      restoreInitialBrowseCacheIfNeeded(site: site)
+      await selectSite(site, preserveBrowse: homeResult?.list.isEmpty == false)
     }
   }
 

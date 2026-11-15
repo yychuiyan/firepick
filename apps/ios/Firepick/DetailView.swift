@@ -35,8 +35,6 @@ struct DetailView: View {
   @State private var playbackSettled = false
   /// Once any real frame appears, background optimization must never switch stations.
   @State private var hasShownVideoFrame = false
-  /// Post-frame stalls may move to another station, but never in a tight loop.
-  @State private var stallFailoverCount = 0
   @State private var lastPlaybackTime: Double = 0
   @State private var sourceSwitchHandoff: (position: Double, episodeName: String?)?
   @State private var isSwitchingSource = false
@@ -187,7 +185,6 @@ struct DetailView: View {
       didSilentRefineStations = false
       playbackSettled = false
       hasShownVideoFrame = false
-      stallFailoverCount = 0
       orderedPlayableStations = nil
       probedStreamProfiles = [:]
       // Seed from 采集站管理 current best pool immediately — don't wait on re-probe.
@@ -200,12 +197,20 @@ struct DetailView: View {
       }
       // Prefer the management-page best node for first paint when different.
       if playback == nil, !lines.isEmpty {
-        // Resolve the best station before the first playback request. Starting
-        // the current line first caused a second load a few seconds later.
-        await preparePlayableStationsIfNeeded(forceRebuild: true)
-        let started = await autoSelectOptimalSourceIfNeeded()
-        if !started {
-          await playPrimary()
+        // Start the tapped source immediately. The cross-station search and
+        // episode-count fan-out can take several seconds and must not gate the
+        // first frame. Backfill the ranked pool in the background and only
+        // choose another source if this one has not produced a picture yet.
+        let preparation = Task {
+          await preparePlayableStationsIfNeeded(forceRebuild: true)
+        }
+        await playPrimary()
+        await preparation.value
+        if !hasShownVideoFrame, !playbackSettled {
+          let started = await autoSelectOptimalSourceIfNeeded()
+          if !started, playback == nil {
+            await playPrimary()
+          }
         }
       }
     }
@@ -282,9 +287,6 @@ struct DetailView: View {
         onPlaybackReady: {
           hasShownVideoFrame = true
           playbackSettled = true
-        },
-        onStalled: {
-          failoverAfterStall()
         },
         onWatermarkAdDetected: {
           model.markWatermarkAdProvider(playbackProviderKey)
@@ -806,31 +808,6 @@ struct DetailView: View {
       return true
     }
     return false
-  }
-
-  /// Real post-frame stall: move to the next ranked station, at most twice per episode.
-  private func failoverAfterStall() -> Bool {
-    guard stallFailoverCount < 2, let failedKey = playbackProviderKey else {
-      return false
-    }
-    model.recordProviderPlaybackStall(failedKey)
-    dropUnplayableStation(failedKey)
-    let candidates = orderedPlayableStations ?? model.collectionStations
-    guard let next = candidates.first(where: {
-      let key = stationProviderKey($0)
-      return key != failedKey && !droppedProviderKeys.contains(key)
-    }) else {
-      return false
-    }
-    stallFailoverCount += 1
-    Task {
-      await switchCollectionStation(
-        stationProviderKey(next),
-        silent: true,
-        userInitiated: false
-      )
-    }
-    return true
   }
 
   /// Background 测速淘金 + rebuild playable order, then switch to the new best station.
@@ -1584,7 +1561,6 @@ struct DetailView: View {
       userLockedSource = false
       playbackSettled = false
       hasShownVideoFrame = false
-      stallFailoverCount = 0
       lastPlaybackTime = 0
     }
 

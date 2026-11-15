@@ -79,4 +79,73 @@ struct CMSProviderCatalogTests {
 
     #expect(pool.map(\.key) == ["best", "catalog", "saved"])
   }
+
+  @Test
+  func activePoolLimitsScaleOnlyInAdultMode() {
+    #expect(CMSProviderCatalog.activePoolLimit(adultMode: false) == 10)
+    #expect(CMSProviderCatalog.activePoolLimit(adultMode: true) == 20)
+    #expect(CMSProviderCatalog.candidatePoolLimit(adultMode: false) == 30)
+    #expect(CMSProviderCatalog.candidatePoolLimit(adultMode: true) == 40)
+  }
+
+  @Test
+  func adultPoolReservesAdultAndNormalProviders() {
+    let adults = (0..<6).map { index in
+      CMSProviderCatalog.Entry(
+        key: "adult-\(index)",
+        name: "Adult \(index)",
+        api: "https://adult-\(index).example/api.php/provide/vod",
+        adult: true
+      )
+    }
+    let normals = (0..<24).map { index in
+      CMSProviderCatalog.Entry(
+        key: "normal-\(index)",
+        name: "Normal \(index)",
+        api: "https://normal-\(index).example/api.php/provide/vod"
+      )
+    }
+    let pool = CMSProviderCatalog.balancedActivePool(
+      primary: adults + normals,
+      fallback: [],
+      adultMode: true,
+      limit: 20,
+      minimumAdult: 4
+    )
+
+    #expect(pool.count == 20)
+    #expect(pool.prefix(4).allSatisfy { $0.adult != true })
+    #expect(pool.filter { $0.adult == true }.count == 4)
+    #expect(pool.filter { $0.adult != true }.count == 16)
+  }
+
+  @Test
+  func standardPoolExcludesAdultAndDeduplicatesMirrors() {
+    let entries = [
+      CMSProviderCatalog.Entry(
+        key: "adult",
+        name: "Adult",
+        api: "https://adult.example/api.php/provide/vod",
+        adult: true
+      ),
+      CMSProviderCatalog.Entry(
+        key: "normal",
+        name: "Normal",
+        api: "https://normal.example/api.php/provide/vod"
+      ),
+      CMSProviderCatalog.Entry(
+        key: "normal-mirror",
+        name: "Normal Mirror",
+        api: "https://normal.example/mirror/api.php/provide/vod"
+      ),
+    ]
+    let pool = CMSProviderCatalog.balancedActivePool(
+      primary: entries,
+      fallback: [],
+      adultMode: false,
+      limit: 10
+    )
+
+    #expect(pool.map(\.key) == ["normal"])
+  }
 }
