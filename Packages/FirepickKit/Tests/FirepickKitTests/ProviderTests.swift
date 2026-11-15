@@ -19,6 +19,46 @@ struct ProviderTests {
   }
 
   @Test
+  func ranksDirectMediaLinesBeforeViewerPages() {
+    let lines = EpisodeParser.lines(
+      playFrom: "hhyun$$$hhm3u8$$$backup",
+      playURL:
+        "第1集$https://play.example.com/play/abc#第2集$https://play.example.com/play/def"
+        + "$$$第1集$https://cdn.example.com/abc/index.m3u8#第2集$https://cdn.example.com/def/index.m3u8"
+        + "$$$第1集$https://backup.example.com/abc.mp4#第2集$https://backup.example.com/def.mp4"
+    )
+
+    #expect(EpisodeParser.rankedLines(lines).map(\.name) == ["hhm3u8", "backup", "hhyun"])
+  }
+
+  @Test
+  func keepsOriginalLineOrderWhenPlayabilityIsEqual() {
+    let lines = EpisodeParser.lines(
+      playFrom: "first$$$second",
+      playURL:
+        "第1集$https://one.example.com/media/1$$$第1集$https://two.example.com/media/1"
+    )
+
+    #expect(EpisodeParser.rankedLines(lines).map(\.name) == ["first", "second"])
+  }
+
+  @Test
+  func derivesHLSVariantForGenericPlayViewerPaths() {
+    let lines = EpisodeParser.lines(
+      playFrom: "jinyingyun",
+      playURL:
+        "第1集$https://media.example.com/play/abc#第2集$https://media.example.com/play/def"
+    )
+
+    #expect(lines.map(\.name) == ["jinyingyunm3u8", "jinyingyun"])
+    #expect(
+      lines[0].episodes[0].value
+        == "https://media.example.com/play/abc/index.m3u8"
+    )
+    #expect(EpisodeParser.rankedLines(lines).first?.name == "jinyingyunm3u8")
+  }
+
+  @Test
   func decodesHTTPJSONResult() async throws {
     let session = URLSession(configuration: .ephemeral)
     let provider = try HTTPProvider(

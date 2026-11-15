@@ -47,6 +47,9 @@ struct MediaCardView: View {
           alternativeURLs: {
             await model.alternativePosterURLs(for: item)
           },
+          aiAlternativeURLs: {
+            await model.aiAlternativePosterURLs(for: item)
+          },
           onAlternativeResolved: { url in
             model.rememberRecoveredPosterURL(url, for: item)
           },

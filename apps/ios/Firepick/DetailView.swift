@@ -57,7 +57,9 @@ struct DetailView: View {
   }
 
   private var lines: [PlaybackLine] {
-    EpisodeParser.lines(playFrom: detail.playFrom, playURL: detail.playURL)
+    EpisodeParser.rankedLines(
+      EpisodeParser.lines(playFrom: detail.playFrom, playURL: detail.playURL)
+    )
   }
 
   private var activeLine: PlaybackLine? {
@@ -194,6 +196,11 @@ struct DetailView: View {
         selectedFlag = match.line.name
       } else if selectedFlag == nil || !lines.contains(where: { $0.name == selectedFlag }) {
         selectedFlag = lines.first?.name
+      } else if let best = lines.first,
+        let selected = lines.first(where: { $0.name == selectedFlag }),
+        EpisodeParser.lineMediaRank(best) > EpisodeParser.lineMediaRank(selected)
+      {
+        selectedFlag = best.name
       }
       // Prefer the management-page best node for first paint when different.
       if playback == nil, !lines.isEmpty {
@@ -214,21 +221,10 @@ struct DetailView: View {
         }
         await latencyProbe.value
         await preparation.value
-        if !hasShownVideoFrame, !playbackSettled {
-          let started = await autoSelectOptimalSourceIfNeeded()
-          if !started, playback == nil {
-            await playPrimary()
-          }
-        }
       }
     }
     .onChange(of: selectedFlag) { oldFlag, flag in
       guard let flag else { return }
-      model.setPreferredPlaybackFlag(
-        flag,
-        sourceKey: detail.sourceKey ?? model.selectedSite?.key,
-        vodId: detail.vodId
-      )
       // 来源切换 owns playback via applyReplacement — don't restart from 0 here.
       guard !isSwitchingSource else { return }
       guard let oldFlag, oldFlag != flag, playback != nil else { return }
@@ -738,27 +734,6 @@ struct DetailView: View {
     return counts
   }
 
-  /// Auto-pick the fastest playable station while still loading / early playback.
-  @discardableResult
-  private func autoSelectOptimalSourceIfNeeded(force: Bool = false) async -> Bool {
-    if userLockedSource && !force { return false }
-    if force {
-      userLockedSource = false
-      playbackSettled = false
-    }
-    // Once watching / scrubbed — never silent-upgrade (resets progress + black loading).
-    if !force, hasShownVideoFrame || playbackSettled
-      || (playback != nil && lastPlaybackTime >= 5)
-    {
-      return false
-    }
-    guard let stations = orderedPlayableStations, let best = stations.first else { return false }
-    let bestKey = stationProviderKey(best)
-    guard playbackProviderKey != bestKey else { return false }
-    await switchCollectionStation(bestKey, silent: true, userInitiated: false)
-    return playbackProviderKey == bestKey
-  }
-
   @discardableResult
   private func failoverToNextStation(from failedKey: String) -> Bool {
     model.recordProviderPlaybackStall(failedKey)
@@ -903,8 +878,7 @@ struct DetailView: View {
   }
 
   private var sourceLatencyMS: Int? {
-    guard !isSwitchingSource, let key = playbackProviderKey else { return nil }
-    guard let stationID = sourceStationID else { return nil }
+    guard !isSwitchingSource, let stationID = sourceStationID else { return nil }
     return model.collectionStationLatencyMS[stationID]
   }
 
@@ -927,9 +901,9 @@ struct DetailView: View {
   }
 
   private var sourceLatencyText: String {
-    if isSourceLatencyProbing { return "测速中" }
-    guard let latency = sourceLatencyMS else { return "待测速" }
-    return "\(latency)ms"
+    if isSourceLatencyProbing { return "接口测速中" }
+    guard let latency = sourceLatencyMS else { return "接口待测" }
+    return "接口 \(latency)ms"
   }
 
   private var sourceAccessibilityLabel: String {

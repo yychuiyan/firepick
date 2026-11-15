@@ -14,6 +14,7 @@
 		0B3CD1CE5CBFBA4990B72433 /* FirepickApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D6D39978364C5C5D45904F2 /* FirepickApp.swift */; };
 		0C297617F7014493822974C0 /* SourceManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A98D1D722D170291E8258F75 /* SourceManagementView.swift */; };
 		1193F9FE0AEA6B460F64C2A1 /* FolderBrowseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B79174C2351B0C0D7C66DCE7 /* FolderBrowseView.swift */; };
+		12B1372D8F4A732147BA854A /* DynamicPlaybackPageResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A564576B65F97949EEAF021 /* DynamicPlaybackPageResolver.swift */; };
 		16B309D6E394CD579FA4AE86 /* CachedRemoteImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD860EDB48321F85125D7A31 /* CachedRemoteImage.swift */; };
 		1800B794378ED2A93DAD28E5 /* MarqueeText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17E781401779AB6FE9BDF4EA /* MarqueeText.swift */; };
 		194DCFE6C57B2A595CF74158 /* SubtitleOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DDF6185FBBA400E3D3BB8BA /* SubtitleOverlay.swift */; };
@@ -59,6 +60,7 @@
 		1176AD3EA9EA18E648143E3F /* InfoPlist.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = InfoPlist.strings; path = "zh-Hant.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
 		15F1A48D7B7D4F18CD3B72E0 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		17E781401779AB6FE9BDF4EA /* MarqueeText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarqueeText.swift; sourceTree = "<group>"; };
+		2A564576B65F97949EEAF021 /* DynamicPlaybackPageResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DynamicPlaybackPageResolver.swift; sourceTree = "<group>"; };
 		34A7BD6C53152DA71F3E87B9 /* PlaybackSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackSettingsView.swift; sourceTree = "<group>"; };
 		39D426E5BF64F85D713A6F25 /* DetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailView.swift; sourceTree = "<group>"; };
 		41AC6E1084DB23277EA497FF /* DLNACastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DLNACastView.swift; sourceTree = "<group>"; };
@@ -159,6 +161,7 @@
 				7728D90D37F11FEA65FC22B5 /* DefaultPosterArtwork.swift */,
 				39D426E5BF64F85D713A6F25 /* DetailView.swift */,
 				41AC6E1084DB23277EA497FF /* DLNACastView.swift */,
+				2A564576B65F97949EEAF021 /* DynamicPlaybackPageResolver.swift */,
 				7E005EBC553012053DA2B5A3 /* ErrorBannerView.swift */,
 				8764AA710399DA3C242FEA9F /* Firepick.entitlements */,
 				0D6D39978364C5C5D45904F2 /* FirepickApp.swift */,
@@ -292,6 +295,7 @@
 				8ED4F4BF9811684D667A99AB /* DanmakuSettingsView.swift in Sources */,
 				7CBDDC1842047AD3615CCA84 /* DefaultPosterArtwork.swift in Sources */,
 				088AD96810B59C6A1F9B6E6E /* DetailView.swift in Sources */,
+				12B1372D8F4A732147BA854A /* DynamicPlaybackPageResolver.swift in Sources */,
 				BA452F0F6A1170B74F93D428 /* ErrorBannerView.swift in Sources */,
 				0B3CD1CE5CBFBA4990B72433 /* FirepickApp.swift in Sources */,
 				1193F9FE0AEA6B460F64C2A1 /* FolderBrowseView.swift in Sources */,

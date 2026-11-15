@@ -76,6 +76,34 @@ struct PlaybackTests {
   }
 
   @Test
+  func extractsHLSURLFromEmbeddedPlayerPage() {
+    let body = """
+    <script>
+      const vid = "https:\\/\\/media.example.com\\/play\\/abc\\/index.m3u8?token=1&amp;x=2";
+    </script>
+    """
+    let resolved = PlaybackPageResolver.extractM3U8URL(
+      from: body,
+      baseURL: URL(string: "https://media.example.com/play/abc")!
+    )
+
+    #expect(
+      resolved?.absoluteString
+        == "https://media.example.com/play/abc/index.m3u8?token=1&x=2"
+    )
+  }
+
+  @Test
+  func resolvesRelativeHLSURLAgainstPlayerPage() {
+    let resolved = PlaybackPageResolver.extractM3U8URL(
+      from: #"<script>video.src = "/stream/index.m3u8";</script>"#,
+      baseURL: URL(string: "https://media.example.com/play/abc")!
+    )
+
+    #expect(resolved?.absoluteString == "https://media.example.com/stream/index.m3u8")
+  }
+
+  @Test
   func mapsPlaybackEngineOptionsForMPVAndAVPlayer() {
     let hardware = PlaybackEngineOptions(
       videoOutput: .metal,

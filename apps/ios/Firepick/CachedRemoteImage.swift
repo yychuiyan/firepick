@@ -280,10 +280,12 @@ enum RemoteImageCache {
     }
   }
 
-  /// Short request timeout — dead CDNs must fail fast so mirrors can win within ~1s.
-  static let posterRequestTimeout: TimeInterval = 2.2
+  /// Allow slow-but-healthy cover hosts a complete response within the first race.
+  static let posterRequestTimeout: TimeInterval = 4
   /// A live but slow origin gets one final chance after mirror races fail.
   static let posterFallbackTimeout: TimeInterval = 6
+  /// Avoid restarting the same failed poster every time a tab remounts.
+  static let posterFailureCooldown: TimeInterval = 30
 
   static let session: URLSession = {
     let configuration = URLSessionConfiguration.default
@@ -370,8 +372,13 @@ private actor RemoteImagePipeline {
   /// Grid has ~12 posters; higher concurrency fills first screen in ~1s.
   private let gate = AsyncImageGate(limit: 12)
   private var inFlight: [String: Task<ImageBox, Never>] = [:]
+  private var failedAt: [String: Date] = [:]
 
-  func image(for url: URL, maxPixelSize: CGFloat) async -> UIImage? {
+  func image(
+    for url: URL,
+    maxPixelSize: CGFloat,
+    force: Bool = false
+  ) async -> UIImage? {
     let bucket = CGFloat(RemoteImageCache.pixelBucket(maxPixelSize))
     if let cached = RemoteImageCache.memoryImage(for: url, maxPixelSize: bucket) {
       return cached
@@ -380,6 +387,12 @@ private actor RemoteImagePipeline {
     if let task = inFlight[key] {
       return await task.value.image
     }
+    if !force, let failureDate = failedAt[key],
+      Date().timeIntervalSince(failureDate) < RemoteImageCache.posterFailureCooldown
+    {
+      return nil
+    }
+    failedAt.removeValue(forKey: key)
     let request = Request(url: url, maxPixelSize: bucket)
     let task = Task<ImageBox, Never> {
       await self.gate.acquire()
@@ -390,7 +403,19 @@ private actor RemoteImagePipeline {
     inFlight[key] = task
     let result = await task.value
     inFlight.removeValue(forKey: key)
+    if result.image == nil {
+      failedAt[key] = Date()
+    } else {
+      failedAt.removeValue(forKey: key)
+    }
     return result.image
+  }
+
+  func recentlyFailed(for url: URL, maxPixelSize: CGFloat) -> Bool {
+    let bucket = CGFloat(RemoteImageCache.pixelBucket(maxPixelSize))
+    let key = RemoteImageCache.cacheKey(for: url, maxPixelSize: bucket)
+    guard let failureDate = failedAt[key] else { return false }
+    return Date().timeIntervalSince(failureDate) < RemoteImageCache.posterFailureCooldown
   }
 
   private nonisolated static func fetch(_ request: Request, key: String) async -> ImageBox {
@@ -414,54 +439,23 @@ private actor RemoteImagePipeline {
     }
 
     let networkURLs = Self.candidateURLs(for: request.url)
-    // Race top mirrors in parallel — first healthy image wins (~秒级).
-    let raceBatch = Array(networkURLs.prefix(3))
-    if let raced = await raceFirstImage(raceBatch, maxPixelSize: request.maxPixelSize) {
+    // Race every known transport/mirror in parallel. A successful image cancels
+    // the rest, so the first-screen budget stays bounded even when a dead CDN
+    // accepts the TCP connection but never completes a response.
+    if let raced = await raceFirstImage(networkURLs, maxPixelSize: request.maxPixelSize) {
       RemoteImageCache.storeMemory(raced, for: key)
       RemoteImageCache.queueDiskWrite(raced, for: key)
       return ImageBox(image: raced)
     }
-    // Remaining candidates (http fallback etc.) get the slower budget.
-    for networkURL in networkURLs.dropFirst(raceBatch.count) {
-      var result = await attempt(
-        url: networkURL,
-        referer: nil,
-        maxPixelSize: request.maxPixelSize,
-        timeout: RemoteImageCache.posterFallbackTimeout
-      )
-      if case .retryWithReferer = result {
-        result = await attempt(
-          url: networkURL,
-          referer: "https://\(networkURL.host ?? "")/",
-          maxPixelSize: request.maxPixelSize,
-          timeout: RemoteImageCache.posterFallbackTimeout
-        )
-      }
-      if case .loaded(let box) = result, let loaded = box.image {
-        RemoteImageCache.storeMemory(loaded, for: key)
-        RemoteImageCache.queueDiskWrite(loaded, for: key)
-        return box
-      }
-    }
     // Mirrors can all be quick 404s while the original is a healthy 3–4 s
     // response. Retry it once with the longer fallback budget.
     let preferred = RemoteImageCache.preferredTransportURL(request.url)
-    var fallback = await attempt(
+    let fallback = await attempt(
       url: preferred,
       referer: "https://\(preferred.host ?? "")/",
       maxPixelSize: request.maxPixelSize,
       timeout: RemoteImageCache.posterFallbackTimeout
     )
-    if case .loaded = fallback {
-      // Keep the successful image.
-    } else if preferred.absoluteString != request.url.absoluteString {
-      fallback = await attempt(
-        url: request.url,
-        referer: "https://\(request.url.host ?? "")/",
-        maxPixelSize: request.maxPixelSize,
-        timeout: RemoteImageCache.posterFallbackTimeout
-      )
-    }
     if case .loaded(let box) = fallback, let loaded = box.image {
       RemoteImageCache.storeMemory(loaded, for: key)
       RemoteImageCache.queueDiskWrite(loaded, for: key)
@@ -489,7 +483,8 @@ private actor RemoteImagePipeline {
             result = await attempt(
               url: url,
               referer: "https://\(url.host ?? "")/",
-              maxPixelSize: maxPixelSize
+              maxPixelSize: maxPixelSize,
+              timeout: 2
             )
           }
           if case .loaded(let box) = result { return box.image }
@@ -618,6 +613,9 @@ struct CachedRemoteImage<Placeholder: View>: View {
   var maxPixelSize: CGFloat = 720
   /// Called only after the normal mirror/Referer/fallback passes fail.
   var alternativeURLs: (() async -> [URL])? = nil
+  /// Final optional recovery layer; only used after normal cross-source URLs
+  /// have also failed as images.
+  var aiAlternativeURLs: (() async -> [URL])? = nil
   var onAlternativeResolved: ((URL) -> Void)? = nil
   var onFinalFailure: (() -> Void)? = nil
   /// Shown after both the original pipeline and cross-source repair fail.
@@ -628,6 +626,7 @@ struct CachedRemoteImage<Placeholder: View>: View {
   @State private var failed = false
   @State private var reloadToken = 0
   @State private var didResolveAlternatives = false
+  @State private var didResolveAIAlternatives = false
   @State private var didReportFinalFailure = false
 
   var body: some View {
@@ -648,6 +647,7 @@ struct CachedRemoteImage<Placeholder: View>: View {
             Button {
               failed = false
               didResolveAlternatives = false
+              didResolveAIAlternatives = false
               didReportFinalFailure = false
               reloadToken += 1
             } label: {
@@ -667,16 +667,10 @@ struct CachedRemoteImage<Placeholder: View>: View {
     .onChange(of: url?.absoluteString) { _, _ in
       image = nil
       failed = false
+      reloadToken = 0
       didResolveAlternatives = false
+      didResolveAIAlternatives = false
       didReportFinalFailure = false
-    }
-    .onAppear {
-      // Flaky CMS CDNs often succeed on a later pass once the gate frees up.
-      if failed, image == nil {
-        failed = false
-        didReportFinalFailure = false
-        reloadToken += 1
-      }
     }
     .task(id: "\(url?.absoluteString ?? "")|\(maxPixelSize)|\(reloadToken)") {
       await load()
@@ -696,20 +690,14 @@ struct CachedRemoteImage<Placeholder: View>: View {
 
   private func load() async {
     guard let url else {
-      if !didResolveAlternatives, let alternativeURLs {
-        didResolveAlternatives = true
-        if let repaired = await firstAvailableAlternative(from: await alternativeURLs()) {
-          onAlternativeResolved?(repaired.url)
-          image = repaired.image
-          failed = false
-        } else {
-          image = nil
-          failed = true
-          let recovered = await retryAfterShowingFailure(for: nil)
-          if !recovered, !didReportFinalFailure {
-            didReportFinalFailure = true
-            onFinalFailure?()
-          }
+      image = nil
+      failed = true
+      _ = await recoverWithAlternativeArtwork(for: nil)
+      if failed {
+        let recovered = await retryAfterShowingFailure(for: nil)
+        if !recovered, !didReportFinalFailure {
+          didReportFinalFailure = true
+          onFinalFailure?()
         }
       }
       return
@@ -719,42 +707,27 @@ struct CachedRemoteImage<Placeholder: View>: View {
       failed = false
       return
     }
-    // Pipeline already races mirrors; one quick re-entry covers gate contention.
-    var loaded = await RemoteImagePipeline.shared.image(
-      for: url,
-      maxPixelSize: maxPixelSize
-    )
-    if loaded == nil {
-      try? await Task.sleep(for: .milliseconds(220))
-      guard !Task.isCancelled else { return }
-      loaded = await RemoteImagePipeline.shared.image(
+    if reloadToken == 0,
+      await RemoteImagePipeline.shared.recentlyFailed(
         for: url,
         maxPixelSize: maxPixelSize
       )
+    {
+      image = nil
+      failed = true
+      return
     }
+    // Pipeline races every known mirror and has one slow-origin fallback, so a
+    // second immediate pass would only duplicate the same failed requests.
+    let loaded = await RemoteImagePipeline.shared.image(
+      for: url,
+      maxPixelSize: maxPixelSize,
+      force: reloadToken > 0
+    )
     guard !Task.isCancelled else { return }
     image = loaded
     failed = loaded == nil
-    // Auto compensation: if still failed, silently retry once more after a beat
-    // (mirrors / gate free) — no user tap on 加载失败.
-    if failed {
-      try? await Task.sleep(for: .milliseconds(700))
-      guard !Task.isCancelled else { return }
-      if let again = await RemoteImagePipeline.shared.image(
-        for: url,
-        maxPixelSize: maxPixelSize
-      ) {
-        image = again
-        failed = false
-      }
-    }
-    if failed, !didResolveAlternatives, let alternativeURLs {
-      didResolveAlternatives = true
-      if let repaired = await firstAvailableAlternative(from: await alternativeURLs()) {
-        onAlternativeResolved?(repaired.url)
-        commit(repaired.image, for: url)
-      }
-    }
+    if failed { _ = await recoverWithAlternativeArtwork(for: url) }
     if failed {
       let recovered = await retryAfterShowingFailure(for: url)
       if !recovered, !didReportFinalFailure {
@@ -764,49 +737,90 @@ struct CachedRemoteImage<Placeholder: View>: View {
     }
   }
 
-  private func firstAvailableAlternative(from candidates: [URL]) async -> (url: URL, image: UIImage)? {
-    for candidate in candidates {
-      guard !Task.isCancelled else { return nil }
-      if let repaired = await RemoteImagePipeline.shared.image(
-        for: candidate,
-        maxPixelSize: maxPixelSize
-      ) {
-        return (candidate, repaired)
+  private func recoverWithAlternativeArtwork(for originalURL: URL?) async -> Bool {
+    if !didResolveAlternatives, let alternativeURLs {
+      didResolveAlternatives = true
+      if let repaired = await firstAvailableAlternative(from: await alternativeURLs()) {
+        applyAlternative(repaired, originalURL: originalURL)
+        return true
       }
     }
-    return nil
+    if !didResolveAIAlternatives, let aiAlternativeURLs {
+      didResolveAIAlternatives = true
+      if let repaired = await firstAvailableAlternative(from: await aiAlternativeURLs()) {
+        applyAlternative(repaired, originalURL: originalURL)
+        return true
+      }
+    }
+    return !failed
   }
 
-  /// Failed cards are cheap to keep alive. Retry three times with a wide
-  /// backoff, then leave the visible refresh control for an explicit retry.
-  private func retryAfterShowingFailure(for originalURL: URL?) async -> Bool {
-    for delay in [
-      Duration.seconds(20),
-      .seconds(90),
-      .seconds(300),
-    ] {
-      try? await Task.sleep(for: delay)
-      guard !Task.isCancelled else { return false }
-      if let originalURL,
-        let repaired = await RemoteImagePipeline.shared.image(
-          for: originalURL,
-          maxPixelSize: maxPixelSize
-        )
-      {
-        commit(repaired, for: originalURL)
-        return true
-      }
-      guard let alternativeURLs else { continue }
-      if let repaired = await firstAvailableAlternative(from: await alternativeURLs()) {
-        onAlternativeResolved?(repaired.url)
-        if let originalURL {
-          commit(repaired.image, for: originalURL)
-        } else {
-          image = repaired.image
-          failed = false
+  private func applyAlternative(
+    _ repaired: (url: URL, image: UIImage),
+    originalURL: URL?
+  ) {
+    onAlternativeResolved?(repaired.url)
+    if let originalURL {
+      commit(repaired.image, for: originalURL)
+    } else {
+      image = repaired.image
+      failed = false
+    }
+  }
+
+  private func firstAvailableAlternative(from candidates: [URL]) async -> (url: URL, image: UIImage)? {
+    let targets = Array(candidates.prefix(3))
+    guard !targets.isEmpty else { return nil }
+    return await withTaskGroup(
+      of: (url: URL, image: UIImage)?.self
+    ) { group in
+      for candidate in targets {
+        group.addTask {
+          guard !Task.isCancelled,
+            let repaired = await RemoteImagePipeline.shared.image(
+              for: candidate,
+              maxPixelSize: maxPixelSize
+            )
+          else { return nil }
+          return (candidate, repaired)
         }
-        return true
       }
+      for await repaired in group {
+        if let repaired {
+          group.cancelAll()
+          return repaired
+        }
+      }
+      return nil
+    }
+  }
+
+  /// One quiet background retry keeps the card recoverable without causing the
+  /// tab-switch reload loop. After that, only the visible refresh button retries.
+  private func retryAfterShowingFailure(for originalURL: URL?) async -> Bool {
+    try? await Task.sleep(for: .seconds(30))
+    guard !Task.isCancelled else { return false }
+    if let originalURL,
+      let repaired = await RemoteImagePipeline.shared.image(
+        for: originalURL,
+        maxPixelSize: maxPixelSize,
+        force: true
+      )
+    {
+      commit(repaired, for: originalURL)
+      return true
+    }
+    if let aiAlternativeURLs,
+      let repaired = await firstAvailableAlternative(from: await aiAlternativeURLs())
+    {
+      applyAlternative(repaired, originalURL: originalURL)
+      return true
+    }
+    if let alternativeURLs,
+      let repaired = await firstAvailableAlternative(from: await alternativeURLs())
+    {
+      applyAlternative(repaired, originalURL: originalURL)
+      return true
     }
     return false
   }

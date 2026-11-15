@@ -2488,6 +2488,13 @@ struct PlayerView: View {
   private func notifyPlaybackReadyIfNeeded() {
     guard !didNotifyPlaybackReady, hasRenderableVideo else { return }
     didNotifyPlaybackReady = true
+    if let activeFlag, !activeFlag.isEmpty {
+      model.setPreferredPlaybackFlag(
+        activeFlag,
+        sourceKey: sourceKey,
+        vodId: item.vodId
+      )
+    }
     onPlaybackReady?()
     reportPlaybackQualityIfNeeded()
     scheduleWatermarkAdScan()
@@ -3459,11 +3466,7 @@ struct PlayerView: View {
   private func switchPlaybackLine(_ line: PlaybackLine) async {
     activeFlag = line.name
     activeLineEpisodes = line.episodes
-    model.setPreferredPlaybackFlag(
-      line.name,
-      sourceKey: sourceKey,
-      vodId: item.vodId
-    )
+    didNotifyPlaybackReady = false
     let target =
       line.episodes.first(where: { $0.value == activeEpisode?.value })
       ?? activeEpisode.flatMap { current in

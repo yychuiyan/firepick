@@ -321,6 +321,9 @@ final class AppModel {
   private var posterRepairTasks: [String: Task<[URL], Never>] = [:]
   private var posterRepairCache: [String: [URL]] = [:]
   private var posterRepairMisses: [String: Date] = [:]
+  private var aiPosterRepairTasks: [String: Task<[URL], Never>] = [:]
+  private var aiPosterRepairCache: [String: [URL]] = [:]
+  private var aiPosterRepairMisses: [String: Date] = [:]
   private var liveRefreshTask: Task<[LiveGroup], Never>?
   private var liveLoadGeneration = 0
   private var activeLiveCacheDigest = ""
@@ -1532,6 +1535,42 @@ final class AppModel {
     return urls
   }
 
+  /// AI is a second-stage cover recovery layer. It runs only after both the
+  /// original URL and locally discovered cross-source covers fail as images.
+  func aiAlternativePosterURLs(for item: MediaItem) async -> [URL] {
+    guard canUseAIAssist() else { return [] }
+    let base = Self.posterRepairKey(for: item)
+    guard !base.isEmpty else { return [] }
+    let key = "\(base)|\(contentMode.rawValue)"
+    if let cached = aiPosterRepairCache[key] { return cached }
+    if let missedAt = aiPosterRepairMisses[key] {
+      if Date().timeIntervalSince(missedAt) < 2 * 60 { return [] }
+      aiPosterRepairMisses.removeValue(forKey: key)
+    }
+    if let task = aiPosterRepairTasks[key] {
+      return await task.value
+    }
+
+    let task = Task<[URL], Never> { [weak self] in
+      guard let self else { return [] }
+      await self.posterRepairGate.acquire()
+      let urls = await self.searchAIPosterURLs(for: item)
+      await self.posterRepairGate.release()
+      return urls
+    }
+    aiPosterRepairTasks[key] = task
+    let urls = await task.value
+    aiPosterRepairTasks.removeValue(forKey: key)
+    if urls.isEmpty {
+      aiPosterRepairMisses[key] = Date()
+      aiEnhancementStatus = "AI 未找到额外的可用封面候选"
+    } else {
+      aiPosterRepairCache[key] = urls
+      aiEnhancementStatus = "AI 已补充 \(urls.count) 个封面候选"
+    }
+    return urls
+  }
+
   func rememberRecoveredPosterURL(_ url: URL, for item: MediaItem) {
     let key = posterPersistentCacheKey(for: item)
     guard !key.isEmpty else { return }
@@ -1553,6 +1592,54 @@ final class AppModel {
   }
 
   private func searchAlternativePosterURLs(for item: MediaItem) async -> [URL] {
+    let sites = posterRepairSites(for: item)
+    guard !sites.isEmpty else { return [] }
+    if coordinator == nil {
+      coordinator = makeCoordinator(client: bridgeClient)
+    }
+    guard let coordinator else { return [] }
+    return await searchPosterURLs(
+      for: item,
+      sites: sites,
+      keywords: [item.name],
+      coordinator: coordinator,
+      maxConcurrent: 3
+    )
+  }
+
+  private func searchAIPosterURLs(for item: MediaItem) async -> [URL] {
+    guard canUseAIAssist() else { return [] }
+    let sites = posterRepairSites(for: item)
+    guard !sites.isEmpty,
+      let assist = await aiTitleAssist(
+        query: item.name,
+        metadata: aiMetadata(for: item)
+      )
+    else { return [] }
+    var seen = Set([Self.normalizedTitle(item.name)])
+    let terms = ([assist.canonicalTitle].compactMap { $0 }
+      + assist.aliases
+      + assist.searchTerms)
+      .filter {
+        let normalized = Self.normalizedTitle($0)
+        return !normalized.isEmpty && seen.insert(normalized).inserted
+      }
+      .prefix(4)
+    guard !terms.isEmpty else { return [] }
+    if coordinator == nil {
+      coordinator = makeCoordinator(client: bridgeClient)
+    }
+    guard let coordinator else { return [] }
+    return await searchPosterURLs(
+      for: item,
+      sites: sites,
+      keywords: Array(terms),
+      coordinator: coordinator,
+      maxConcurrent: 2
+    )
+  }
+
+  private func posterRepairSites(for item: MediaItem) -> [SiteConfiguration] {
     let preferredKey = item.sourceKey ?? selectedSite?.key
     var sites: [SiteConfiguration] = []
     var seen = Set<String>()
@@ -1567,12 +1654,16 @@ final class AppModel {
       sites.append(searchable)
       if sites.count == 3 { break }
     }
-    guard !sites.isEmpty else { return [] }
-    if coordinator == nil {
-      coordinator = makeCoordinator(client: bridgeClient)
-    }
-    guard let coordinator else { return [] }
+    return sites
+  }
 
+  private func searchPosterURLs(
+    for item: MediaItem,
+    sites: [SiteConfiguration],
+    keywords: [String],
+    coordinator: ProviderCoordinator,
+    maxConcurrent: Int
+  ) async -> [URL] {
     let currentURL = item.pic
       .flatMap { RemoteImageCache.normalizedURL(from: $0) }
       .map { $0.absoluteString.lowercased() }
@@ -1599,39 +1690,18 @@ final class AppModel {
         }
       }
     }
-    let results = await coordinator.search(
-      sites: sites,
-      keyword: item.name,
-      quick: false,
-      timeout: .seconds(6),
-      maxConcurrent: 3
-    )
-    appendPosterResults(results)
-    if ranked.isEmpty, canUseAIAssist(),
-      let assist = await aiTitleAssist(
-        query: item.name,
-        metadata: aiMetadata(for: item)
+    for keyword in keywords {
+      guard !Task.isCancelled else { break }
+      let results = await coordinator.search(
+        sites: sites,
+        keyword: keyword,
+        quick: false,
+        timeout: .seconds(6),
+        maxConcurrent: maxConcurrent
       )
-    {
-      var seen = Set([Self.normalizedTitle(item.name)])
-      let terms = ([assist.canonicalTitle].compactMap { $0 }
-        + assist.aliases
-        + assist.searchTerms)
-        .filter {
-          let key = Self.normalizedTitle($0)
-          return !key.isEmpty && seen.insert(key).inserted
-        }
-        .prefix(4)
-      for term in terms where ranked.isEmpty {
-        if Task.isCancelled { break }
-        let expanded = await coordinator.search(
-          sites: sites,
-          keyword: term,
-          quick: false,
-          timeout: .seconds(6),
-          maxConcurrent: 2
-        )
-        appendPosterResults(expanded)
+      appendPosterResults(results)
+      if ranked.count >= 8 {
+        break
       }
     }
     return Array(ranked.sorted { $0.score < $1.score }.prefix(5).map(\.url))
@@ -4175,10 +4245,26 @@ final class AppModel {
     // Fast path: episode already carries a direct stream URL — skip remote playerContent
     // (that parse was the multi-second 切集 delay on long series).
     if let direct = Self.directPlayableURL(from: episode.value, siteAPI: site.api) {
-      return PlaybackRequest(
+      let headers = site.headerDictionary
+      let playable: URL
+      if PlaybackPageResolver.isDirectMediaURL(direct) {
+        playable = direct
+      } else if let embedded = await PlaybackPageResolver.resolve(
         url: direct,
-        headers: [:],
-        formatHint: episode.value,
+        headers: headers
+      ) {
+        playable = embedded
+      } else {
+        playable =
+          await DynamicPlaybackPageResolver.shared.resolve(
+            pageURL: direct,
+            headers: headers
+          ) ?? direct
+      }
+      return PlaybackRequest(
+        url: playable,
+        headers: headers,
+        formatHint: playable.absoluteString,
         startPosition: startPosition
       )
     }
