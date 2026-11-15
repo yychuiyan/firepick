@@ -118,6 +118,37 @@ jobs:
           echo "Cloudflare token active; zone ${ZONE_NAME} resolved."
           echo "CF_Zone_ID=$zone_id" >> "$GITHUB_ENV"
 
+          # Verify DNS write access with a record that cannot affect traffic.
+          test_record_name="_firepick-cert-preflight.${DOMAIN}"
+          test_record_content="firepick-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          create_payload="$(
+            jq -cn \
+              --arg name "$test_record_name" \
+              --arg content "$test_record_content" \
+              '{type:"TXT", name:$name, content:$content, ttl:60}'
+          )"
+          create_response="$(
+            curl --fail-with-body --silent --show-error \
+              -X POST \
+              -H "$auth_header" \
+              -H "Content-Type: application/json" \
+              --data "$create_payload" \
+              "$api/zones/${zone_id}/dns_records"
+          )"
+          test_record_id="$(
+            jq -er \
+              'if .success == true then .result.id
+               else error("Cloudflare TXT write preflight failed")
+               end' \
+              <<<"$create_response"
+          )"
+          curl --fail-with-body --silent --show-error \
+            -X DELETE \
+            -H "$auth_header" \
+            "$api/zones/${zone_id}/dns_records/${test_record_id}" \
+            >/dev/null
+          echo "Cloudflare DNS write permission confirmed; test record removed."
+
       - name: Issue Let's Encrypt certificate
         if: steps.expiry.outputs.renew == 'true'
         shell: bash
