@@ -1,0 +1,44 @@
+name: Purge Tencent CDN cache
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: JSON array of absolute CDN URLs
+        required: true
+        default: '["https://dl.yychuiyan.com/firepick/Firepick-0.1.38.ipa"]'
+
+permissions:
+  contents: read
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TENCENTCLOUD_SECRET_ID: ${{ secrets.TENCENTCLOUD_SECRET_ID }}
+      TENCENTCLOUD_SECRET_KEY: ${{ secrets.TENCENTCLOUD_SECRET_KEY }}
+      URLS_JSON: ${{ inputs.urls }}
+    steps:
+      - name: Validate configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${TENCENTCLOUD_SECRET_ID:?Missing GitHub secret TENCENTCLOUD_SECRET_ID}"
+          : "${TENCENTCLOUD_SECRET_KEY:?Missing GitHub secret TENCENTCLOUD_SECRET_KEY}"
+          jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and startswith("https://"))' \
+            <<<"$URLS_JSON" >/dev/null
+
+      - name: Purge URLs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --quiet "tccli==3.1.200.1"
+          export PATH="$HOME/.local/bin:$PATH"
+          tccli configure set \
+            secretId "$TENCENTCLOUD_SECRET_ID" \
+            secretKey "$TENCENTCLOUD_SECRET_KEY" \
+            output json
+          tccli cdn PurgeUrlsCache \
+            --Urls "$URLS_JSON" \
+            --Area mainland
