@@ -198,13 +198,21 @@ struct DetailView: View {
       // Prefer the management-page best node for first paint when different.
       if playback == nil, !lines.isEmpty {
         // Start the tapped source immediately. The cross-station search and
-        // episode-count fan-out can take several seconds and must not gate the
-        // first frame. Backfill the ranked pool in the background and only
-        // choose another source if this one has not produced a picture yet.
-        let preparation = Task {
-          await preparePlayableStationsIfNeeded(forceRebuild: true)
+        // episode-count fan-out can saturate the connection and delay the first
+        // HLS segments. Give the selected stream a short head start before
+        // backfilling the ranked pool.
+        let latencyProbe = Task {
+          await probeCurrentSourceLatencyIfNeeded()
         }
         await playPrimary()
+        let preparation = Task {
+          try? await Task.sleep(for: .seconds(2))
+          guard !Task.isCancelled, !hasShownVideoFrame, !playbackSettled else {
+            return
+          }
+          await preparePlayableStationsIfNeeded(forceRebuild: true)
+        }
+        await latencyProbe.value
         await preparation.value
         if !hasShownVideoFrame, !playbackSettled {
           let started = await autoSelectOptimalSourceIfNeeded()
@@ -287,6 +295,7 @@ struct DetailView: View {
         onPlaybackReady: {
           hasShownVideoFrame = true
           playbackSettled = true
+          Task { await probeCurrentSourceLatencyIfNeeded() }
         },
         onWatermarkAdDetected: {
           model.markWatermarkAdProvider(playbackProviderKey)
@@ -624,7 +633,10 @@ struct DetailView: View {
     // Movie / single-shot: skip per-station detail fan-out (was the slow path).
     let looksLikeSeries = (remarkTarget ?? 0) > 1 || currentCount > 1
     let complete: [AppModel.CollectionStation]
-    if !looksLikeSeries {
+    // Before the first frame, source availability and latency are enough to
+    // recover quickly. Fanning out to eight station details + HLS manifests
+    // here competes with the stream we are trying to start.
+    if !looksLikeSeries || (!hasShownVideoFrame && !playbackSettled) {
       complete = playable
     } else {
       let counts = await episodeCounts(for: playable)
@@ -892,10 +904,19 @@ struct DetailView: View {
 
   private var sourceLatencyMS: Int? {
     guard !isSwitchingSource, let key = playbackProviderKey else { return nil }
-    let stationID =
-      model.collectionStations.first(where: { stationProviderKey($0) == key })?.id
-      ?? "cms:\(key)"
+    guard let stationID = sourceStationID else { return nil }
     return model.collectionStationLatencyMS[stationID]
+  }
+
+  private var sourceStationID: String? {
+    guard let key = playbackProviderKey else { return nil }
+    return model.collectionStations.first(where: { stationProviderKey($0) == key })?.id
+      ?? "cms:\(key)"
+  }
+
+  private var isSourceLatencyProbing: Bool {
+    guard let stationID = sourceStationID else { return false }
+    return model.probingCollectionStationIDs.contains(stationID)
   }
 
   private var sourceSpeedColor: Color {
@@ -906,17 +927,30 @@ struct DetailView: View {
   }
 
   private var sourceLatencyText: String {
-    guard let latency = sourceLatencyMS else { return "未测速" }
+    if isSourceLatencyProbing { return "测速中" }
+    guard let latency = sourceLatencyMS else { return "待测速" }
     return "\(latency)ms"
   }
 
   private var sourceAccessibilityLabel: String {
     guard !isSwitchingSource else { return "当前来源 切换线路中" }
+    if isSourceLatencyProbing {
+      return "当前来源 \(sourceStatusValue)，正在测速"
+    }
     guard let latency = sourceLatencyMS else {
       return "当前来源 \(sourceStatusValue)，尚未测速"
     }
     let speed = latency <= 300 ? "快速" : latency <= 900 ? "一般" : "较慢"
     return "当前来源 \(sourceStatusValue)，响应 \(latency) 毫秒，\(speed)"
+  }
+
+  private func probeCurrentSourceLatencyIfNeeded() async {
+    guard let stationID = sourceStationID,
+      model.collectionStationLatencyMS[stationID] == nil,
+      !model.probingCollectionStationIDs.contains(stationID),
+      let station = model.collectionStations.first(where: { $0.id == stationID })
+    else { return }
+    await model.probeCollectionStationLatency(station)
   }
 
   private var displayRemarks: String? {

@@ -86,9 +86,11 @@ struct SourceManagementView: View {
     }
     .searchable(text: $query, prompt: "搜索采集站")
     .task(id: model.currentConnection?.id) {
-      // First enter: 获取最佳线路 (full candidate race). Fresh pool → badge-only refresh.
+      // Every entry refreshes and re-ranks the full best-line candidate pool.
+      // Badge-only refreshes left the visible order stale while the numbers
+      // changed, making the page look inconsistent with the manual action.
       if usesFirepickCMS {
-        await model.ensureBestCMSLinesOnEnter()
+        await model.ensureBestCMSLinesOnEnter(maxAge: 0)
       } else {
         await model.probeCollectionStationLatencies()
       }

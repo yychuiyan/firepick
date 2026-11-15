@@ -671,6 +671,8 @@ final class AppModel {
       allowedActive,
       for: contentMode
     )
+    collectionStationLatencyMS =
+      persistence?.loadActiveCMSProviderLatencies(mode: contentMode) ?? [:]
     consolidateWarehouseConnections()
     if let currentURL = persistence?.currentConnectionURL {
       currentConnection = sourceConnections.first { $0.url == currentURL && $0.enabled }
@@ -1828,7 +1830,7 @@ final class AppModel {
     }
   }
 
-  /// Enter 采集站管理: only re-measure current active pool latency badges.
+  /// Re-measure the current active pool with stable two-pass probes.
   func probeActivePoolLatenciesOnly() async {
     let stations = collectionStations
     guard !stations.isEmpty else {
@@ -1895,7 +1897,8 @@ final class AppModel {
       ? saved
       : saved.filter { !$0.isAdult }
     activeCMSProviders = Self.normalizedActiveCMSProviders(allowed, for: mode)
-    collectionStationLatencyMS = [:]
+    collectionStationLatencyMS =
+      persistence?.loadActiveCMSProviderLatencies(mode: mode) ?? [:]
     didProbeCollectionStations = false
     detailResult = nil
     searchSections = []
@@ -2001,7 +2004,10 @@ final class AppModel {
       probingCollectionStationIDs = probing
     }
     guard let url = Self.cmsListProbeURL(from: base) else { return }
-    let ms = await Self.measureProbeLatency(url: url, requireJSONBody: false)
+    let ms = await Self.measureStableProbeLatency(
+      url: url,
+      requireJSONBody: false
+    )
     var next = collectionStationLatencyMS
     if let ms {
       next[station.id] = ms
@@ -2009,6 +2015,9 @@ final class AppModel {
       next.removeValue(forKey: station.id)
     }
     collectionStationLatencyMS = next
+    if configuration.sites.contains(where: { $0.key == "firepick_cms" }) {
+      persistence?.saveActiveCMSProviderLatencies(next, mode: contentMode)
+    }
   }
 
   /// Race cms-candidates like TVBox 连通性检测: high concurrency, short timeout,
@@ -2104,7 +2113,7 @@ final class AppModel {
         group.addTask {
           guard let base = URL(string: entry.api),
             let url = Self.cmsListProbeURL(from: base),
-            let ms = await Self.measureProbeLatency(
+            let ms = await Self.measureStableProbeLatency(
               url: url,
               requireJSONBody: true,
               timeout: 2.5
@@ -2178,6 +2187,7 @@ final class AppModel {
     activeCMSProviders = picked
     persistence?.saveActiveCMSProviders(picked, mode: contentMode)
     collectionStationLatencyMS = latency
+    persistence?.saveActiveCMSProviderLatencies(latency, mode: contentMode)
     didProbeCollectionStations = true
     collectionStationProbeStatus = "已获取 \(picked.count) 条最佳线路"
 
@@ -2271,6 +2281,32 @@ final class AppModel {
     } catch {
       return nil
     }
+  }
+
+  /// The first request typically pays DNS/TLS/session setup. Measure again on
+  /// the warmed connection so the displayed latency and ordering do not jump
+  /// from one or two seconds to a few hundred milliseconds later.
+  nonisolated private static func measureStableProbeLatency(
+    url: URL,
+    requireJSONBody: Bool,
+    timeout: TimeInterval = 2.5
+  ) async -> Int? {
+    guard
+      let warmup = await measureProbeLatency(
+        url: url,
+        requireJSONBody: requireJSONBody,
+        timeout: max(timeout, 4)
+      )
+    else {
+      return nil
+    }
+    // Give URLSession a brief moment to return the connection to its pool.
+    try? await Task.sleep(for: .milliseconds(120))
+    return await measureProbeLatency(
+      url: url,
+      requireJSONBody: requireJSONBody,
+      timeout: timeout
+    ) ?? warmup
   }
 
   func probeSiteLatencies(_ sites: [SiteConfiguration]) async -> [String: Int] {

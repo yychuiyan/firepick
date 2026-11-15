@@ -50,6 +50,8 @@ final class AppPersistence {
     static let activeCMSProvidersProbedAt = "activeCMSProvidersProbedAt"
     static let activeCMSProvidersAdult = "activeCMSProvidersAdult"
     static let activeCMSProvidersAdultProbedAt = "activeCMSProvidersAdultProbedAt"
+    static let activeCMSProviderLatencies = "activeCMSProviderLatencies"
+    static let activeCMSProviderLatenciesAdult = "activeCMSProviderLatenciesAdult"
     static let aiEnhancementEnabled = "aiEnhancementEnabled"
     static let simulatorDeepSeekAPIKey = "simulatorDeepSeekAPIKey"
     static let recoveredPosterURLs = "recoveredPosterURLs"
@@ -577,6 +579,33 @@ final class AppPersistence {
       : Key.activeCMSProvidersProbedAt
     guard defaults.object(forKey: key) != nil else { return nil }
     return Date(timeIntervalSince1970: defaults.double(forKey: key))
+  }
+
+  func loadActiveCMSProviderLatencies(
+    mode: AppModel.ContentMode
+  ) -> [String: Int] {
+    let key =
+      mode == .adult
+      ? Key.activeCMSProviderLatenciesAdult
+      : Key.activeCMSProviderLatencies
+    guard let data = defaults.data(forKey: key),
+      let decoded = try? JSONDecoder().decode([String: Int].self, from: data)
+    else {
+      return [:]
+    }
+    return decoded
+  }
+
+  func saveActiveCMSProviderLatencies(
+    _ values: [String: Int],
+    mode: AppModel.ContentMode
+  ) {
+    let key =
+      mode == .adult
+      ? Key.activeCMSProviderLatenciesAdult
+      : Key.activeCMSProviderLatencies
+    guard let data = try? JSONEncoder().encode(values) else { return }
+    defaults.set(data, forKey: key)
   }
 
   /// Keep browse lists across launches (maxAge). Includes filter keys + Douban order.
