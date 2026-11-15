@@ -41,8 +41,6 @@ struct DetailView: View {
   @State private var isSwitchingSource = false
   /// Bumped before silent 换站 network work so PlayerView can freeze the live frame first.
   @State private var silentHandoffPulse = 0
-  /// Hold 当前来源 label during seamless handoff so the chip doesn't flash a new站名.
-  @State private var frozenSourceLabel: String?
   /// Keep 选集 highlight stable across source switches (episode `value` changes per站).
   @State private var focusEpisodeName: String?
   /// Bumped on each play() so rapid 切集 only applies the latest resolve.
@@ -372,10 +370,7 @@ struct DetailView: View {
                 .padding(.vertical, 3)
                 .background(Color.orange, in: Capsule())
             }
-            if let remarks = detail.remarks?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !remarks.isEmpty,
-              !remarks.contains("完结")
-            {
+            if let remarks = displayRemarks {
               Text(remarks)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -511,6 +506,11 @@ struct DetailView: View {
 
   private var playbackSourceName: String {
     if let key = playbackProviderKey {
+      if let station = model.collectionStations.first(where: {
+        stationProviderKey($0) == key
+      }) {
+        return station.name
+      }
       return Self.providerDisplayNames[key] ?? key
     }
     let name = model.selectedSite?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -544,6 +544,8 @@ struct DetailView: View {
     "zy1080": "1080",
     "hongniu3": "红牛备",
     "huya": "虎牙",
+    "wujin_com": "无尽",
+    "jinyingzy": "金鹰",
     "wolong": "卧龙",
     "maotai": "茅台",
     "ikun": "iKun",
@@ -867,46 +869,91 @@ struct DetailView: View {
       Text("当前来源")
         .font(.subheadline)
         .foregroundStyle(.secondary)
-      Text(sourceStatusValue)
-        .font(.subheadline.weight(.medium))
-        .foregroundStyle(.primary)
-        .lineLimit(1)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(Color.secondary.opacity(0.10), in: Capsule())
+      HStack(spacing: 7) {
+        if isSwitchingSource {
+          ProgressView()
+            .controlSize(.mini)
+            .tint(.secondary)
+        } else {
+          Circle()
+            .fill(sourceSpeedColor)
+            .frame(width: 6, height: 6)
+        }
+        Text(sourceStatusValue)
+          .font(.subheadline.weight(.medium))
+          .foregroundStyle(.primary)
+          .lineLimit(1)
+        if !isSwitchingSource {
+          Rectangle()
+            .fill(Color.secondary.opacity(0.22))
+            .frame(width: 1, height: 12)
+          Text(sourceLatencyText)
+            .font(.caption.monospacedDigit().weight(.semibold))
+            .foregroundStyle(sourceSpeedColor)
+            .lineLimit(1)
+        }
+      }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 4)
+      .background(sourceSpeedColor.opacity(0.10), in: Capsule())
+      .overlay {
+        Capsule()
+          .stroke(sourceSpeedColor.opacity(0.22), lineWidth: 0.5)
+      }
       Spacer(minLength: 0)
     }
     .accessibilityElement(children: .combine)
-    .accessibilityLabel("当前来源 \(sourceStatusValue)")
+    .accessibilityLabel(sourceAccessibilityLabel)
   }
 
   private var sourceStatusValue: String {
-    // Seamless 换站: keep the old chip until handoff finishes so users don't "feel" the swap.
-    if let frozenSourceLabel, !frozenSourceLabel.isEmpty {
-      return frozenSourceLabel
+    if isSwitchingSource { return "切换线路中" }
+    let name = playbackSourceName.trimmingCharacters(in: .whitespacesAndNewlines)
+    return name.isEmpty ? "拾萤精选" : name
+  }
+
+  private var sourceLatencyMS: Int? {
+    guard !isSwitchingSource, let key = playbackProviderKey else { return nil }
+    let stationID =
+      model.collectionStations.first(where: { stationProviderKey($0) == key })?.id
+      ?? "cms:\(key)"
+    return model.collectionStationLatencyMS[stationID]
+  }
+
+  private var sourceSpeedColor: Color {
+    guard let latency = sourceLatencyMS else { return .secondary }
+    if latency <= 300 { return .green }
+    if latency <= 900 { return .orange }
+    return .red
+  }
+
+  private var sourceLatencyText: String {
+    guard let latency = sourceLatencyMS else { return "未测速" }
+    return "\(latency)ms"
+  }
+
+  private var sourceAccessibilityLabel: String {
+    guard !isSwitchingSource else { return "当前来源 切换线路中" }
+    guard let latency = sourceLatencyMS else {
+      return "当前来源 \(sourceStatusValue)，尚未测速"
     }
-    if model.collectionStations.count > 1 {
-      if let stations = orderedPlayableStations, !stations.isEmpty {
-        let selected =
-          stations.first(where: { stationProviderKey($0) == playbackProviderKey })
-          ?? stations.first
-        return selected?.name ?? playbackSourceName
-      }
-      // Empty pool / recycle / silent 淘金 — keep the last known站名;「暂无可用」only when
-      // recycle+refine both finished and still nothing.
-      let name = playbackSourceName.trimmingCharacters(in: .whitespacesAndNewlines)
-      if !name.isEmpty { return name }
-      if orderedPlayableStations?.isEmpty == true,
-        didRecyclePlayableStations, didSilentRefineStations
-      {
-        return "暂无可用"
-      }
-      return name.isEmpty ? "拾萤精选" : name
+    let speed = latency <= 300 ? "快速" : latency <= 900 ? "一般" : "较慢"
+    return "当前来源 \(sourceStatusValue)，响应 \(latency) 毫秒，\(speed)"
+  }
+
+  private var displayRemarks: String? {
+    guard
+      let remarks = detail.remarks?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !remarks.isEmpty,
+      !remarks.contains("完结")
+    else { return nil }
+    if remarks.range(
+      of: #"^第\s*\d+\s*[集期话]$"#,
+      options: .regularExpression
+    ) != nil {
+      return "更新至" + remarks.replacingOccurrences(of: "第", with: "")
     }
-    if model.onDeviceSites.count > 1 {
-      return model.selectedSite?.name ?? "拾萤精选"
-    }
-    return playbackSourceName
+    return remarks
   }
 
   /// Strict Douban score only; CMS scores are not presented as Douban ratings.
@@ -1326,8 +1373,7 @@ struct DetailView: View {
       : (historyEntry?.position ?? titleHistoryHint?.position ?? 0)
     sourceSwitchHandoff = (position, episodeName)
     if seamless {
-      // Freeze live frame + 来源 chip before network work so the swap feels invisible.
-      frozenSourceLabel = sourceStatusValue
+      // Freeze the live frame before network work so the swap feels invisible.
       silentHandoffPulse += 1
     }
   }
@@ -1335,7 +1381,6 @@ struct DetailView: View {
   private func clearSourceHandoff() {
     sourceSwitchHandoff = nil
     isSwitchingSource = false
-    frozenSourceLabel = nil
   }
 
   private func applyReplacement(_ replacement: MediaItem, seamless: Bool = false) async {
@@ -1356,15 +1401,6 @@ struct DetailView: View {
       await playPrimary()
     }
     isSwitchingSource = false
-    if seamless {
-      // Reveal new 来源 after the stream has had a beat to settle.
-      Task { @MainActor in
-        try? await Task.sleep(for: .milliseconds(1200))
-        frozenSourceLabel = nil
-      }
-    } else {
-      frozenSourceLabel = nil
-    }
   }
 
   private func playPrimary() async {
