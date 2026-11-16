@@ -39,6 +39,7 @@ final class AppPersistence {
     static let skipMarks = "skipMarks"
     static let connectionLatencies = "connectionLatencies"
     static let playbackFlagSelections = "playbackFlagSelections"
+    static let preferredPlaybackProviders = "preferredPlaybackProviders"
     static let favoriteLiveChannelIDs = "favoriteLiveChannelIDs"
     static let lastLiveChannelID = "lastLiveChannelID"
     static let lastLiveChannelName = "lastLiveChannelName"
@@ -521,6 +522,25 @@ final class AppPersistence {
     if let data = try? JSONEncoder().encode(values) {
       defaults.set(data, forKey: Key.playbackFlagSelections)
     }
+  }
+
+  func loadPreferredPlaybackProviders() -> [String: AppModel.PreferredPlaybackProvider] {
+    guard let data = defaults.data(forKey: Key.preferredPlaybackProviders),
+      let decoded = try? JSONDecoder().decode(
+        [String: AppModel.PreferredPlaybackProvider].self,
+        from: data
+      )
+    else {
+      return [:]
+    }
+    return decoded
+  }
+
+  func savePreferredPlaybackProviders(
+    _ values: [String: AppModel.PreferredPlaybackProvider]
+  ) {
+    guard let data = try? JSONEncoder().encode(values) else { return }
+    defaults.set(data, forKey: Key.preferredPlaybackProviders)
   }
 
   func loadFavoriteLiveChannelIDs() -> [String] {

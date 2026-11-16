@@ -137,6 +137,7 @@ struct BrowseView: View {
                 .padding(.bottom, 72)
               }
             }
+            .id(browseScrollKey)
             .scrollPosition(id: browseScrollPosition, anchor: .top)
             .refreshable {
               await model.refreshCurrentCategory()
@@ -272,7 +273,7 @@ struct BrowseView: View {
 
   private var browseScrollKey: String {
     let siteKey = model.selectedSite?.key ?? model.currentConnection?.id ?? ""
-    return "\(siteKey)|\(model.selectedCategory?.typeId ?? "none")"
+    return "\(siteKey)|\(model.contentMode.rawValue)|\(model.selectedCategory?.typeId ?? "none")"
   }
 
   private var browseScrollPosition: Binding<String?> {

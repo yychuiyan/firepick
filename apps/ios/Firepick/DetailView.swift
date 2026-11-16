@@ -178,10 +178,6 @@ struct DetailView: View {
       {
         model.detailResult = nil
       }
-      selectedFlag = model.preferredPlaybackFlag(
-        sourceKey: currentItem.sourceKey ?? model.selectedSite?.key,
-        vodId: currentItem.vodId
-      )
       droppedProviderKeys = []
       didRecyclePlayableStations = false
       didSilentRefineStations = false
@@ -191,7 +187,27 @@ struct DetailView: View {
       probedStreamProfiles = [:]
       // Seed from 采集站管理 current best pool immediately — don't wait on re-probe.
       seedPlayableStationsFromBestPool()
-      await model.loadDetail(currentItem)
+      let preferredProvider = model.preferredPlaybackProvider(for: currentItem)
+      let currentProvider =
+        currentItem.vodId.split(separator: "|", maxSplits: 1).first.map(String.init)
+      var loadedPreferred = false
+      if let preferredProvider,
+        preferredProvider.providerKey != currentProvider
+      {
+        var candidate = currentItem
+        candidate.vodId = preferredProvider.vodId
+        if await model.loadDetail(candidate) {
+          currentItem = candidate
+          loadedPreferred = true
+        }
+      }
+      if !loadedPreferred {
+        await model.loadDetail(currentItem)
+      }
+      selectedFlag = model.preferredPlaybackFlag(
+        sourceKey: currentItem.sourceKey ?? model.selectedSite?.key,
+        vodId: currentItem.vodId
+      )
       if let name = focusEpisodeName, let match = matchEpisode(named: name) {
         selectedFlag = match.line.name
       } else if selectedFlag == nil || !lines.contains(where: { $0.name == selectedFlag }) {
@@ -291,6 +307,13 @@ struct DetailView: View {
         onPlaybackReady: {
           hasShownVideoFrame = true
           playbackSettled = true
+          if let key = playbackProviderKey {
+            model.setPreferredPlaybackProvider(
+              key,
+              vodId: detail.vodId,
+              for: detail
+            )
+          }
           Task { await probeCurrentSourceLatencyIfNeeded() }
         },
         onWatermarkAdDetected: {

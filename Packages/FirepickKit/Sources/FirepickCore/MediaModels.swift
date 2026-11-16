@@ -308,6 +308,13 @@ public struct SourceFilter: Codable, Equatable, Sendable {
         case key, name, value
         case initValue = "init"
     }
+
+    public init(key: String, name: String, value: [FilterValue], initValue: String? = nil) {
+        self.key = key
+        self.name = name
+        self.value = value
+        self.initValue = initValue
+    }
 }
 
 public struct FilterValue: Codable, Equatable, Sendable {
@@ -317,6 +324,11 @@ public struct FilterValue: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case name = "n"
         case value = "v"
+    }
+
+    public init(name: String, value: String) {
+        self.name = name
+        self.value = value
     }
 }
 

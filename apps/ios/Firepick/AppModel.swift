@@ -397,6 +397,7 @@ final class AppModel {
   var subtitleOutlineEnabled = true
   var skipMarks: [String: SkipMark] = [:]
   var playbackFlagSelections: [String: String] = [:]
+  var preferredPlaybackProviders: [String: PreferredPlaybackProvider] = [:]
   var favoriteLiveChannelIDs: Set<String> = []
   var lastLiveChannelID: String?
   var lastLiveChannelName: String?
@@ -656,6 +657,8 @@ final class AppModel {
     skipMarks = persistence?.loadSkipMarks() ?? [:]
     connectionLatencyMS = persistence?.loadConnectionLatencies() ?? [:]
     playbackFlagSelections = persistence?.loadPlaybackFlagSelections() ?? [:]
+    preferredPlaybackProviders =
+      persistence?.loadPreferredPlaybackProviders() ?? [:]
     favoriteLiveChannelIDs = Set(persistence?.loadFavoriteLiveChannelIDs() ?? [])
     lastLiveChannelID = persistence?.lastLiveChannelID
     lastLiveChannelName = persistence?.lastLiveChannelName
@@ -818,6 +821,12 @@ final class AppModel {
     var id: String { key }
 
     var isAdult: Bool { adult == true }
+  }
+
+  struct PreferredPlaybackProvider: Codable, Equatable, Sendable {
+    var providerKey: String
+    var vodId: String
+    var savedAt: Date
   }
 
   struct ProviderPlaybackQuality: Codable, Equatable, Sendable {
@@ -3273,11 +3282,14 @@ final class AppModel {
     selectedCategory = category
     let keptSource = filterSelections["source"]
     if categoryChanged {
-      if let filters = homeResult?.filters?[category.typeId] {
-        categoryFilters = Self.browseVisibleFilters(filters)
-      } else {
-        categoryFilters = Self.browseVisibleFilters(decodedFilters(category.filters))
-      }
+      let sourceFilters =
+        homeResult?.filters?[category.typeId]
+        ?? decodedFilters(category.filters)
+      let visibleFilters = Self.browseVisibleFilters(sourceFilters)
+      categoryFilters =
+        visibleFilters.isEmpty && category.typeId == "bucket|adult"
+        ? Self.defaultAdultFilters
+        : visibleFilters
       if let remembered = filterSelectionsByCategory[category.typeId], !remembered.isEmpty {
         filterSelections = categoryFilters.reduce(into: remembered) { values, filter in
           if values[filter.key] == nil {
@@ -3902,10 +3914,40 @@ final class AppModel {
     persistence?.savePlaybackFlagSelections(playbackFlagSelections)
   }
 
-  func loadDetail(_ item: MediaItem) async {
+  func preferredPlaybackProvider(for item: MediaItem) -> PreferredPlaybackProvider? {
+    let key = preferredPlaybackProviderKey(for: item)
+    guard !key.isEmpty else { return nil }
+    return preferredPlaybackProviders[key]
+  }
+
+  func setPreferredPlaybackProvider(
+    _ providerKey: String,
+    vodId: String,
+    for item: MediaItem
+  ) {
+    let key = preferredPlaybackProviderKey(for: item)
+    guard !key.isEmpty, !providerKey.isEmpty, !vodId.isEmpty else { return }
+    preferredPlaybackProviders[key] = PreferredPlaybackProvider(
+      providerKey: providerKey,
+      vodId: vodId,
+      savedAt: Date()
+    )
+    persistence?.savePreferredPlaybackProviders(preferredPlaybackProviders)
+  }
+
+  private func preferredPlaybackProviderKey(for item: MediaItem) -> String {
+    let sourceKey = item.sourceKey ?? selectedSite?.key ?? ""
+    let title = Self.normalizedTitle(item.name)
+    let year = item.year?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !sourceKey.isEmpty, !title.isEmpty else { return "" }
+    return "\(sourceKey)|\(contentMode.rawValue)|\(title)|\(year)"
+  }
+
+  @discardableResult
+  func loadDetail(_ item: MediaItem) async -> Bool {
     guard let sourceKey = item.sourceKey ?? selectedSite?.key,
       let site = configuration.sites.first(where: { $0.key == sourceKey })
-    else { return }
+    else { return false }
     isLoading = true
     isLoadingDetail = true
     defer {
@@ -3926,9 +3968,11 @@ final class AppModel {
       }
       attachSourceKey(site.key, to: &result)
       detailResult = result
+      return true
     } catch {
       lastRecoverableAction = .loadDetail(item)
       errorMessage = error.localizedDescription
+      return false
     }
   }
 
@@ -5584,6 +5628,41 @@ final class AppModel {
       if name == "源站" || name == "站点" || name == "来源" { return false }
       return true
     }
+  }
+
+  private static var defaultAdultFilters: [SourceFilter] {
+    func values(_ pairs: [(String, String)]) -> [FilterValue] {
+      pairs.map { FilterValue(name: $0.0, value: $0.1) }
+    }
+    return [
+      SourceFilter(
+        key: "class",
+        name: "类型",
+        value: values([
+          ("全部", ""), ("国产", "国产"), ("自拍", "自拍"), ("主播", "主播"),
+          ("传媒", "传媒"), ("人妻", "人妻"), ("制服", "制服"), ("无码", "无码"),
+          ("三级", "三级"), ("动漫", "动漫"), ("欧美", "欧美"), ("女优", "女优"),
+        ]),
+        initValue: ""
+      ),
+      SourceFilter(
+        key: "year",
+        name: "年份",
+        value: values([
+          ("全部", ""), ("2026", "2026"), ("2025", "2025"), ("2024", "2024"),
+          ("2023", "2023"), ("2022", "2022"), ("更早", "2000"),
+        ]),
+        initValue: ""
+      ),
+      SourceFilter(
+        key: "by",
+        name: "排序",
+        value: values([
+          ("热门", ""), ("最多播放", "hits"), ("最新更新", "time"),
+        ]),
+        initValue: ""
+      ),
+    ]
   }
 
 }

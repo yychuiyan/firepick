@@ -8,6 +8,11 @@ private struct ImageBox: @unchecked Sendable {
   let image: UIImage?
 }
 
+private struct AlternativeImageBox: @unchecked Sendable {
+  let url: URL
+  let image: UIImage
+}
+
 private actor AsyncImageGate {
   private let limit: Int
   private var active = 0
@@ -726,14 +731,47 @@ struct CachedRemoteImage<Placeholder: View>: View {
     )
     guard !Task.isCancelled else { return }
     image = loaded
-    failed = loaded == nil
-    if failed { _ = await recoverWithAlternativeArtwork(for: url) }
-    if failed {
-      let recovered = await retryAfterShowingFailure(for: url)
-      if !recovered, !didReportFinalFailure {
-        didReportFinalFailure = true
-        onFinalFailure?()
+    if loaded == nil {
+      let alternativeTask: Task<AlternativeImageBox?, Never>? = {
+        guard !didResolveAlternatives, let alternativeURLs else { return nil }
+        didResolveAlternatives = true
+        return Task {
+          let candidates = await alternativeURLs()
+          return await firstAvailableAlternative(from: candidates)
+        }
+      }()
+      let repaired = await waitForAlternative(
+        alternativeTask,
+        minimumSeconds: 2.5
+      )
+      if let repaired {
+        applyAlternative(repaired, originalURL: url)
+      } else {
+        failed = true
+        Task { @MainActor in
+          if let late = await alternativeTask?.value {
+            applyAlternative(late, originalURL: url)
+            return
+          }
+          if !didResolveAIAlternatives, let aiAlternativeURLs {
+            didResolveAIAlternatives = true
+            if let ai = await firstAvailableAlternative(
+              from: await aiAlternativeURLs()
+            ) {
+              applyAlternative(ai, originalURL: url)
+            }
+          }
+        }
+        Task { @MainActor in
+          let recovered = await retryAfterShowingFailure(for: url)
+          if !recovered, !didReportFinalFailure {
+            didReportFinalFailure = true
+            onFinalFailure?()
+          }
+        }
       }
+    } else {
+      failed = false
     }
   }
 
@@ -756,7 +794,7 @@ struct CachedRemoteImage<Placeholder: View>: View {
   }
 
   private func applyAlternative(
-    _ repaired: (url: URL, image: UIImage),
+    _ repaired: AlternativeImageBox,
     originalURL: URL?
   ) {
     onAlternativeResolved?(repaired.url)
@@ -768,12 +806,34 @@ struct CachedRemoteImage<Placeholder: View>: View {
     }
   }
 
-  private func firstAvailableAlternative(from candidates: [URL]) async -> (url: URL, image: UIImage)? {
+  private func waitForAlternative(
+    _ task: Task<AlternativeImageBox?, Never>?,
+    minimumSeconds: TimeInterval
+  ) async -> AlternativeImageBox? {
+    guard let task else {
+      try? await Task.sleep(for: .seconds(minimumSeconds))
+      return nil
+    }
+    return await withTaskGroup(of: AlternativeImageBox?.self) { group in
+      group.addTask { await task.value }
+      group.addTask {
+        try? await Task.sleep(for: .seconds(minimumSeconds))
+        return nil
+      }
+      let value = await group.next() ?? nil
+      group.cancelAll()
+      return value
+    }
+  }
+
+  private func firstAvailableAlternative(
+    from candidates: [URL]
+  ) async -> AlternativeImageBox? {
     let targets = Array(candidates.prefix(3))
     let pixelSize = maxPixelSize
     guard !targets.isEmpty else { return nil }
     return await withTaskGroup(
-      of: (url: URL, image: UIImage)?.self
+      of: AlternativeImageBox?.self
     ) { group in
       for candidate in targets {
         group.addTask {
@@ -783,7 +843,7 @@ struct CachedRemoteImage<Placeholder: View>: View {
               maxPixelSize: pixelSize
             )
           else { return nil }
-          return (candidate, repaired)
+          return AlternativeImageBox(url: candidate, image: repaired)
         }
       }
       for await repaired in group {
