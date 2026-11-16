@@ -124,6 +124,13 @@ struct PlaybackTests {
   }
 
   @Test
+  func scalesSeekToleranceWithJumpDistance() {
+    #expect(PlaybackSeekPolicy.toleranceSeconds(distance: 5) == 0.35)
+    #expect(PlaybackSeekPolicy.toleranceSeconds(distance: 20) == 1)
+    #expect(PlaybackSeekPolicy.toleranceSeconds(distance: 1_900) == 2)
+  }
+
+  @Test
   func detectsMinorityHLSAdSegmentWithoutRewritingTimeline() throws {
     let playlist = """
     #EXTM3U

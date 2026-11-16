@@ -3,6 +3,46 @@ import FirepickPlayback
 import FirepickProvider
 import SwiftUI
 
+private enum BestSourceCheckFeedback: Equatable {
+  case currentBest
+  case unavailable
+  case switchFailed
+
+  var title: String {
+    switch self {
+    case .currentBest: "已最佳"
+    case .unavailable: "检测失败"
+    case .switchFailed: "已恢复"
+    }
+  }
+
+  var icon: String {
+    switch self {
+    case .currentBest: "checkmark"
+    case .unavailable: "exclamationmark"
+    case .switchFailed: "arrow.uturn.backward"
+    }
+  }
+}
+
+private struct PendingBestSource {
+  let providerKey: String
+  let stationName: String
+  let latencyMS: Int?
+  let mediaKBps: Int?
+  let currentEpisodeCount: Int?
+  let candidateEpisodeCount: Int?
+  let replacement: MediaItem
+  let itemID: String
+  let startingProviderKey: String?
+  let playGeneration: Int
+
+  var discoversNewEpisodes: Bool {
+    guard let currentEpisodeCount, let candidateEpisodeCount else { return false }
+    return candidateEpisodeCount > currentEpisodeCount
+  }
+}
+
 struct DetailView: View {
   @Environment(AppModel.self) private var model
   @Environment(\.dismiss) private var dismiss
@@ -38,6 +78,18 @@ struct DetailView: View {
   @State private var lastPlaybackTime: Double = 0
   @State private var sourceSwitchHandoff: (position: Double, episodeName: String?)?
   @State private var isSwitchingSource = false
+  @State private var playbackBitrateKBps: Int?
+  @State private var isCheckingBestSource = false
+  @State private var isAutomaticLatestEpisodeCheck = false
+  @State private var bestSourceCheckFeedback: BestSourceCheckFeedback?
+  @State private var bestSourceCheckFeedbackGeneration = 0
+  @State private var bestSourceCheckTask: Task<Void, Never>?
+  @State private var pendingBestSource: PendingBestSource?
+  @State private var manualSwitchReady = false
+  @State private var bestSourceToast: String?
+  @State private var bestSourceToastGeneration = 0
+  @State private var latestEpisodeCheckTask: Task<Void, Never>?
+  @State private var didScheduleLatestEpisodeCheck = false
   /// Bumped before silent 换站 network work so PlayerView can freeze the live frame first.
   @State private var silentHandoffPulse = 0
   /// Keep 选集 highlight stable across source switches (episode `value` changes per站).
@@ -171,6 +223,9 @@ struct DetailView: View {
     .task(id: currentItem.vodId) {
       // applyReplacement owns detail+play during 来源 switch (avoid clearing lines mid-flight).
       guard !isSwitchingSource else { return }
+      latestEpisodeCheckTask?.cancel()
+      latestEpisodeCheckTask = nil
+      didScheduleLatestEpisodeCheck = false
       seedFocusFromHistory()
       // Keep previous detail on screen while the new one loads to avoid 选集 flash.
       if model.detailResult?.list.first?.vodId != currentItem.vodId,
@@ -183,6 +238,9 @@ struct DetailView: View {
       didSilentRefineStations = false
       playbackSettled = false
       hasShownVideoFrame = false
+      playbackBitrateKBps = nil
+      pendingBestSource = nil
+      bestSourceToast = nil
       orderedPlayableStations = nil
       probedStreamProfiles = [:]
       // Seed from 采集站管理 current best pool immediately — don't wait on re-probe.
@@ -252,6 +310,15 @@ struct DetailView: View {
       Task { await play(episode: next, flag: flag, startPosition: resume) }
     }
     .onDisappear {
+      bestSourceCheckTask?.cancel()
+      bestSourceCheckTask = nil
+      latestEpisodeCheckTask?.cancel()
+      latestEpisodeCheckTask = nil
+      isCheckingBestSource = false
+      isAutomaticLatestEpisodeCheck = false
+      bestSourceCheckFeedback = nil
+      pendingBestSource = nil
+      bestSourceToast = nil
       if isPlayerExpanded {
         OrientationBridge.enterPortraitThenUnlock()
       }
@@ -307,6 +374,9 @@ struct DetailView: View {
         onPlaybackReady: {
           hasShownVideoFrame = true
           playbackSettled = true
+          if isCheckingBestSource {
+            manualSwitchReady = true
+          }
           if let key = playbackProviderKey {
             model.setPreferredPlaybackProvider(
               key,
@@ -315,12 +385,16 @@ struct DetailView: View {
             )
           }
           Task { await probeCurrentSourceLatencyIfNeeded() }
+          scheduleLatestEpisodeCheckIfNeeded()
         },
         onWatermarkAdDetected: {
           model.markWatermarkAdProvider(playbackProviderKey)
         },
         onPlaybackQualityMeasured: { height in
           model.recordProviderPlaybackQuality(playbackProviderKey, height: height)
+        },
+        onMeasuredBitrate: { bitrate in
+          playbackBitrateKBps = bitrate
         },
         onUnplayable: {
           guard let key = playbackProviderKey else { return false }
@@ -333,7 +407,26 @@ struct DetailView: View {
           userLockedSource = false
           return failoverToNextStation(from: key)
         },
-        silentHandoffPulse: silentHandoffPulse
+        silentHandoffPulse: silentHandoffPulse,
+        onCheckBestSource: {
+          startBestSourceCheck()
+        },
+        isCheckingBestSource: isCheckingBestSource,
+        bestSourceCheckStatus: bestSourceCheckStatus,
+        externalToast: bestSourceToast,
+        pendingBestSourceName: pendingBestSource?.stationName,
+        pendingBestSourceTitle:
+          pendingBestSource?.discoversNewEpisodes == true
+          ? "发现新集"
+          : "发现更佳线路",
+        pendingBestSourceDetail: pendingBestSource.map(bestSourceChangeDescription),
+        hasPendingBestSource: pendingBestSource != nil,
+        onConfirmBestSourceSwitch: {
+          confirmPendingBestSourceSwitch()
+        },
+        onCancelBestSourceSwitch: {
+          cancelPendingBestSourceSwitch()
+        }
       )
       // Stable within one DetailView — soft-reload keeps progress chrome on 来源 switch.
       .id("firepick-player")
@@ -453,6 +546,11 @@ struct DetailView: View {
           } else if !lines.isEmpty || isSwitchingSource {
             sourceStatusRow
               .padding(.top, 8)
+            if let pendingBestSource {
+              bestSourceConfirmationCard(pendingBestSource)
+                .padding(.top, 8)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
             // 线路（gsyun/gsm3u8 等）静默选用，不在播放页展示。
             if !displayedEpisodes.isEmpty {
               HStack(spacing: 8) {
@@ -573,6 +671,7 @@ struct DetailView: View {
     "haohua": "豪华",
     "yzzy": "优质",
     "zy1080": "1080",
+    "xgzy": "西瓜资源",
     "hongniu3": "红牛备",
     "huya": "虎牙",
     "wujin_com": "无尽",
@@ -645,10 +744,7 @@ struct DetailView: View {
     }
     let playable = all.filter { available.contains(stationProviderKey($0)) }
     let remarkTarget = AppModel.expectedUpdateCount(from: detail.remarks)
-    let currentCount = AppModel.playbackEpisodeCount(
-      playFrom: detail.playFrom,
-      playURL: detail.playURL
-    )
+    let currentCount = EpisodeUpdatePolicy.episodeCount(in: detail)
     // Movie / single-shot: skip per-station detail fan-out (was the slow path).
     let looksLikeSeries = (remarkTarget ?? 0) > 1 || currentCount > 1
     let complete: [AppModel.CollectionStation]
@@ -673,8 +769,18 @@ struct DetailView: View {
         }
       }
     }
-    // Sort by latency once (fastest first); unknown latency last. Never reshuffle later.
-    let ranked = complete.sorted { a, b in
+    // Sort by ad/quality/reliability first, then latency. Never reshuffle later.
+    let ranked = rankedStationsForPlayback(complete)
+    // Honor stations already marked dead while first paint was probing.
+    orderedPlayableStations = ranked.filter {
+      !droppedProviderKeys.contains(stationProviderKey($0))
+    }
+  }
+
+  private func rankedStationsForPlayback(
+    _ stations: [AppModel.CollectionStation]
+  ) -> [AppModel.CollectionStation] {
+    stations.sorted { a, b in
       let aAd = model.hasWatermarkAdProvider(stationProviderKey(a))
       let bAd = model.hasWatermarkAdProvider(stationProviderKey(b))
       if aAd != bAd { return !aAd }
@@ -703,10 +809,6 @@ struct DetailView: View {
       case (nil, _?): return false
       case (nil, nil): return false
       }
-    }
-    // Honor stations already marked dead while first paint was probing.
-    orderedPlayableStations = ranked.filter {
-      !droppedProviderKeys.contains(stationProviderKey($0))
     }
   }
 
@@ -851,13 +953,13 @@ struct DetailView: View {
     orderedPlayableStations = stations
   }
 
-  /// 只读：展示当前站名；更快站在后台测完后静默切换，不提供手动点选。
+  /// 当前站摘要 + 手动检测。检测本身不冻结画面，只有确认候选后才换源。
   private var sourceStatusRow: some View {
-    HStack(alignment: .center, spacing: 8) {
-      Text("当前来源")
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
+    HStack(alignment: .center, spacing: 7) {
       HStack(spacing: 7) {
+        Text("来源")
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
         if isSwitchingSource {
           ProgressView()
             .controlSize(.mini)
@@ -871,27 +973,179 @@ struct DetailView: View {
           .font(.subheadline.weight(.medium))
           .foregroundStyle(.primary)
           .lineLimit(1)
-        if !isSwitchingSource {
-          Rectangle()
-            .fill(Color.secondary.opacity(0.22))
-            .frame(width: 1, height: 12)
-          Text(sourceLatencyText)
-            .font(.caption.monospacedDigit().weight(.semibold))
-            .foregroundStyle(sourceSpeedColor)
+          .minimumScaleFactor(0.86)
+          .layoutPriority(1)
+        if !isSwitchingSource, let latencyText = sourceLatencyText {
+          Text("·")
+            .font(.caption.weight(.bold))
+            .foregroundStyle(.secondary)
+          Text(latencyText)
+            .font(.caption2.monospacedDigit().weight(.medium))
+            .foregroundStyle(.secondary)
             .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
         }
       }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 4)
-      .background(sourceSpeedColor.opacity(0.10), in: Capsule())
-      .overlay {
-        Capsule()
-          .stroke(sourceSpeedColor.opacity(0.22), lineWidth: 0.5)
+      .lineLimit(1)
+      .accessibilityElement(children: .combine)
+      .accessibilityLabel(sourceAccessibilityLabel)
+      Spacer(minLength: 4)
+      if let bitrate = playbackBitrateKBps {
+        Label(formattedMediaSpeed(bitrate), systemImage: "speedometer")
+          .font(.caption.monospacedDigit().weight(.semibold))
+          .foregroundStyle(mediaBitrateColor(bitrate))
+          .labelStyle(.titleAndIcon)
+          .lineLimit(1)
+          .fixedSize(horizontal: true, vertical: false)
       }
-      Spacer(minLength: 0)
+      if !isSwitchingSource {
+        bestSourceCheckButton
+      }
     }
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel(sourceAccessibilityLabel)
+    .padding(.vertical, 2)
+  }
+
+  private var bestSourceCheckButton: some View {
+    Button {
+      startBestSourceCheck()
+    } label: {
+      HStack(spacing: 4) {
+        if isCheckingBestSource, !isAutomaticLatestEpisodeCheck {
+          ProgressView()
+            .controlSize(.mini)
+            .tint(.orange)
+        } else if let feedback = bestSourceCheckFeedback {
+          Image(systemName: feedback.icon)
+            .font(.caption2.weight(.bold))
+        } else {
+          Image(systemName: "scope")
+            .font(.caption2.weight(.semibold))
+        }
+        Text(bestSourceCheckTitle)
+      }
+      .font(.caption.weight(.semibold))
+      .foregroundStyle(bestSourceCheckColor)
+      .frame(minWidth: 52, minHeight: 26)
+      .padding(.horizontal, 7)
+      .background(bestSourceCheckColor.opacity(0.10), in: Capsule())
+      .overlay {
+        Capsule().strokeBorder(bestSourceCheckColor.opacity(0.20), lineWidth: 0.5)
+      }
+      .fixedSize(horizontal: true, vertical: false)
+    }
+    .buttonStyle(.plain)
+    .disabled(isCheckingBestSource || playback == nil || pendingBestSource != nil)
+    .accessibilityLabel(bestSourceCheckAccessibilityLabel)
+  }
+
+  private var bestSourceCheckTitle: String {
+    if isCheckingBestSource {
+      return isAutomaticLatestEpisodeCheck ? "检测" : "检测中"
+    }
+    if pendingBestSource != nil { return "待确认" }
+    if let feedback = bestSourceCheckFeedback { return feedback.title }
+    return "检测"
+  }
+
+  private var bestSourceCheckColor: Color {
+    if pendingBestSource != nil { return .orange }
+    switch bestSourceCheckFeedback {
+    case .currentBest: return .green
+    case .unavailable: return .secondary
+    case .switchFailed: return .orange
+    case nil: return .orange
+    }
+  }
+
+  private var bestSourceCheckAccessibilityLabel: String {
+    if isCheckingBestSource {
+      return isAutomaticLatestEpisodeCheck ? "正在静默检查新集" : "正在检测最佳播放线路"
+    }
+    if pendingBestSource != nil { return "发现更佳线路，等待确认" }
+    switch bestSourceCheckFeedback {
+    case .currentBest: return "当前线路已是最佳"
+    case .unavailable: return "线路检测失败"
+    case .switchFailed: return "新线路加载失败，已恢复当前线路"
+    case nil: return "检测最佳播放线路"
+    }
+  }
+
+  private func bestSourceConfirmationCard(_ pending: PendingBestSource) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(alignment: .top, spacing: 9) {
+        Image(systemName: "bolt.horizontal.circle.fill")
+          .font(.title3)
+          .foregroundStyle(.orange)
+        VStack(alignment: .leading, spacing: 3) {
+          Text(pending.discoversNewEpisodes ? "发现新集" : "发现更佳线路")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.primary)
+          Text(bestSourceChangeDescription(pending))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        Spacer(minLength: 6)
+        Button {
+          cancelPendingBestSourceSwitch()
+        } label: {
+          Image(systemName: "xmark")
+            .font(.caption.weight(.bold))
+            .foregroundStyle(.secondary)
+            .frame(width: 28, height: 28)
+            .background(Color.secondary.opacity(0.09), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("保留当前线路")
+      }
+
+      HStack(spacing: 10) {
+        Button("保留当前") {
+          cancelPendingBestSourceSwitch()
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(Color.secondary.opacity(0.08), in: Capsule())
+
+        Button(pending.discoversNewEpisodes ? "切换并更新" : "切换线路") {
+          confirmPendingBestSourceSwitch()
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.white)
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(Color.orange, in: Capsule())
+      }
+    }
+    .padding(12)
+    .background(Color.orange.opacity(0.065), in: RoundedRectangle(cornerRadius: 14))
+    .overlay {
+      RoundedRectangle(cornerRadius: 14)
+        .strokeBorder(Color.orange.opacity(0.18), lineWidth: 0.75)
+    }
+    .accessibilityElement(children: .contain)
+  }
+
+  private func bestSourceChangeDescription(_ pending: PendingBestSource) -> String {
+    let latency = pending.latencyMS.map { " · \($0)ms" } ?? ""
+    let media = pending.mediaKBps.map { " · 媒体约 \($0) KB/s" } ?? ""
+    let episode = playbackEpisode?.name ?? focusEpisodeName
+    let keep =
+      episode.map { "将保持 \($0) 和当前播放进度。" }
+      ?? "将保持当前播放进度。"
+    if let current = pending.currentEpisodeCount,
+      let candidate = pending.candidateEpisodeCount,
+      candidate > current
+    {
+      return
+        "\(pending.stationName) 已更新至第\(candidate)集，当前来源为第\(current)集"
+        + "\(latency)\(media)。\(keep)"
+    }
+    return "\(pending.stationName)\(latency)\(media)。\(keep)"
   }
 
   private var sourceStatusValue: String {
@@ -907,8 +1161,12 @@ struct DetailView: View {
 
   private var sourceStationID: String? {
     guard let key = playbackProviderKey else { return nil }
-    return model.collectionStations.first(where: { stationProviderKey($0) == key })?.id
-      ?? "cms:\(key)"
+    return sourceStation?.id ?? "cms:\(key)"
+  }
+
+  private var sourceStation: AppModel.CollectionStation? {
+    guard let key = playbackProviderKey else { return nil }
+    return model.collectionStations.first(where: { stationProviderKey($0) == key })
   }
 
   private var isSourceLatencyProbing: Bool {
@@ -917,16 +1175,37 @@ struct DetailView: View {
   }
 
   private var sourceSpeedColor: Color {
-    guard let latency = sourceLatencyMS else { return .secondary }
-    if latency <= 300 { return .green }
-    if latency <= 900 { return .orange }
+    if let latency = sourceLatencyMS {
+      if latency <= 300 { return .green }
+      if latency <= 900 { return .orange }
+      return .red
+    }
+    if let bitrate = playbackBitrateKBps {
+      return mediaBitrateColor(bitrate)
+    }
+    return .secondary
+  }
+
+  private var sourceLatencyText: String? {
+    if isSourceLatencyProbing { return "测速中" }
+    if let latency = sourceLatencyMS { return "\(latency)ms" }
+    if playbackBitrateKBps != nil {
+      return sourceStation == nil ? "已记忆" : "未测速"
+    }
+    return "待测"
+  }
+
+  private func mediaBitrateColor(_ bitrate: Int) -> Color {
+    if bitrate >= 300 { return .green }
+    if bitrate >= 80 { return .orange }
     return .red
   }
 
-  private var sourceLatencyText: String {
-    if isSourceLatencyProbing { return "接口测速中" }
-    guard let latency = sourceLatencyMS else { return "接口待测" }
-    return "接口 \(latency)ms"
+  private func formattedMediaSpeed(_ bitrate: Int) -> String {
+    if bitrate >= 1024 {
+      return String(format: "%.1f MB/s", Double(bitrate) / 1024)
+    }
+    return "\(bitrate) KB/s"
   }
 
   private var sourceAccessibilityLabel: String {
@@ -935,10 +1214,16 @@ struct DetailView: View {
       return "当前来源 \(sourceStatusValue)，正在测速"
     }
     guard let latency = sourceLatencyMS else {
+      if let bitrate = playbackBitrateKBps {
+        return "当前来源 \(sourceStatusValue)，媒体速度约 \(bitrate) KB/s，接口尚未测速"
+      }
       return "当前来源 \(sourceStatusValue)，尚未测速"
     }
     let speed = latency <= 300 ? "快速" : latency <= 900 ? "一般" : "较慢"
-    return "当前来源 \(sourceStatusValue)，响应 \(latency) 毫秒，\(speed)"
+    let media =
+      playbackBitrateKBps.map { "，媒体速度约 \($0) KB/s" }
+      ?? ""
+    return "当前来源 \(sourceStatusValue)，响应 \(latency) 毫秒，\(speed)\(media)"
   }
 
   private func probeCurrentSourceLatencyIfNeeded() async {
@@ -948,6 +1233,324 @@ struct DetailView: View {
       let station = model.collectionStations.first(where: { $0.id == stationID })
     else { return }
     await model.probeCollectionStationLatency(station)
+  }
+
+  private var bestSourceCheckStatus: String? {
+    if isSwitchingSource, isCheckingBestSource {
+      return "正在切换最佳线路"
+    }
+    if isCheckingBestSource {
+      return isAutomaticLatestEpisodeCheck ? nil : "正在检测最佳线路"
+    }
+    switch bestSourceCheckFeedback {
+    case .currentBest: return "当前线路已是最佳"
+    case .unavailable: return "线路检测失败"
+    case .switchFailed: return "新线路加载失败，已恢复当前线路"
+    case nil: return nil
+    }
+  }
+
+  private func startBestSourceCheck() {
+    guard !isCheckingBestSource, !isSwitchingSource, pendingBestSource == nil else { return }
+    bestSourceCheckTask?.cancel()
+    bestSourceCheckTask = Task {
+      await checkBestSource(automatic: false)
+      bestSourceCheckTask = nil
+    }
+  }
+
+  private func scheduleLatestEpisodeCheckIfNeeded() {
+    guard !didScheduleLatestEpisodeCheck,
+      playback != nil,
+      !isSwitchingSource,
+      (activeLine?.episodes.count ?? 0) > 1
+    else { return }
+    didScheduleLatestEpisodeCheck = true
+    latestEpisodeCheckTask?.cancel()
+    latestEpisodeCheckTask = Task { @MainActor in
+      try? await Task.sleep(for: .seconds(2))
+      guard !Task.isCancelled, playback != nil, hasShownVideoFrame,
+        currentItem.vodId == detail.vodId
+      else { return }
+      await checkBestSource(automatic: true)
+      latestEpisodeCheckTask = nil
+    }
+  }
+
+  /// Detection never interrupts playback. It refreshes the current detail,
+  /// compares all advertised episode counts, then only starts a seamless
+  /// handoff after the user confirms a verified candidate.
+  private func checkBestSource(automatic: Bool) async {
+    guard !isCheckingBestSource, !isSwitchingSource, playback != nil else { return }
+    if automatic, !model.shouldCheckLatestEpisodes(for: currentItem) { return }
+    let startingItemID = currentItem.vodId
+    let startingProvider = playbackProviderKey
+    let startingGeneration = playGeneration
+    bestSourceCheckFeedbackGeneration += 1
+    bestSourceCheckFeedback = nil
+    pendingBestSource = nil
+    isCheckingBestSource = true
+    isAutomaticLatestEpisodeCheck = automatic
+    defer {
+      isCheckingBestSource = false
+      isAutomaticLatestEpisodeCheck = false
+      model.markLatestEpisodesChecked(for: currentItem)
+    }
+
+    guard let site = model.selectedSite else {
+      if !automatic { showBestSourceFeedback(.unavailable) }
+      return
+    }
+
+    // A stale in-memory detail made a源 that had already reached 20 appear as
+    // 19. Refresh the current source before suggesting any switch.
+    if await model.loadDetail(currentItem),
+      let refreshed = model.detailResult?.list.first(where: {
+        $0.vodId == currentItem.vodId
+      })
+    {
+      currentItem = refreshed
+    }
+    guard !Task.isCancelled,
+      currentItem.vodId == startingItemID,
+      playbackProviderKey == startingProvider,
+      playGeneration == startingGeneration
+    else { return }
+
+    let currentEpisodeCount = EpisodeUpdatePolicy.episodeCount(in: detail)
+    let advertisedCounts = await model.providerEpisodeCountsHavingTitle(detail.name)
+    guard !Task.isCancelled else { return }
+    let allStations = (orderedPlayableStations ?? model.collectionStations)
+      .filter { stationProviderKey($0) != startingProvider }
+    let latestStations = rankedStationsForPlayback(
+      allStations.filter {
+        (advertisedCounts[stationProviderKey($0)] ?? 0) > currentEpisodeCount
+      }
+    )
+    let hasNewEpisodes = !latestStations.isEmpty
+    let candidates =
+      hasNewEpisodes
+      ? Array(latestStations.prefix(3))
+      : Array(rankedStationsForPlayback(allStations).prefix(3))
+
+    guard !candidates.isEmpty else {
+      if !automatic { markCurrentSourceBest() }
+      return
+    }
+    if automatic, !hasNewEpisodes {
+      return
+    }
+
+    let currentEpisodeName = playbackEpisode?.name ?? focusEpisodeName
+    let currentKBps = playbackBitrateKBps ?? 0
+    let minimumSpeedCandidateKBps = max(
+      140,
+      Int((Double(currentKBps) * 1.1).rounded())
+    )
+    var selectedPending: PendingBestSource?
+
+    for station in candidates {
+      guard !Task.isCancelled else { return }
+      let providerKey = stationProviderKey(station)
+      let replacement: MediaItem
+      do {
+        guard
+          let match = try await model.findItem(
+            named: detail.name,
+            in: site,
+            preferredProviderKey: providerKey,
+            metadata: model.aiMetadata(for: detail)
+          )
+        else { continue }
+        replacement = match
+      } catch {
+        continue
+      }
+
+      let candidateLoaded = await model.loadDetail(replacement)
+      guard !Task.isCancelled, candidateLoaded,
+        let candidateDetail = model.detailResult?.list.first(where: {
+          $0.vodId == replacement.vodId
+        }),
+        let episodeMatch = candidateEpisodeMatch(
+          currentEpisodeName,
+          in: candidateDetail
+        )
+      else { continue }
+
+      let candidateEpisodeCount = EpisodeUpdatePolicy.episodeCount(in: candidateDetail)
+      let discoversNewEpisodes = candidateEpisodeCount > currentEpisodeCount
+      if hasNewEpisodes, !discoversNewEpisodes { continue }
+      let minimumCandidateKBps =
+        discoversNewEpisodes ? 120 : minimumSpeedCandidateKBps
+
+      // Interface latency is not playback quality. Require the candidate to
+      // deliver a real media segment before asking the user to switch.
+      guard let measuredKBps = await model.playbackKBps(
+        for: replacement,
+        episode: episodeMatch.episode,
+        flag: episodeMatch.line.name,
+        timeout: 4
+      ),
+        measuredKBps >= minimumCandidateKBps
+      else { continue }
+
+      selectedPending = PendingBestSource(
+        providerKey: providerKey,
+        stationName: station.name,
+        latencyMS: model.collectionStationLatencyMS[station.id],
+        mediaKBps: measuredKBps,
+        currentEpisodeCount: currentEpisodeCount,
+        candidateEpisodeCount: candidateEpisodeCount,
+        replacement: replacement,
+        itemID: startingItemID,
+        startingProviderKey: startingProvider,
+        playGeneration: startingGeneration
+      )
+      break
+    }
+
+    guard !Task.isCancelled else { return }
+    guard currentItem.vodId == startingItemID,
+      playbackProviderKey == startingProvider,
+      playGeneration == startingGeneration
+    else { return }
+    guard let selectedPending else {
+      if !automatic { markCurrentSourceBest() }
+      return
+    }
+    if !selectedPending.discoversNewEpisodes,
+      let measured = selectedPending.mediaKBps,
+      let currentNow = playbackBitrateKBps,
+      currentNow >= 300,
+      measured < Int((Double(currentNow) * 1.1).rounded())
+    {
+      if !automatic { markCurrentSourceBest() }
+      return
+    }
+
+    withAnimation(.easeInOut(duration: 0.18)) {
+      pendingBestSource = selectedPending
+    }
+  }
+
+  private func confirmPendingBestSourceSwitch() {
+    guard let pending = pendingBestSource else { return }
+    guard pending.itemID == currentItem.vodId,
+      pending.playGeneration == playGeneration,
+      playbackProviderKey == pending.startingProviderKey
+    else {
+      cancelPendingBestSourceSwitch()
+      showBestSourceFeedback(.unavailable)
+      return
+    }
+
+    withAnimation(.easeInOut(duration: 0.15)) {
+      pendingBestSource = nil
+    }
+    let rollbackItem = currentItem
+    bestSourceCheckTask?.cancel()
+    manualSwitchReady = false
+    isCheckingBestSource = true
+    bestSourceCheckTask = Task {
+      beginSourceHandoff(seamless: true)
+      await applyReplacement(pending.replacement, seamless: true)
+      guard !Task.isCancelled else {
+        isCheckingBestSource = false
+        return
+      }
+
+      if playbackProviderKey == pending.providerKey {
+        // Keep the old still visible while the confirmed source produces its
+        // first stable frame. A stream that never gets there is rolled back.
+        isSwitchingSource = true
+        for _ in 0..<30 where !manualSwitchReady {
+          try? await Task.sleep(for: .milliseconds(200))
+          if Task.isCancelled { break }
+        }
+      }
+
+      if Task.isCancelled {
+        isCheckingBestSource = false
+        return
+      }
+      if playbackProviderKey == pending.providerKey, !manualSwitchReady {
+        isSwitchingSource = false
+        beginSourceHandoff(seamless: true)
+        await applyReplacement(rollbackItem, seamless: true)
+        showBestSourceFeedback(.switchFailed)
+        showBestSourceToast("新线路加载失败，已恢复当前线路")
+      } else if playbackProviderKey != pending.providerKey {
+        showBestSourceFeedback(.unavailable)
+      } else {
+        let episodeUpdate =
+          pending.discoversNewEpisodes
+          ? "，已更新至第\(pending.candidateEpisodeCount ?? 0)集"
+          : ""
+        showBestSourceToast("已切换到 \(pending.stationName)\(episodeUpdate)")
+      }
+      isSwitchingSource = false
+      isCheckingBestSource = false
+      bestSourceCheckTask = nil
+    }
+  }
+
+  private func cancelPendingBestSourceSwitch() {
+    withAnimation(.easeInOut(duration: 0.15)) {
+      pendingBestSource = nil
+    }
+  }
+
+  private func candidateEpisodeMatch(
+    _ episodeName: String?,
+    in item: MediaItem
+  ) -> (line: PlaybackLine, episode: Episode)? {
+    let candidateLines = EpisodeParser.rankedLines(
+      EpisodeParser.lines(playFrom: item.playFrom, playURL: item.playURL)
+    )
+    guard let episodeName else {
+      return candidateLines.first.flatMap { line in
+        line.episodes.first.map { (line, $0) }
+      }
+    }
+    if let exact = candidateLines.lazy.compactMap({ line -> (PlaybackLine, Episode)? in
+      line.episodes.first(where: { $0.name == episodeName }).map { (line, $0) }
+    }).first {
+      return exact
+    }
+    guard let index = Self.episodeIndex(episodeName) else { return nil }
+    return candidateLines.lazy.compactMap({ line -> (PlaybackLine, Episode)? in
+      line.episodes.first(where: { Self.episodeIndex($0.name) == index }).map {
+        (line, $0)
+      }
+    }).first
+  }
+
+  private func showBestSourceFeedback(_ feedback: BestSourceCheckFeedback) {
+    bestSourceCheckFeedbackGeneration += 1
+    let generation = bestSourceCheckFeedbackGeneration
+    bestSourceCheckFeedback = feedback
+    Task { @MainActor in
+      try? await Task.sleep(for: .seconds(2.4))
+      guard generation == bestSourceCheckFeedbackGeneration else { return }
+      bestSourceCheckFeedback = nil
+    }
+  }
+
+  private func markCurrentSourceBest() {
+    showBestSourceFeedback(.currentBest)
+    showBestSourceToast("当前已是最优线路")
+  }
+
+  private func showBestSourceToast(_ message: String) {
+    bestSourceToastGeneration += 1
+    let generation = bestSourceToastGeneration
+    bestSourceToast = message
+    Task { @MainActor in
+      try? await Task.sleep(for: .seconds(3.2))
+      guard generation == bestSourceToastGeneration else { return }
+      bestSourceToast = nil
+    }
   }
 
   private var displayRemarks: String? {
@@ -1589,6 +2192,13 @@ struct DetailView: View {
     let episodeChanged =
       previousEpisodeName != nil && previousEpisodeName != episode.name
     if episodeChanged {
+      pendingBestSource = nil
+      // Freeze the outgoing frame before resolving the next episode. Waiting
+      // until PlaybackRequest changes can expose the loading/poster layer for a
+      // frame, which reads as a visible flash.
+      if playback != nil {
+        silentHandoffPulse += 1
+      }
       userLockedSource = false
       playbackSettled = false
       hasShownVideoFrame = false

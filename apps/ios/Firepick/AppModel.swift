@@ -324,6 +324,7 @@ final class AppModel {
   private var aiPosterRepairTasks: [String: Task<[URL], Never>] = [:]
   private var aiPosterRepairCache: [String: [URL]] = [:]
   private var aiPosterRepairMisses: [String: Date] = [:]
+  private var latestEpisodeCheckDates: [String: Date] = [:]
   private var liveRefreshTask: Task<[LiveGroup], Never>?
   private var liveLoadGeneration = 0
   private var activeLiveCacheDigest = ""
@@ -4042,20 +4043,30 @@ final class AppModel {
 
   /// Provider keys (e.g. `sdzy`) that return a title match for the current show.
   func providerKeysHavingTitle(_ title: String) async -> Set<String> {
-    guard let site = selectedSite else { return [] }
+    Set((await providerEpisodeCountsHavingTitle(title)).keys)
+  }
+
+  /// Search rows already include their playback list. Map provider → advertised
+  /// episode count without fanning out to every detail endpoint.
+  func providerEpisodeCountsHavingTitle(_ title: String) async -> [String: Int] {
+    guard let site = selectedSite else { return [:] }
     let target = Self.normalizedTitle(title)
-    guard !target.isEmpty else { return [] }
+    guard !target.isEmpty else { return [:] }
     do {
       let provider = try await provider(for: site)
       let search = try await provider.searchContent(keyword: title, quick: false, page: 1)
-      var keys = Set<String>()
-      for item in search.list {
-        guard Self.titleMatchRank(target: target, candidate: item.name) != nil else { continue }
-        guard let bar = item.vodId.firstIndex(of: "|") else { continue }
-        let key = String(item.vodId[..<bar])
-        if !key.isEmpty { keys.insert(key) }
+      let matched = search.list.filter {
+        Self.titleMatchRank(target: target, candidate: $0.name) != nil
       }
-      if keys.isEmpty, canUseAIAssist(),
+      var counts = EpisodeUpdatePolicy.sourceEpisodeCounts(
+        from: matched.map {
+          var item = $0
+          item.name = title
+          return item
+        },
+        matchingTitle: title
+      )
+      if counts.isEmpty, canUseAIAssist(),
         let assist = await aiTitleAssist(
           query: title,
           metadata: DeepSeekMediaMetadata(title: title)
@@ -4073,21 +4084,48 @@ final class AppModel {
             quick: false,
             page: 1
           )
-          for item in expanded.list {
+          let expandedMatches = expanded.list.filter { item in
             let matches = targets.contains {
               Self.titleMatchRank(target: $0, candidate: item.name) != nil
             }
-            guard matches, let bar = item.vodId.firstIndex(of: "|") else { continue }
-            let key = String(item.vodId[..<bar])
-            if !key.isEmpty { keys.insert(key) }
+            return matches
           }
-          if !keys.isEmpty { break }
+          let expandedCounts = EpisodeUpdatePolicy.sourceEpisodeCounts(
+            from: expandedMatches.map {
+              var item = $0
+              item.name = title
+              return item
+            },
+            matchingTitle: title
+          )
+          for (key, count) in expandedCounts {
+            counts[key] = max(counts[key] ?? 0, count)
+          }
+          if !counts.isEmpty { break }
         }
       }
-      return keys
+      return counts
     } catch {
-      return []
+      return [:]
     }
+  }
+
+  func shouldCheckLatestEpisodes(for item: MediaItem, now: Date = .now) -> Bool {
+    EpisodeUpdatePolicy.isCheckDue(
+      lastCheckedAt: latestEpisodeCheckDates[latestEpisodeCheckKey(for: item)],
+      now: now
+    )
+  }
+
+  func markLatestEpisodesChecked(for item: MediaItem, at date: Date = .now) {
+    latestEpisodeCheckDates[latestEpisodeCheckKey(for: item)] = date
+  }
+
+  private func latestEpisodeCheckKey(for item: MediaItem) -> String {
+    let sourceKey = item.sourceKey ?? selectedSite?.key ?? ""
+    let title = Self.normalizedTitle(item.name)
+    let year = item.year?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return "\(sourceKey)|\(contentMode.rawValue)|\(title)|\(year)"
   }
 
   private static func bestTitleCandidate(
@@ -4201,6 +4239,29 @@ final class AppModel {
     }
   }
 
+  /// Measure a real HLS media segment before asking the user to switch.
+  func playbackKBps(
+    for item: MediaItem,
+    episode: Episode,
+    flag: String,
+    timeout: TimeInterval = 5
+  ) async -> Int? {
+    do {
+      let request = try await resolvePlayback(
+        item: item,
+        episode: episode,
+        flag: flag
+      )
+      return await HLSQualityProbe.samplePlaybackKBps(
+        url: request.url,
+        headers: request.headers,
+        timeout: timeout
+      )
+    } catch {
+      return nil
+    }
+  }
+
   static func playbackEpisodeCount(playFrom: String?, playURL: String?) -> Int {
     EpisodeParser.lines(playFrom: playFrom, playURL: playURL)
       .map(\.episodes.count)
@@ -4209,26 +4270,7 @@ final class AppModel {
 
   /// Parse 「更新至35集 / 全40集 / 更新第12期」 style progress from remarks.
   static func expectedUpdateCount(from remarks: String?) -> Int? {
-    let text = remarks?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    guard !text.isEmpty else { return nil }
-    let patterns = [
-      #"更新(?:至|到|第)?\s*(\d+)\s*集"#,
-      #"全\s*(\d+)\s*集"#,
-      #"更新(?:至|到|第)?\s*(\d+)\s*期"#,
-      #"第\s*(\d+)\s*期"#,
-    ]
-    for pattern in patterns {
-      guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
-      let range = NSRange(text.startIndex..<text.endIndex, in: text)
-      guard let match = regex.firstMatch(in: text, range: range),
-        match.numberOfRanges > 1,
-        let numRange = Range(match.range(at: 1), in: text),
-        let value = Int(text[numRange]),
-        value > 0
-      else { continue }
-      return value
-    }
-    return nil
+    EpisodeUpdatePolicy.progressEpisodeCount(from: remarks)
   }
 
   private static func normalizedTitle(_ title: String) -> String {

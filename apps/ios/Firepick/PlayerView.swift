@@ -1,4 +1,5 @@
 import AVKit
+import CoreImage
 import FirepickCore
 import FirepickPlayback
 import MediaPlayer
@@ -48,10 +49,23 @@ struct PlayerView: View {
   var onWatermarkAdDetected: (() -> Void)? = nil
   /// Maximum decoded/presented short-edge height observed for this provider.
   var onPlaybackQualityMeasured: ((Int) -> Void)? = nil
+  /// AVPlayer access-log observed transfer rate while watching or buffering.
+  var onMeasuredBitrate: ((Int?) -> Void)? = nil
   /// All candidate URLs failed — return true if parent will switch 来源.
   var onUnplayable: (() -> Bool)? = nil
   /// Detail bumps this before silent 换站 network work — freeze the live frame early.
   var silentHandoffPulse: Int = 0
+  /// Full-screen entry for the two-phase manual best-source check.
+  var onCheckBestSource: (() -> Void)? = nil
+  var isCheckingBestSource = false
+  var bestSourceCheckStatus: String? = nil
+  var externalToast: String? = nil
+  var pendingBestSourceName: String? = nil
+  var pendingBestSourceTitle: String? = nil
+  var pendingBestSourceDetail: String? = nil
+  var hasPendingBestSource = false
+  var onConfirmBestSourceSwitch: (() -> Void)? = nil
+  var onCancelBestSourceSwitch: (() -> Void)? = nil
 
   @State private var avEngine = AVPlayerEngine()
   @State private var mpvEngine = MPVPlayerEngine()
@@ -227,8 +241,19 @@ struct PlayerView: View {
     onPlaybackReady: (() -> Void)? = nil,
     onWatermarkAdDetected: (() -> Void)? = nil,
     onPlaybackQualityMeasured: ((Int) -> Void)? = nil,
+    onMeasuredBitrate: ((Int?) -> Void)? = nil,
     onUnplayable: (() -> Bool)? = nil,
-    silentHandoffPulse: Int = 0
+    silentHandoffPulse: Int = 0,
+    onCheckBestSource: (() -> Void)? = nil,
+    isCheckingBestSource: Bool = false,
+    bestSourceCheckStatus: String? = nil,
+    externalToast: String? = nil,
+    pendingBestSourceName: String? = nil,
+    pendingBestSourceTitle: String? = nil,
+    pendingBestSourceDetail: String? = nil,
+    hasPendingBestSource: Bool = false,
+    onConfirmBestSourceSwitch: (() -> Void)? = nil,
+    onCancelBestSourceSwitch: (() -> Void)? = nil
   ) {
     self.request = request
     self.item = item
@@ -246,8 +271,19 @@ struct PlayerView: View {
     self.onPlaybackReady = onPlaybackReady
     self.onWatermarkAdDetected = onWatermarkAdDetected
     self.onPlaybackQualityMeasured = onPlaybackQualityMeasured
+    self.onMeasuredBitrate = onMeasuredBitrate
     self.onUnplayable = onUnplayable
     self.silentHandoffPulse = silentHandoffPulse
+    self.onCheckBestSource = onCheckBestSource
+    self.isCheckingBestSource = isCheckingBestSource
+    self.bestSourceCheckStatus = bestSourceCheckStatus
+    self.externalToast = externalToast
+    self.pendingBestSourceName = pendingBestSourceName
+    self.pendingBestSourceTitle = pendingBestSourceTitle
+    self.pendingBestSourceDetail = pendingBestSourceDetail
+    self.hasPendingBestSource = hasPendingBestSource
+    self.onConfirmBestSourceSwitch = onConfirmBestSourceSwitch
+    self.onCancelBestSourceSwitch = onCancelBestSourceSwitch
     let kind =
       (try? PlayerSelector().select(
         request,
@@ -378,12 +414,116 @@ struct PlayerView: View {
     return raw
   }
 
+  private var mediaBitrateKBps: Int? {
+    guard engineKind == .avPlayer else { return nil }
+    let bitrate = avEngine.observedBitrate
+    guard bitrate.isFinite, bitrate > 0 else { return nil }
+    return max(1, Int((bitrate / 8_000).rounded()))
+  }
+
+  private var mediaBitrateColor: Color {
+    guard let bitrate = mediaBitrateKBps else { return .secondary }
+    if bitrate >= 300 { return .green }
+    if bitrate >= 80 { return .orange }
+    return .red
+  }
+
+  private func mediaSpeedBadge(_ bitrate: Int) -> some View {
+    Label(formattedMediaBitrate(bitrate), systemImage: "speedometer")
+      .font(.caption2.monospacedDigit().weight(.semibold))
+      .foregroundStyle(mediaBitrateColor)
+      .labelStyle(.titleAndIcon)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 4)
+      .background(.black.opacity(0.46), in: Capsule())
+      .overlay {
+        Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+      }
+  }
+
+  private func formattedMediaBitrate(_ bitrate: Int) -> String {
+    if bitrate >= 1024 {
+      return String(format: "%.1f MB/s", Double(bitrate) / 1024)
+    }
+    return "\(bitrate) KB/s"
+  }
+
+  private func bestSourceCheckConfirmation(
+    name: String,
+    title: String?,
+    detail: String?,
+    confirm: @escaping () -> Void,
+    cancel: @escaping () -> Void
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(alignment: .top, spacing: 9) {
+        Image(systemName: "bolt.horizontal.circle.fill")
+          .font(.title3)
+          .foregroundStyle(.orange)
+        VStack(alignment: .leading, spacing: 3) {
+          Text(title ?? "发现更佳线路")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.white)
+          Text(detail ?? "\(name) · 切换后将保持当前播放进度。")
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.66))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        Spacer(minLength: 6)
+        Button(action: cancel) {
+          Image(systemName: "xmark")
+            .font(.caption.weight(.bold))
+            .foregroundStyle(.white.opacity(0.78))
+            .frame(width: 28, height: 28)
+            .background(.white.opacity(0.08), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("保留当前线路")
+      }
+
+      HStack(spacing: 10) {
+        Button("保留当前", action: cancel)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.white.opacity(0.82))
+          .buttonStyle(.plain)
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 8)
+          .background(.white.opacity(0.08), in: Capsule())
+
+        Button(title == "发现新集" ? "切换并更新" : "切换线路", action: confirm)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.white)
+          .buttonStyle(.plain)
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 8)
+          .background(Color.orange, in: Capsule())
+      }
+    }
+    .padding(12)
+    .frame(maxWidth: 360)
+    .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 14))
+    .overlay {
+      RoundedRectangle(cornerRadius: 14)
+        .strokeBorder(.white.opacity(0.12), lineWidth: 0.75)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    .padding(.top, 78)
+    .transition(.opacity.combined(with: .move(edge: .top)))
+    .zIndex(20)
+  }
+
   private var duration: Double {
     PlaybackTimeline.duration(displayDuration)
   }
 
   var body: some View {
     attachPlayerLifecycle(to: playerWithSheets)
+      .task(id: activeRequest?.url) {
+        while !Task.isCancelled {
+          onMeasuredBitrate?(mediaBitrateKBps)
+          try? await Task.sleep(for: .milliseconds(500))
+        }
+      }
       .onChange(of: silentHandoffPulse) { _, pulse in
         // Detail freezes the live picture before findItem/loadDetail — keeps 换站无感.
         guard pulse > 0 else { return }
@@ -704,10 +844,55 @@ struct PlayerView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.trailing, 28)
         }
+        if showControls, chrome == .immersive, let mediaBitrateKBps {
+          mediaSpeedBadge(mediaBitrateKBps)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .padding(.top, 58)
+            .padding(.trailing, 18)
+            .allowsHitTesting(false)
+        }
+        if chrome == .immersive, let bestSourceCheckStatus {
+          HStack(spacing: 7) {
+            if isCheckingBestSource {
+              ProgressView()
+                .controlSize(.mini)
+                .tint(.orange)
+            } else {
+              Image(systemName: "scope")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
+            }
+            Text(bestSourceCheckStatus)
+              .font(.footnote.weight(.semibold))
+              .foregroundStyle(.white)
+          }
+          .padding(.horizontal, 12)
+          .padding(.vertical, 7)
+          .background(.black.opacity(0.48), in: Capsule())
+          .overlay {
+            Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+          .padding(.top, 60)
+          .allowsHitTesting(false)
+        }
+        if chrome == .immersive,
+          let pendingBestSourceName,
+          let onConfirmBestSourceSwitch,
+          let onCancelBestSourceSwitch
+        {
+          bestSourceCheckConfirmation(
+            name: pendingBestSourceName,
+            title: pendingBestSourceTitle,
+            detail: pendingBestSourceDetail,
+            confirm: onConfirmBestSourceSwitch,
+            cancel: onCancelBestSourceSwitch
+          )
+        }
         if showingNextEpisode, let next = nextEpisode {
           nextEpisodeToast(next)
             .transition(.opacity.combined(with: .move(edge: .top)))
-        } else if let toast {
+        } else if let toast = toast ?? externalToast {
           Text(toast)
             .font(.footnote.weight(.medium))
             .foregroundStyle(.white.opacity(0.95))
@@ -911,7 +1096,12 @@ struct PlayerView: View {
     // Already frozen: keep that still — never re-snapshot a hidden/black AV surface.
     if freezeFrame != nil { return }
     guard refreshFreeze || hasRenderableVideo else { return }
-    if let snap = playerSurfaceBox.snapshot(), snap.size.width > 1 {
+    if engineKind == .avPlayer, let frame = avEngine.currentVideoFrame() {
+      let image = CIImage(cvPixelBuffer: frame)
+      if let rendered = CIContext().createCGImage(image, from: image.extent) {
+        freezeFrame = UIImage(cgImage: rendered, scale: 1, orientation: .up)
+      }
+    } else if let snap = playerSurfaceBox.snapshot(), snap.size.width > 1 {
       freezeFrame = snap
     }
   }
@@ -1728,6 +1918,20 @@ struct PlayerView: View {
 
   private var menuButton: some View {
     Menu {
+      if let onCheckBestSource {
+        Button {
+          onCheckBestSource()
+        } label: {
+          Label(
+            isCheckingBestSource
+              ? "正在检测最佳线路"
+              : (hasPendingBestSource ? "发现更佳线路，等待确认" : "检测最佳线路"),
+            systemImage: "scope"
+          )
+        }
+        .disabled(isCheckingBestSource || hasPendingBestSource)
+      }
+
       Button {
         if chrome == .immersive {
           openPlayerDrawerAfterMenuDismissal(.danmaku)

@@ -19,9 +19,9 @@
 当前公开发布版本：
 
 ```text
-Version: 0.1.40
-Build:   42
-SHA-256: f85337db1e8eba9aa9120f05198aceb84d24f4c60211ae44a098fb7c1a5f0d91
+Version: 0.1.41
+Build:   43
+SHA-256: f8c6dcea6dd4244d759ef57f3524a9460e4393082af5cef6112db56b84ea2893
 ```
 
 SideStore 更新源：
@@ -33,7 +33,7 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 当前 IPA 下载地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/Firepick-0.1.40.ipa
+https://dl.yychuiyan.com/firepick/Firepick-0.1.41.ipa
 ```
 
 ## 功能概览

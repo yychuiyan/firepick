@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreVideo
 import FirepickCore
 import Foundation
 import Observation
@@ -46,6 +47,17 @@ public struct PlaybackEngineOptions: Equatable, Sendable {
   }
 }
 
+public enum PlaybackSeekPolicy {
+    /// Exact-frame HLS seeks require decoding from the previous keyframe and can
+    /// fetch several segments. Tolerate 0.35–2 seconds so scrubbing stays quick.
+    public static func toleranceSeconds(distance: Double) -> Double {
+        let value = abs(distance.isFinite ? distance : 0)
+        if value >= 120 { return 2 }
+        if value >= 15 { return 1 }
+        return 0.35
+    }
+}
+
 @MainActor
 public protocol PlaybackEngine: AnyObject {
   var state: PlaybackState { get }
@@ -69,6 +81,7 @@ public final class AVPlayerEngine: PlaybackEngine {
   public private(set) var state: PlaybackState = .idle
   public private(set) var currentTime: Double = 0
   public private(set) var duration: Double = 0
+  public private(set) var observedBitrate: Double = 0
   /// First decoded frame attached — false while black/blank after replaceCurrentItem.
   public private(set) var isReadyForDisplay: Bool = false
   public let player = AVPlayer()
@@ -82,6 +95,9 @@ public final class AVPlayerEngine: PlaybackEngine {
   private var endObserver: NSObjectProtocol?
   private var bufferSeconds: Double = 5
   private var preferredPeakBitRate: Double = 0
+  private var videoOutput: AVPlayerItemVideoOutput?
+  private var latestVideoFrame: CVPixelBuffer?
+  private var lastVideoFrameCapture = Date.distantPast
 
   public init() {
     timeObserver = player.addPeriodicTimeObserver(
@@ -92,6 +108,12 @@ public final class AVPlayerEngine: PlaybackEngine {
         guard let self else { return }
         self.currentTime = time.seconds.isFinite ? max(0, time.seconds) : 0
         self.duration = Self.readableDuration(self.player.currentItem) ?? self.duration
+        let bitrate =
+          self.player.currentItem?.accessLog()?.events.last?.observedBitrate ?? 0
+        if bitrate.isFinite, bitrate > 0 {
+          self.observedBitrate = bitrate
+        }
+        self.captureLatestVideoFrameIfNeeded()
         self.syncStateFromPlayer()
         if !self.isReadyForDisplay {
           self.refreshReadyForDisplay()
@@ -116,6 +138,9 @@ public final class AVPlayerEngine: PlaybackEngine {
     }
     // New item starts black until video dimensions / buffer look real.
     isReadyForDisplay = false
+    observedBitrate = 0
+    latestVideoFrame = nil
+    lastVideoFrameCapture = .distantPast
     presentationSizeObservation?.invalidate()
     presentationSizeObservation = nil
     bufferEmptyObservation?.invalidate()
@@ -143,6 +168,11 @@ public final class AVPlayerEngine: PlaybackEngine {
       let item = AVPlayerItem(asset: asset)
       item.preferredForwardBufferDuration = bufferSeconds
       item.preferredPeakBitRate = preferredPeakBitRate
+      let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+      ])
+      item.add(output)
+      videoOutput = output
       player.replaceCurrentItem(with: item)
       presentationSizeObservation = item.observe(\.presentationSize, options: [.new]) {
         [weak self] _, _ in
@@ -225,12 +255,45 @@ public final class AVPlayerEngine: PlaybackEngine {
   }
 
   public func seek(to seconds: Double) async {
-    await player.seek(
-      to: CMTime(seconds: max(0, seconds), preferredTimescale: 600),
-      toleranceBefore: .zero,
-      toleranceAfter: .zero
+    let target = max(0, seconds)
+    observedBitrate = 0
+    let tolerance = PlaybackSeekPolicy.toleranceSeconds(
+      distance: target - currentTime
     )
-    currentTime = max(0, seconds)
+    let toleranceTime = CMTime(seconds: tolerance, preferredTimescale: 600)
+    await player.seek(
+      to: CMTime(seconds: target, preferredTimescale: 600),
+      toleranceBefore: toleranceTime,
+      toleranceAfter: toleranceTime
+    )
+    currentTime = target
+  }
+
+  /// Last decoded AVPlayer frame, used as a still cover while an episode or
+  /// source is replaced. `AVPlayerLayer.render` can return black in AVPVC.
+  public func currentVideoFrame() -> CVPixelBuffer? {
+    captureLatestVideoFrame(force: true)
+    return latestVideoFrame
+  }
+
+  private func captureLatestVideoFrameIfNeeded() {
+    captureLatestVideoFrame(force: player.rate == 0)
+  }
+
+  private func captureLatestVideoFrame(force: Bool) {
+    guard let output = videoOutput else { return }
+    let now = Date()
+    guard force || now.timeIntervalSince(lastVideoFrameCapture) >= 0.5 else { return }
+    let presentationTime = output.itemTime(forHostTime: CACurrentMediaTime())
+    guard presentationTime.isValid,
+      output.hasNewPixelBuffer(forItemTime: presentationTime),
+      let pixelBuffer = output.copyPixelBuffer(
+        forItemTime: presentationTime,
+        itemTimeForDisplay: nil
+      )
+    else { return }
+    latestVideoFrame = pixelBuffer
+    lastVideoFrameCapture = now
   }
 
   public func stop() {
@@ -243,6 +306,10 @@ public final class AVPlayerEngine: PlaybackEngine {
     bufferEmptyObservation?.invalidate()
     bufferEmptyObservation = nil
     isReadyForDisplay = false
+    observedBitrate = 0
+    videoOutput = nil
+    latestVideoFrame = nil
+    lastVideoFrameCapture = .distantPast
     player.pause()
     player.replaceCurrentItem(with: nil)
     currentTime = 0
