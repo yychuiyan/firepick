@@ -138,6 +138,8 @@ struct PlayerView: View {
   @State private var showingInlineRatePicker = false
   @State private var showingDanmakuDrawer = false
   @State private var streamResolution: StreamResolution = .automatic
+  @AppStorage("playerVideoScaleMode")
+  private var videoScaleModeRaw = PlaybackVideoScaleMode.fit.rawValue
   /// Auto mode stepped down after stall / constrained network; clears when path recovers.
   @State private var autoQualityDegraded = false
   /// Detected output height while 自动 (from AV presentationSize).
@@ -319,6 +321,10 @@ struct PlayerView: View {
 
   private var playbackEngine: any PlaybackEngine {
     engineKind == .mpv ? mpvEngine : avEngine
+  }
+
+  private var videoScaleMode: PlaybackVideoScaleMode {
+    PlaybackVideoScaleMode(rawValue: videoScaleModeRaw) ?? .fit
   }
 
   private var sourceKey: String? {
@@ -518,6 +524,12 @@ struct PlayerView: View {
 
   var body: some View {
     attachPlayerLifecycle(to: playerWithSheets)
+      .onChange(of: videoScaleModeRaw) { _, _ in
+        applyVideoScaleMode()
+      }
+      .onChange(of: engineKind) { _, _ in
+        applyVideoScaleMode()
+      }
       .task(id: activeRequest?.url) {
         while !Task.isCancelled {
           onMeasuredBitrate?(mediaBitrateKBps)
@@ -1033,9 +1045,7 @@ struct PlayerView: View {
             player: avEngine.player,
             surface: playerSurfaceBox,
             showsControls: false,
-            // Keep source aspect (letterbox/pillarbox OK). Controls sit on the
-            // full-screen stage outside the picture, not inside the video box.
-            fillsFrame: false
+            scaleMode: videoScaleMode
           )
         }
       }
@@ -1050,7 +1060,9 @@ struct PlayerView: View {
       if let freezeFrame {
         Image(uiImage: freezeFrame)
           .resizable()
-          .aspectRatio(contentMode: .fit)
+          .aspectRatio(
+            contentMode: videoScaleMode == .fit ? .fit : .fill
+          )
           .frame(maxWidth: .infinity, maxHeight: .infinity)
           .background(Color.black)
           .allowsHitTesting(false)
@@ -1145,35 +1157,23 @@ struct PlayerView: View {
   }
 
   private func fittedVideoRect(in size: CGSize) -> CGRect {
-    guard size.width > 1, size.height > 1 else { return CGRect(origin: .zero, size: size) }
-    let ratio = min(3.2, max(0.45, videoAspectRatio))
-    let stageRatio = size.width / size.height
-    if stageRatio > ratio {
-      let width = size.height * ratio
-      return CGRect(
-        x: (size.width - width) / 2,
-        y: 0,
-        width: width,
-        height: size.height
-      )
-    }
-    let height = size.width / ratio
-    return CGRect(
-      x: 0,
-      y: (size.height - height) / 2,
-      width: size.width,
-      height: height
+    PlaybackViewport.pictureRect(
+      in: size,
+      videoAspectRatio: videoAspectRatio,
+      scaleMode: videoScaleMode
     )
   }
 
   private func controlsOverlay(in size: CGSize) -> some View {
     let picture = fittedVideoRect(in: size)
-    let horizontalInset = max(controlContentInset, picture.minX + controlContentInset)
-    let topInset = max(controlContentInset, picture.minY + controlContentInset)
-    let bottomInset = max(
-      controlContentInset + 2,
-      size.height - picture.maxY + controlContentInset + 2
+    let vertical = PlaybackViewport.controlInsets(
+      in: size,
+      videoAspectRatio: videoAspectRatio,
+      scaleMode: videoScaleMode,
+      contentInset: controlContentInset,
+      alignsToPicture: chrome != .inline
     )
+    let horizontalInset = max(controlContentInset, picture.minX + controlContentInset)
 
     return ZStack {
       VStack(spacing: 0) {
@@ -1184,11 +1184,11 @@ struct PlayerView: View {
             .padding(.bottom, 8)
         }
         progressBar
-          .padding(.bottom, 4)
+          .padding(.bottom, chrome == .inline ? 0 : 4)
       }
       .padding(.horizontal, horizontalInset)
-      .padding(.top, topInset)
-      .padding(.bottom, bottomInset)
+      .padding(.top, vertical.top)
+      .padding(.bottom, vertical.bottom)
       .background {
         if chrome != .inline {
           VStack(spacing: 0) {
@@ -1212,6 +1212,7 @@ struct PlayerView: View {
       }
       centerPlayButton
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
   private var isPlayerDrawerOpen: Bool {
@@ -1423,7 +1424,7 @@ struct PlayerView: View {
       }
     }
     .foregroundStyle(.white)
-    .padding(.top, chrome == .inline ? 6 : 0)
+    .padding(.top, 0)
   }
 
   /// Trailing-edge drawer for 倍速 / 清晰度 / 选集 (not full-screen sheets).
@@ -1970,6 +1971,23 @@ struct PlayerView: View {
         openPlayerDrawerAfterMenuDismissal(.rate)
       } label: {
         Label("倍速 \(playbackRate.formatted())×", systemImage: "gauge")
+      }
+
+      Menu {
+        ForEach(PlaybackVideoScaleMode.allCases) { mode in
+          Button {
+            videoScaleModeRaw = mode.rawValue
+            showToast("画面模式：\(mode.title)")
+          } label: {
+            if videoScaleMode == mode {
+              Label(mode.title, systemImage: "checkmark")
+            } else {
+              Text(mode.title)
+            }
+          }
+        }
+      } label: {
+        Label("画面模式 · \(videoScaleMode.title)", systemImage: "aspectratio")
       }
 
       Button {
@@ -2596,6 +2614,11 @@ struct PlayerView: View {
     }
     danmakuEnabled = model.danmakuEnabledByDefault
     incognitoThisSession = model.incognitoModeEnabled
+    applyVideoScaleMode()
+  }
+
+  private func applyVideoScaleMode() {
+    mpvEngine.setVideoScaleMode(videoScaleMode)
   }
 
   private func configureAudioSession() {
@@ -3981,13 +4004,13 @@ private struct SystemPlayerView: UIViewControllerRepresentable {
   let player: AVPlayer
   var surface: PlayerSurfaceBox?
   var showsControls = false
-  var fillsFrame = false
+  var scaleMode: PlaybackVideoScaleMode = .fit
 
   func makeUIViewController(context: Context) -> AVPlayerViewController {
     let controller = AVPlayerViewController()
     controller.player = player
     controller.showsPlaybackControls = showsControls
-    controller.videoGravity = fillsFrame ? .resizeAspectFill : .resizeAspect
+    controller.videoGravity = Self.videoGravity(for: scaleMode)
     controller.view.backgroundColor = .black
     // Keep PiP available from the system, but do not auto-enter when the
     // inline player expands to our own immersive chrome (that pauses resume).
@@ -4004,10 +4027,20 @@ private struct SystemPlayerView: UIViewControllerRepresentable {
       controller.player = player
     }
     controller.showsPlaybackControls = showsControls
-    controller.videoGravity = fillsFrame ? .resizeAspectFill : .resizeAspect
+    controller.videoGravity = Self.videoGravity(for: scaleMode)
     controller.view.backgroundColor = .black
     controller.allowsVideoFrameAnalysis = false
     surface?.view = controller.view
+  }
+
+  private static func videoGravity(
+    for mode: PlaybackVideoScaleMode
+  ) -> AVLayerVideoGravity {
+    switch mode {
+    case .fit: .resizeAspect
+    case .fill: .resizeAspectFill
+    case .stretch: .resize
+    }
   }
 }
 

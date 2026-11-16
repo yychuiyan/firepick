@@ -46,6 +46,7 @@ struct AggregationView: View {
         detectionTask?.cancel()
         detectionTask = nil
         isDetectingTitle = false
+        inputFocused = false
         browser?.pauseMedia()
       }
     }
@@ -54,7 +55,7 @@ struct AggregationView: View {
   private var header: some View {
     VStack(alignment: .leading, spacing: 9) {
       VStack(alignment: .leading, spacing: 3) {
-        Text("视频浏览器")
+        Text("聚合视频")
           .font(.title2.weight(.bold))
         Text("选择接口配置，识别片名或输入视频链接后打开")
           .font(.caption)
@@ -82,17 +83,18 @@ struct AggregationView: View {
           Button {
             toggleInputMode()
           } label: {
-            Image(
-              systemName:
-                inputMode == .title
-                ? "magnifyingglass.circle.fill"
-                : "magnifyingglass"
-            )
+            Image(systemName: "magnifyingglass")
             .font(.body.weight(.medium))
             .foregroundStyle(
               inputMode == .title ? Color.orange : Color.secondary
             )
             .frame(width: 28, height: 32)
+            .background(
+              inputMode == .title
+                ? Color.orange.opacity(0.14)
+                : Color.clear,
+              in: RoundedRectangle(cornerRadius: 9)
+            )
           }
           .buttonStyle(.plain)
           .accessibilityLabel(
@@ -128,27 +130,32 @@ struct AggregationView: View {
           }
 
           Button(action: performPrimaryAction) {
-            if isDetectingTitle {
-              ProgressView()
-                .controlSize(.small)
-                .frame(width: 40, height: 32)
-            } else if inputMode == .title {
-              Text("识别")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 40, height: 32)
-                .background(.orange, in: Capsule())
-            } else {
-              Image(systemName: "arrow.right")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 32, height: 32)
-                .background(.orange, in: Circle())
+            Group {
+              if isDetectingTitle {
+                ProgressView()
+                  .controlSize(.small)
+                  .tint(.white)
+              } else if inputMode == .title {
+                Text("识别")
+                  .font(.caption.weight(.semibold))
+              } else {
+                Image(systemName: "arrow.right")
+                  .font(.caption.weight(.bold))
+              }
             }
+            .foregroundStyle(
+              isPrimaryActionActive ? Color.white : Color.secondary
+            )
+            .frame(width: 44, height: 32)
+            .background(
+              isPrimaryActionActive
+                ? Color.orange
+                : Color.secondary.opacity(0.12),
+              in: Capsule()
+            )
           }
           .buttonStyle(.plain)
           .disabled(primaryActionDisabled)
-          .opacity(primaryActionDisabled ? 0.45 : 1)
           .accessibilityLabel(
             inputMode == .title ? "识别片名" : "打开或搜索"
           )
@@ -289,6 +296,10 @@ struct AggregationView: View {
     case .title:
       trimmedTitle.isEmpty || isDetectingTitle
     }
+  }
+
+  private var isPrimaryActionActive: Bool {
+    !primaryActionDisabled || isDetectingTitle
   }
 
   private var modeStatusText: String? {

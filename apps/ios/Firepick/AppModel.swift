@@ -274,7 +274,7 @@ final class AppModel {
   var configuration: VodConfiguration = .empty
   var selectedSite: SiteConfiguration?
   static let officialSourceVersion = "21"
-  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=21"
+  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=22"
   var selectedCategory: FirepickCore.Category?
   /// Which category `homeResult.list` currently belongs to (avoids chip/list mismatch).
   var browseListBelongsToTypeId: String?
@@ -673,15 +673,18 @@ final class AppModel {
     sourceConnections = (try? persistence?.loadSourceConnections()) ?? []
     searchHistory = persistence?.searchHistory ?? []
     websiteShortcuts = persistence?.websiteShortcuts ?? []
-    if let persistence, !persistence.websiteShortcutsSeeded {
-      if websiteShortcuts.isEmpty,
-        let defaultURL = URL(string: "https://jx.202617.xyz/tv.php?url=")
-      {
-        websiteShortcuts = [
-          WebsiteShortcut(name: "七哥解析", url: defaultURL, isEnabled: true)
-        ]
+    if let persistence {
+      let previousVersion = persistence.websiteShortcutsDefaultsVersion
+      let migrated = WebsiteShortcutDefaults.upgrade(
+        shortcuts: websiteShortcuts,
+        fromVersion: previousVersion
+      )
+      if migrated != websiteShortcuts {
+        websiteShortcuts = migrated
         persistence.saveWebsiteShortcuts(websiteShortcuts)
       }
+      persistence.websiteShortcutsDefaultsVersion =
+        WebsiteShortcutDefaults.latestVersion
       persistence.websiteShortcutsSeeded = true
     }
     browseScrollAnchors = persistence?.loadBrowseScrollAnchors() ?? [:]
@@ -2147,9 +2150,10 @@ final class AppModel {
       }
     let targetCount = Self.activeCMSPoolSize(for: contentMode)
     let poolLimit = Self.activeCMSCandidatePoolSize(for: contentMode)
+    let curated = preferredEntries(CMSProviderCatalog.curatedCandidates())
     let merged = CMSProviderCatalog.prioritizedCandidates(
       best: best,
-      catalog: catalog,
+      catalog: curated + catalog,
       fallback: saved,
       limit: 512
     )

@@ -1,5 +1,6 @@
 import FirepickCore
 import SwiftUI
+import UIKit
 
 struct RootView: View {
   @Environment(AppModel.self) private var model
@@ -24,6 +25,14 @@ struct RootView: View {
         .tag(AppModel.Tab.settings)
     }
     .tint(.orange)
+    .onChange(of: model.selectedTab) { _, _ in
+      UIApplication.shared.sendAction(
+        #selector(UIResponder.resignFirstResponder),
+        to: nil,
+        from: nil,
+        for: nil
+      )
+    }
     .toolbarBackground(.visible, for: .tabBar)
     .safeAreaInset(edge: .top, spacing: 0) {
       VStack(spacing: 0) {

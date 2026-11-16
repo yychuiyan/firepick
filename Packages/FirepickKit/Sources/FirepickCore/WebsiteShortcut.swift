@@ -76,3 +76,86 @@ public struct WebsiteShortcut: Codable, Hashable, Identifiable, Sendable {
     return result
   }
 }
+
+public enum WebsiteShortcutDefaults {
+  public static let latestVersion = 4
+
+  private struct DefaultShortcut {
+    let id: UUID
+    let name: String
+    let url: URL
+    let enabledOnEmpty: Bool
+  }
+
+  private static let defaultShortcuts: [DefaultShortcut] = [
+    DefaultShortcut(
+      id: UUID(uuidString: "2E7E4A50-39A0-41B9-B7E6-976A7D55A210")!,
+      name: "七哥解析（可选集）",
+      url: URL(string: "https://jx.202617.xyz/tv.php?url=")!,
+      enabledOnEmpty: false
+    ),
+    DefaultShortcut(
+      id: UUID(uuidString: "AF69036D-77C2-45B8-A3FF-38C3BE6DA7C2")!,
+      name: "M1907（可选集）",
+      url: URL(string: "https://im1907.top/?jx=")!,
+      enabledOnEmpty: false
+    ),
+    DefaultShortcut(
+      id: UUID(uuidString: "25A8A4EA-2BE7-442F-A0DB-1F140597D221")!,
+      name: "789解析",
+      url: URL(string: "https://jiexi.789jiexi.com/?url=")!,
+      enabledOnEmpty: false
+    ),
+    DefaultShortcut(
+      id: UUID(uuidString: "61FA11C2-0B53-4E5A-8BFD-6A83D93DEAC8")!,
+      name: "LX解析",
+      url: URL(string: "https://jx.lxyy.club/index.php?url=")!,
+      enabledOnEmpty: true
+    ),
+    DefaultShortcut(
+      id: UUID(uuidString: "EE6239BB-2E9A-4E0A-8886-27C777A96F8C")!,
+      name: "通用线路（可选集）",
+      url: URL(string: "http://player.maqq.cn/?url=")!,
+      enabledOnEmpty: false
+    ),
+    DefaultShortcut(
+      id: UUID(uuidString: "12D742BE-8725-431A-949F-B678E835B522")!,
+      name: "通用线路",
+      url: URL(string: "https://jx.jiexi.icu/?url=")!,
+      enabledOnEmpty: false
+    ),
+  ]
+
+  public static func initialShortcuts() -> [WebsiteShortcut] {
+    upgrade(shortcuts: [], fromVersion: 0)
+  }
+
+  public static func upgrade(
+    shortcuts: [WebsiteShortcut],
+    fromVersion: Int
+  ) -> [WebsiteShortcut] {
+    guard fromVersion < latestVersion else { return shortcuts }
+
+    let wasEmpty = shortcuts.isEmpty
+    var remaining = shortcuts
+    var result: [WebsiteShortcut] = []
+    for definition in defaultShortcuts {
+      if let index = remaining.firstIndex(where: { $0.url == definition.url }) {
+        var existing = remaining.remove(at: index)
+        existing.name = definition.name
+        result.append(existing)
+      } else {
+        result.append(
+          WebsiteShortcut(
+            id: definition.id,
+            name: definition.name,
+            url: definition.url,
+            isEnabled: wasEmpty && definition.enabledOnEmpty
+          )
+        )
+      }
+    }
+    result.append(contentsOf: remaining)
+    return result
+  }
+}

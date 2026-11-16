@@ -1,8 +1,98 @@
 import AVFoundation
+import CoreGraphics
 import CoreVideo
 import FirepickCore
 import Foundation
 import Observation
+
+public enum PlaybackVideoScaleMode: String, Codable, CaseIterable, Identifiable, Sendable {
+  case fit
+  case fill
+  case stretch
+
+  public var id: String { rawValue }
+
+  public var title: String {
+    switch self {
+    case .fit: "适应画面"
+    case .fill: "铺满裁切"
+    case .stretch: "拉伸铺满"
+    }
+  }
+
+  public var mpvPanscan: Int {
+    self == .fill ? 1 : 0
+  }
+
+  public var mpvKeepsAspect: Bool {
+    self != .stretch
+  }
+}
+
+public struct PlaybackControlInsets: Equatable, Sendable {
+  public let top: CGFloat
+  public let bottom: CGFloat
+
+  public init(top: CGFloat, bottom: CGFloat) {
+    self.top = top
+    self.bottom = bottom
+  }
+}
+
+public enum PlaybackViewport {
+  public static func pictureRect(
+    in stageSize: CGSize,
+    videoAspectRatio: CGFloat,
+    scaleMode: PlaybackVideoScaleMode
+  ) -> CGRect {
+    let stage = CGRect(origin: .zero, size: stageSize)
+    guard stageSize.width > 1, stageSize.height > 1 else { return stage }
+    guard scaleMode == .fit else { return stage }
+
+    let ratio = min(3.2, max(0.45, videoAspectRatio))
+    let stageRatio = stageSize.width / stageSize.height
+    if stageRatio > ratio {
+      let width = stageSize.height * ratio
+      return CGRect(
+        x: (stageSize.width - width) / 2,
+        y: 0,
+        width: width,
+        height: stageSize.height
+      )
+    }
+    let height = stageSize.width / ratio
+    return CGRect(
+      x: 0,
+      y: (stageSize.height - height) / 2,
+      width: stageSize.width,
+      height: height
+    )
+  }
+
+  public static func controlInsets(
+    in stageSize: CGSize,
+    videoAspectRatio: CGFloat,
+    scaleMode: PlaybackVideoScaleMode,
+    contentInset: CGFloat,
+    alignsToPicture: Bool
+  ) -> PlaybackControlInsets {
+    guard alignsToPicture else {
+      return PlaybackControlInsets(top: contentInset, bottom: contentInset)
+    }
+    let picture = pictureRect(
+      in: stageSize,
+      videoAspectRatio: videoAspectRatio,
+      scaleMode: scaleMode
+    )
+    return PlaybackControlInsets(
+      top: max(contentInset, picture.minY + contentInset),
+      bottom: max(
+        contentInset,
+        stageSize.height - picture.maxY + contentInset
+      )
+    )
+  }
+}
 
 public enum PlaybackVideoOutput: String, CaseIterable, Sendable {
   case automatic

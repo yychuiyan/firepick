@@ -7,14 +7,22 @@ public enum CMSProviderCatalog {
     public var name: String
     public var api: String
     public var adult: Bool?
+    public var priority: Int?
 
     public var id: String { key }
 
-    public init(key: String, name: String, api: String, adult: Bool? = nil) {
+    public init(
+      key: String,
+      name: String,
+      api: String,
+      adult: Bool? = nil,
+      priority: Int? = nil
+    ) {
       self.key = key
       self.name = name
       self.api = api
       self.adult = adult
+      self.priority = priority
     }
   }
 
@@ -78,6 +86,10 @@ public enum CMSProviderCatalog {
     "hw8": "华为吧",
     "okzy": "OK",
     "taopian": "淘片",
+    "nb_modu": "魔都",
+    "nb_xgzy": "西瓜",
+    "nb_dzzy": "大众",
+    "nb_ikun": "iKun",
   ]
 
   public static func displayName(for entry: Entry) -> String {
@@ -92,6 +104,12 @@ public enum CMSProviderCatalog {
       return []
     }
     return file.providers
+  }
+
+  public static func curatedCandidates() -> [Entry] {
+    bundledCandidates()
+      .filter { $0.priority != nil }
+      .sorted { ($0.priority ?? .max) < ($1.priority ?? .max) }
   }
 
   public static let defaultRemoteCandidateURLs: [URL] = [

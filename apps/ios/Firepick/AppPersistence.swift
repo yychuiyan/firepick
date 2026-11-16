@@ -58,6 +58,7 @@ final class AppPersistence {
     static let recoveredPosterURLs = "recoveredPosterURLs"
     static let websiteShortcuts = "websiteShortcuts"
     static let websiteShortcutsSeeded = "websiteShortcutsSeeded"
+    static let websiteShortcutsDefaultsVersion = "websiteShortcutsDefaultsVersion"
   }
 
   private let defaults = UserDefaults.standard
@@ -334,6 +335,16 @@ final class AppPersistence {
   var websiteShortcutsSeeded: Bool {
     get { defaults.bool(forKey: Key.websiteShortcutsSeeded) }
     set { defaults.set(newValue, forKey: Key.websiteShortcutsSeeded) }
+  }
+
+  var websiteShortcutsDefaultsVersion: Int {
+    get { defaults.integer(forKey: Key.websiteShortcutsDefaultsVersion) }
+    set {
+      defaults.set(
+        newValue,
+        forKey: Key.websiteShortcutsDefaultsVersion
+      )
+    }
   }
 
   func saveConfiguration(_ data: Data, baseURL: URL?) throws {

@@ -19,9 +19,9 @@
 当前公开发布版本：
 
 ```text
-Version: 0.1.42
-Build:   44
-SHA-256: ffaf33dd4284d5a0546bea74c7084a28c026108c27859cc6e8f49d37680c07d8
+Version: 0.1.43
+Build:   45
+SHA-256: c28201b48b5ba0f5ceb1b114d7f174adfe35bc88ccc74b908ddc1faf86e5e920
 ```
 
 SideStore 更新源：
@@ -33,7 +33,7 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 当前 IPA 下载地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/Firepick-0.1.42.ipa
+https://dl.yychuiyan.com/firepick/Firepick-0.1.43.ipa
 ```
 
 ## 功能概览
@@ -86,10 +86,10 @@ SideStore Source 是应用更新清单；Firepick 点播源是 CatVod/TVBox 配�
 拾萤自建聚合配置可直接在 `设置 → 当前线路` 中添加：
 
 ```text
-https://dl.yychuiyan.com/firepick/ios-sources.json?v=21
+https://dl.yychuiyan.com/firepick/ios-sources.json?v=22
 ```
 
-它当前是单站「拾萤精选」聚合活跃 AppleCMS 采集接口，外加三组电视源，
+它当前是单站「拾萤精选」聚合活跃 AppleCMS 采集接口，外加七组电视源，
 覆盖首页、分类、搜索、详情、选集、HLS 播放与直播频道。库名（如「爱奇艺」）
 是第三方采集站，不是官方 App；上游接口可能调整或失效，因此不把其内容视为永久内置资源。
 「采集站管理」会从拾萤自有目录中的当前在线候选站重新测速淘金，并把存活结果

@@ -33,6 +33,36 @@
       "type": 0,
       "url": "https://raw.githubusercontent.com/suxuang/myIPTV/refs/heads/main/ipv4.m3u",
       "playerType": 2
+    },
+    {
+      "name": "🐯牛虎 ┃ 官方综合",
+      "type": 0,
+      "url": "https://gh-proxy.com/https://raw.githubusercontent.com/niubihu1/tvbox/main/live.txt",
+      "playerType": 1,
+      "ua": "okhttp/3.15",
+      "epg": "http://epg.112114.xyz/?ch={name}&date={date}",
+      "logo": "https://epg.112114.xyz/logo/{name}.png"
+    },
+    {
+      "name": "🍚饭太硬 ┃ 精选频道",
+      "type": 0,
+      "url": "https://nos.netease.com/ysf/3d75a78a0fc7ede372c03598d6d10367.m3u",
+      "playerType": 1,
+      "ua": "okhttp/3.15"
+    },
+    {
+      "name": "🐯虎牙 ┃ 一起看公网",
+      "type": 0,
+      "url": "https://sub.ottiptv.cc/huyayqk.m3u",
+      "playerType": 1,
+      "ua": "okhttp/3.15"
+    },
+    {
+      "name": "🐟斗鱼 ┃ 一起看公网",
+      "type": 0,
+      "url": "https://sub.ottiptv.cc/douyuyqk.m3u",
+      "playerType": 1,
+      "ua": "okhttp/3.15"
     }
   ]
 }

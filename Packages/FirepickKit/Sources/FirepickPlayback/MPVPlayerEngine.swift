@@ -23,6 +23,7 @@ import Observation
     @ObservationIgnored private var surface: MPVSurfaceView?
     @ObservationIgnored private var options = PlaybackEngineOptions()
     @ObservationIgnored private var surfaceWaiters: [CheckedContinuation<Void, Never>] = []
+    @ObservationIgnored private var videoScaleMode: PlaybackVideoScaleMode = .fit
 
     public init() {}
 
@@ -70,6 +71,7 @@ import Observation
         }
         currentTime = max(0, request.startPosition)
         state = .ready
+        applyVideoScaleMode()
       } catch {
         state = .failed(error.localizedDescription)
         throw error
@@ -118,6 +120,11 @@ import Observation
       runtime.applyOptions(options)
     }
 
+    public func setVideoScaleMode(_ mode: PlaybackVideoScaleMode) {
+      videoScaleMode = mode
+      applyVideoScaleMode()
+    }
+
     /// Selects an external subtitle by 0-based index from `PlaybackRequest.subtitles`.
     /// Pass `nil` to disable subtitles (`sid=no`).
     public func selectSubtitleTrack(index: Int?) {
@@ -126,6 +133,19 @@ import Observation
       } else {
         runtime.command(["set", "sid", "no"])
       }
+    }
+
+    private func applyVideoScaleMode() {
+      runtime.command([
+        "set",
+        "keepaspect",
+        videoScaleMode.mpvKeepsAspect ? "yes" : "no",
+      ])
+      runtime.command([
+        "set",
+        "panscan",
+        "\(videoScaleMode.mpvPanscan).0",
+      ])
     }
 
     private func startPolling() {

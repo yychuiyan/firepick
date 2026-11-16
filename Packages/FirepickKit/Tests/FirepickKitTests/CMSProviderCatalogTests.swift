@@ -22,6 +22,31 @@ struct CMSProviderCatalogTests {
   }
 
   @Test
+  func bundledCatalogIncludesNewNiubihuProviders() {
+    let entries = CMSProviderCatalog.bundledCandidates()
+    let keys = Set(entries.map(\.key))
+
+    #expect(keys.isSuperset(of: ["nb_modu", "nb_xgzy", "nb_dzzy", "nb_ikun"]))
+    #expect(
+      CMSProviderCatalog.displayName(
+        for: CMSProviderCatalog.Entry(
+          key: "nb_xgzy",
+          name: "西瓜资源",
+          api: "https://xiguazy.tv/api.php/provide/vod"
+        )
+      ) == "西瓜"
+    )
+  }
+
+  @Test
+  func curatedCandidatesLeadTheProbePool() {
+    #expect(
+      CMSProviderCatalog.curatedCandidates().map(\.key)
+        == ["nb_modu", "nb_xgzy", "nb_dzzy", "nb_ikun"]
+    )
+  }
+
+  @Test
   func remoteCatalogPrefersOwnAPIThenMonitorSources() {
     let urls = CMSProviderCatalog.defaultRemoteCandidateURLs
 

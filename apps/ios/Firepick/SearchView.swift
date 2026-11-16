@@ -31,6 +31,9 @@ struct SearchView: View {
     .toolbarBackground(Color(.systemBackground), for: .navigationBar)
     .scrollDismissesKeyboard(.interactively)
     .dismissKeyboardOnBackgroundTap()
+    .onDisappear {
+      searchFocused = false
+    }
     .task {
       if !model.searchHasRun, model.searchText.isEmpty {
         try? await Task.sleep(for: .milliseconds(250))
@@ -101,6 +104,33 @@ struct SearchView: View {
       .padding(.horizontal, 12)
       .padding(.vertical, 10)
       .background(.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+
+      Button(action: runSearch) {
+        if model.isLoadingSearch {
+          ProgressView()
+            .controlSize(.small)
+            .frame(width: 42, height: 38)
+        } else {
+          Text("搜索")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.white)
+            .frame(width: 42, height: 38)
+            .background(.orange, in: RoundedRectangle(cornerRadius: 12))
+        }
+      }
+      .buttonStyle(.plain)
+      .disabled(
+        model.isLoadingSearch
+          || model.searchText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+      )
+      .opacity(
+        model.searchText
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+          .isEmpty ? 0.45 : 1
+      )
+      .accessibilityLabel("搜索")
     }
     .padding(.horizontal)
     .padding(.vertical, 10)
@@ -113,7 +143,7 @@ struct SearchView: View {
       ContentUnavailableView(
         "暂无历史查询",
         systemImage: "clock.arrow.circlepath",
-        description: Text("输入片名、剧名或演员后，在键盘上搜索。")
+        description: Text("输入片名、剧名或演员，点击右侧“搜索”或按键盘搜索键。")
       )
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else {

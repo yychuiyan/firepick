@@ -248,6 +248,173 @@ struct OfficialVideoPlatformTests {
   }
 
   @Test
+  func initialShortcutListContainsSixNamedDefaults() {
+    let shortcuts = WebsiteShortcutDefaults.initialShortcuts()
+    let lx = shortcuts.first { $0.url.absoluteString == "https://jx.lxyy.club/index.php?url=" }
+
+    #expect(
+      shortcuts.map(\.name) == [
+        "七哥解析（可选集）",
+        "M1907（可选集）",
+        "789解析",
+        "LX解析",
+        "通用线路（可选集）",
+        "通用线路",
+      ]
+    )
+    #expect(shortcuts.filter(\.isEnabled).count == 1)
+    #expect(lx?.isEnabled == true)
+  }
+
+  @Test
+  func shortcutMigrationAddsLXWithoutChangingCurrentSelection() throws {
+    let custom = try #require(
+      WebsiteShortcut.normalizedURL(from: "https://jx.example.com/?url=")
+    )
+    let existing = WebsiteShortcut(
+      id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+      name: "自定义",
+      url: custom,
+      isEnabled: true
+    )
+
+    let migrated = WebsiteShortcutDefaults.upgrade(
+      shortcuts: [existing],
+      fromVersion: 1
+    )
+
+    #expect(migrated.count == 7)
+    #expect(migrated.first(where: \.isEnabled)?.id == existing.id)
+    #expect(
+      migrated.contains {
+        $0.url.absoluteString == "https://jx.lxyy.club/index.php?url="
+      }
+    )
+  }
+
+  @Test
+  func shortcutMigrationRenamesExistingDefaultsAndAddsMissingOnes() throws {
+    let sevenURL = try #require(
+      WebsiteShortcut.normalizedURL(
+        from: "https://jx.202617.xyz/tv.php?url="
+      )
+    )
+    let lxURL = try #require(
+      WebsiteShortcut.normalizedURL(
+        from: "https://jx.lxyy.club/index.php?url="
+      )
+    )
+    let seven = WebsiteShortcut(
+      id: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
+      name: "七哥",
+      url: sevenURL,
+      isEnabled: true
+    )
+    let lx = WebsiteShortcut(
+      id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+      name: "LX解析",
+      url: lxURL,
+      isEnabled: false
+    )
+
+    let migrated = WebsiteShortcutDefaults.upgrade(
+      shortcuts: [seven, lx],
+      fromVersion: 2
+    )
+
+    #expect(
+      migrated.map(\.name) == [
+        "七哥解析（可选集）",
+        "M1907（可选集）",
+        "789解析",
+        "LX解析",
+        "通用线路（可选集）",
+        "通用线路",
+      ]
+    )
+    #expect(migrated.filter(\.isEnabled).map(\.id) == [seven.id])
+    #expect(migrated.first { $0.url == sevenURL }?.id == seven.id)
+    #expect(migrated.first { $0.url == lxURL }?.id == lx.id)
+  }
+
+  @Test
+  func shortcutMigrationFromVersionThreeAddsGeneralLines() throws {
+    let existing = WebsiteShortcutDefaults.initialShortcuts()
+      .filter {
+        $0.url.absoluteString != "http://player.maqq.cn/?url="
+          && $0.url.absoluteString != "https://jx.jiexi.icu/?url="
+      }
+    let activeIDs = existing.filter(\.isEnabled).map(\.id)
+
+    let migrated = WebsiteShortcutDefaults.upgrade(
+      shortcuts: existing,
+      fromVersion: 3
+    )
+
+    #expect(
+      migrated.map(\.name) == [
+        "七哥解析（可选集）",
+        "M1907（可选集）",
+        "789解析",
+        "LX解析",
+        "通用线路（可选集）",
+        "通用线路",
+      ]
+    )
+    #expect(migrated.filter(\.isEnabled).map(\.id) == activeIDs)
+    #expect(!migrated.last!.isEnabled)
+  }
+
+  @Test
+  func shortcutMigrationDoesNotRestoreDeletedDefaults() throws {
+    let custom = try #require(
+      WebsiteShortcut.normalizedURL(from: "https://jx.example.com/?url=")
+    )
+    let existing = [
+      WebsiteShortcut(
+        id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+        name: "自定义",
+        url: custom,
+        isEnabled: true
+      )
+    ]
+
+    let migrated = WebsiteShortcutDefaults.upgrade(
+      shortcuts: existing,
+      fromVersion: WebsiteShortcutDefaults.latestVersion
+    )
+
+    #expect(migrated == existing)
+  }
+
+  @Test
+  func shortcutMigrationDoesNotDuplicateExistingLXEntry() throws {
+    let lxURL = try #require(
+      WebsiteShortcut.normalizedURL(
+        from: "https://jx.lxyy.club/index.php?url="
+      )
+    )
+    let custom = WebsiteShortcut(
+      id: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
+      name: "我的 LX",
+      url: lxURL,
+      isEnabled: true
+    )
+
+    let migrated = WebsiteShortcutDefaults.upgrade(
+      shortcuts: [custom],
+      fromVersion: 1
+    )
+
+    #expect(
+      migrated.filter {
+        $0.url.absoluteString == "https://jx.lxyy.club/index.php?url="
+      }.count == 1
+    )
+    #expect(migrated.contains { $0.id == custom.id && $0.isEnabled })
+  }
+
+  @Test
   func encodesSourceURLAsSingleParserParameter() throws {
     let shortcut = try #require(
       WebsiteShortcut.normalizedURL(

@@ -124,6 +124,60 @@ struct PlaybackTests {
   }
 
   @Test
+  func fitsWideVideoInsideSixteenByNineStage() {
+    let picture = PlaybackViewport.pictureRect(
+      in: CGSize(width: 160, height: 90),
+      videoAspectRatio: 2,
+      scaleMode: .fit
+    )
+
+    #expect(abs(picture.minY - 5) < 0.001)
+    #expect(abs(picture.height - 80) < 0.001)
+    #expect(abs(picture.width - 160) < 0.001)
+  }
+
+  @Test
+  func fillAndStretchUseTheEntirePlayerStage() {
+    let stage = CGSize(width: 160, height: 90)
+    let filled = PlaybackViewport.pictureRect(
+      in: stage,
+      videoAspectRatio: 2,
+      scaleMode: .fill
+    )
+    let stretched = PlaybackViewport.pictureRect(
+      in: stage,
+      videoAspectRatio: 2,
+      scaleMode: .stretch
+    )
+
+    #expect(filled == CGRect(origin: .zero, size: stage))
+    #expect(stretched == CGRect(origin: .zero, size: stage))
+  }
+
+  @Test
+  func inlineControlMarginsRemainEqualForWideVideo() {
+    let insets = PlaybackViewport.controlInsets(
+      in: CGSize(width: 160, height: 90),
+      videoAspectRatio: 2,
+      scaleMode: .fit,
+      contentInset: 12,
+      alignsToPicture: false
+    )
+
+    #expect(insets.top == 12)
+    #expect(insets.bottom == 12)
+  }
+
+  @Test
+  func mapsVideoScaleModesToMPVRenderingOptions() {
+    #expect(PlaybackVideoScaleMode.fit.mpvPanscan == 0)
+    #expect(PlaybackVideoScaleMode.fill.mpvPanscan == 1)
+    #expect(PlaybackVideoScaleMode.fit.mpvKeepsAspect)
+    #expect(PlaybackVideoScaleMode.fill.mpvKeepsAspect)
+    #expect(!PlaybackVideoScaleMode.stretch.mpvKeepsAspect)
+  }
+
+  @Test
   func scalesSeekToleranceWithJumpDistance() {
     #expect(PlaybackSeekPolicy.toleranceSeconds(distance: 5) == 0.35)
     #expect(PlaybackSeekPolicy.toleranceSeconds(distance: 20) == 1)
