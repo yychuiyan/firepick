@@ -116,7 +116,7 @@ struct PlaybackSettingsView: View {
             set: { model.setIncognitoModeEnabled($0) }
           )
         )
-        Text("开启后不写入最近观看；收藏不受影响。")
+        Text("开启后不写入最近观看和搜索缓存；收藏不受影响。")
           .font(.footnote)
           .foregroundStyle(.secondary)
         Toggle(

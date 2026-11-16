@@ -56,6 +56,8 @@ final class AppPersistence {
     static let aiEnhancementEnabled = "aiEnhancementEnabled"
     static let simulatorDeepSeekAPIKey = "simulatorDeepSeekAPIKey"
     static let recoveredPosterURLs = "recoveredPosterURLs"
+    static let websiteShortcuts = "websiteShortcuts"
+    static let websiteShortcutsSeeded = "websiteShortcutsSeeded"
   }
 
   private let defaults = UserDefaults.standard
@@ -312,6 +314,26 @@ final class AppPersistence {
 
   func saveSearchHistory(_ values: [String]) {
     defaults.set(values, forKey: Key.searchHistory)
+  }
+
+  var websiteShortcuts: [WebsiteShortcut] {
+    guard let data = defaults.data(forKey: Key.websiteShortcuts) else {
+      return []
+    }
+    return (try? JSONDecoder().decode(
+      [WebsiteShortcut].self,
+      from: data
+    )) ?? []
+  }
+
+  func saveWebsiteShortcuts(_ values: [WebsiteShortcut]) {
+    guard let data = try? JSONEncoder().encode(values) else { return }
+    defaults.set(data, forKey: Key.websiteShortcuts)
+  }
+
+  var websiteShortcutsSeeded: Bool {
+    get { defaults.bool(forKey: Key.websiteShortcutsSeeded) }
+    set { defaults.set(newValue, forKey: Key.websiteShortcutsSeeded) }
   }
 
   func saveConfiguration(_ data: Data, baseURL: URL?) throws {

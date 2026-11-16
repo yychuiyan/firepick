@@ -76,6 +76,7 @@ final class AppModel {
   enum Tab: Hashable {
     case vod
     case live
+    case aggregation
     case settings
   }
 
@@ -296,6 +297,7 @@ final class AppModel {
   var searchText = ""
   var searchHasRun = false
   var searchHistory: [String] = []
+  var websiteShortcuts: [WebsiteShortcut] = []
   var searchFailureCount = 0
   /// Last recoverable action for the global error banner retry button.
   var lastRecoverableAction: RecoverableAction?
@@ -543,6 +545,8 @@ final class AppModel {
         selectedTab = .vod
       case "live":
         selectedTab = .live
+      case "aggregation":
+        selectedTab = .aggregation
       case "settings":
         selectedTab = .settings
       default:
@@ -668,6 +672,18 @@ final class AppModel {
     lastLiveURLIndex = persistence?.lastLiveURLIndex ?? 0
     sourceConnections = (try? persistence?.loadSourceConnections()) ?? []
     searchHistory = persistence?.searchHistory ?? []
+    websiteShortcuts = persistence?.websiteShortcuts ?? []
+    if let persistence, !persistence.websiteShortcutsSeeded {
+      if websiteShortcuts.isEmpty,
+        let defaultURL = URL(string: "https://jx.202617.xyz/tv.php?url=")
+      {
+        websiteShortcuts = [
+          WebsiteShortcut(name: "七哥解析", url: defaultURL, isEnabled: true)
+        ]
+        persistence.saveWebsiteShortcuts(websiteShortcuts)
+      }
+      persistence.websiteShortcutsSeeded = true
+    }
     browseScrollAnchors = persistence?.loadBrowseScrollAnchors() ?? [:]
     let persistedActive = persistence?.loadActiveCMSProviders(mode: contentMode) ?? []
     let allowedActive =
@@ -2597,6 +2613,56 @@ final class AppModel {
     searchHistory.insert(value, at: 0)
     searchHistory = Array(searchHistory.prefix(20))
     persistence?.saveSearchHistory(searchHistory)
+  }
+
+  func addWebsiteShortcut(name: String, url: URL) {
+    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedName.isEmpty else { return }
+    websiteShortcuts.append(
+      WebsiteShortcut(name: trimmedName, url: url)
+    )
+    persistence?.saveWebsiteShortcuts(websiteShortcuts)
+  }
+
+  func updateWebsiteShortcut(
+    id: UUID,
+    name: String,
+    url: URL
+  ) {
+    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedName.isEmpty,
+      let index = websiteShortcuts.firstIndex(where: { $0.id == id })
+    else { return }
+    let previousEnabled = websiteShortcuts[index].isEnabled
+    websiteShortcuts[index] = WebsiteShortcut(
+      id: id,
+      name: trimmedName,
+      url: url,
+      isEnabled: previousEnabled
+    )
+    persistence?.saveWebsiteShortcuts(websiteShortcuts)
+  }
+
+  func deleteWebsiteShortcut(id: UUID) {
+    websiteShortcuts.removeAll { $0.id == id }
+    persistence?.saveWebsiteShortcuts(websiteShortcuts)
+  }
+
+  /// Enable a single interface config. Only one shortcut may be enabled at a
+  /// time; enabling a new one disables all others.
+  func setWebsiteShortcutEnabled(id: UUID, isEnabled: Bool) {
+    for index in websiteShortcuts.indices {
+      if websiteShortcuts[index].id == id {
+        websiteShortcuts[index].isEnabled = isEnabled
+      } else if isEnabled {
+        websiteShortcuts[index].isEnabled = false
+      }
+    }
+    persistence?.saveWebsiteShortcuts(websiteShortcuts)
+  }
+
+  var activeWebsiteShortcut: WebsiteShortcut? {
+    websiteShortcuts.first(where: { $0.isEnabled })
   }
 
   func removeSearchHistory(_ values: Set<String>) {

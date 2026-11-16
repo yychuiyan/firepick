@@ -15,6 +15,10 @@ struct RootView: View {
         .tabItem { Label("电视", systemImage: "dot.radiowaves.left.and.right") }
         .tag(AppModel.Tab.live)
 
+      AggregationView()
+        .tabItem { Label("聚合", systemImage: "square.grid.2x2") }
+        .tag(AppModel.Tab.aggregation)
+
       SettingsView()
         .tabItem { Label("设置", systemImage: "slider.horizontal.3") }
         .tag(AppModel.Tab.settings)

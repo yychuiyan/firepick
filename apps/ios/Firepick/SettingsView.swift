@@ -8,6 +8,7 @@ enum SettingsDestination: Hashable {
   case sources
   case playback
   case aiEnhancement
+  case websiteShortcuts
 }
 
 struct SettingsView: View {
@@ -53,6 +54,8 @@ struct SettingsView: View {
           PlaybackSettingsView()
         case .aiEnhancement:
           AIEnhancementSettingsView()
+        case .websiteShortcuts:
+          WebsiteShortcutSettingsView()
         }
       }
       .alert(
@@ -217,6 +220,14 @@ struct SettingsView: View {
         LabeledContent(
           "内容模式",
           value: model.contentMode.title
+        )
+      }
+      NavigationLink(value: SettingsDestination.websiteShortcuts) {
+        LabeledContent(
+          "接口配置",
+          value: model.websiteShortcuts.isEmpty
+            ? "未添加"
+            : "\(model.websiteShortcuts.count) 个"
         )
       }
     }

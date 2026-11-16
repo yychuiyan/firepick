@@ -19,9 +19,9 @@
 当前公开发布版本：
 
 ```text
-Version: 0.1.41
-Build:   43
-SHA-256: f8c6dcea6dd4244d759ef57f3524a9460e4393082af5cef6112db56b84ea2893
+Version: 0.1.42
+Build:   44
+SHA-256: ffaf33dd4284d5a0546bea74c7084a28c026108c27859cc6e8f49d37680c07d8
 ```
 
 SideStore 更新源：
@@ -33,7 +33,7 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 当前 IPA 下载地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/Firepick-0.1.41.ipa
+https://dl.yychuiyan.com/firepick/Firepick-0.1.42.ipa
 ```
 
 ## 功能概览
@@ -47,6 +47,7 @@ https://dl.yychuiyan.com/firepick/Firepick-0.1.41.ipa
 | 代理      | `proxy://` 解析、Android Bridge Range/HEAD 转发、iOS 回环代理                        |
 | 线路      | 多配置地址、测速、禁用；禁用当前线路时改用下一条可用线路                             |
 | 弹幕      | XML、JSON、纯文本解析，同步叠加，透明度、大小和速度设置                              |
+| 聚合      | 片名识别官方页面；可配置解析接口并与视频链接拼接；应用内网页浏览和登录态隔离 |
 | 设置      | 当前连接下拉、播放引擎、海报尺寸、弹幕设置、缓存占用、版本号、扩展连接、签名到期时间 |
 | 媒体库    | 收藏、最近观看                                                                       |
 | 局域网    | Android Bridge TLS 二维码配对、DLNA                                                  |
