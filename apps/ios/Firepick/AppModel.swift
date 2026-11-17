@@ -3215,14 +3215,19 @@ final class AppModel {
     )
   }
 
-  /// After 推荐 paints: silently warm 剧→影→综→漫 sequentially (JS is single-threaded),
-  /// so the first tabs become tappable sooner without stampeding the spider.
+  /// After 推荐 paints: silently warm 剧→影→综→漫 with two isolated sessions.
+  /// The bounded fan-out keeps tabs ready sooner without stampeding every CMS.
+  private struct CategoryPrefetchTarget: Sendable {
+    let category: FirepickCore.Category
+    let cacheKey: String
+  }
+
   private func prefetchCategories(site: SiteConfiguration, classes: [FirepickCore.Category]) {
     prefetchTask?.cancel()
     let generation = homeLoadGeneration
     prefetchTask = Task { @MainActor in
       // Let the first-screen posters take the connection pool first.
-      try? await Task.sleep(for: .seconds(1))
+      try? await Task.sleep(for: .milliseconds(250))
       if Task.isCancelled || generation != homeLoadGeneration || selectedTab != .vod {
         return
       }
@@ -3236,41 +3241,77 @@ final class AppModel {
         + classes.filter { cat in
           !cat.typeId.contains("recommend") && !preferred.contains(cat.typeId)
         }
+      var requests: [CategoryPrefetchTarget] = []
       for category in targets {
-        if Task.isCancelled || generation != homeLoadGeneration { return }
-        let typeId = category.typeId
-        let cacheKey = categoryCacheKey(site: site, typeId: typeId)
-        if let existing = categoryCache[cacheKey], !existing.list.isEmpty {
+        let target = CategoryPrefetchTarget(
+          category: category,
+          cacheKey: categoryCacheKey(site: site, typeId: category.typeId)
+        )
+        if let existing = categoryCache[target.cacheKey], !existing.list.isEmpty {
           PosterPrefetch.warm(items: existing.list, limit: 4)
           continue
         }
-        do {
-          let provider = try await provider(for: site)
-          var result = try await provider.categoryContent(
-            typeId: typeId,
-            page: 1,
-            filter: true,
-            extend: [:]
-          )
-          if Task.isCancelled || generation != homeLoadGeneration { return }
-          attachSourceKey(site.key, to: &result)
-          result = BrowseCatalogPolicy.bound(result)
-          storeCategoryCache(result, cacheKey: cacheKey, page: 1)
-          PosterPrefetch.warm(items: result.list, limit: 4)
-          if selectedCategory?.typeId == typeId,
-            currentBrowseCacheKey == cacheKey,
-            !result.list.isEmpty
-          {
-            applyCachedCategory(result, typeId: typeId, cacheKey: cacheKey)
-          }
-        } catch {
-          continue
+        requests.append(target)
+      }
+      _ = await BrowsePrefetchScheduler.run(requests, maxConcurrent: 2) {
+        [weak self] target in
+        guard let self else {
+          return target
         }
+        return await self.fetchAndStorePrefetchedCategory(
+          target,
+          site: site,
+          generation: generation
+        )
       }
       persistBrowseCategoryCache(siteKey: site.key)
       if !Task.isCancelled, generation == homeLoadGeneration {
         prefetchLiveSourcesAfterHomeIfNeeded()
       }
+    }
+  }
+
+  private func fetchAndStorePrefetchedCategory(
+    _ target: CategoryPrefetchTarget,
+    site: SiteConfiguration,
+    generation: Int
+  ) async -> CategoryPrefetchTarget {
+    guard !Task.isCancelled, generation == homeLoadGeneration else {
+      return target
+    }
+    do {
+      // A separate coordinator gives each prefetch its own JavaScript session.
+      // The primary session stays free for an immediate user tap.
+      let prefetchCoordinator = makeCoordinator(client: bridgeClient)
+      let provider = try await prefetchCoordinator.provider(
+        for: siteWithActiveCMSProviders(site)
+      )
+      var result = try await provider.categoryContent(
+        typeId: target.category.typeId,
+        page: 1,
+        filter: true,
+        extend: [:]
+      )
+      guard !Task.isCancelled, generation == homeLoadGeneration else {
+        return target
+      }
+      attachSourceKey(site.key, to: &result)
+      result = BrowseCatalogPolicy.bound(result)
+      storeCategoryCache(result, cacheKey: target.cacheKey, page: 1)
+      PosterPrefetch.warm(items: result.list, limit: 4)
+      if selectedCategory?.typeId == target.category.typeId,
+        currentBrowseCacheKey == target.cacheKey,
+        !result.list.isEmpty
+      {
+        applyCachedCategory(
+          result,
+          typeId: target.category.typeId,
+          cacheKey: target.cacheKey
+        )
+      }
+      return target
+    } catch {
+      return target
     }
   }
 

@@ -4,6 +4,24 @@ import Testing
 @testable import FirepickCore
 @testable import FirepickPlayback
 
+private actor PrefetchConcurrencyProbe {
+  private var active = 0
+  private var maximum = 0
+
+  func begin() {
+    active += 1
+    maximum = max(maximum, active)
+  }
+
+  func end() {
+    active -= 1
+  }
+
+  var maximumActive: Int {
+    maximum
+  }
+}
+
 @Suite("BrowsePerformanceTests")
 struct BrowsePerformanceTests {
   @Test
@@ -46,5 +64,24 @@ struct BrowsePerformanceTests {
         isBackground: false
       )
     )
+  }
+
+  @Test
+  func browsePrefetchRunsTwoCategoriesWithoutExceedingLimit() async {
+    let probe = PrefetchConcurrencyProbe()
+    let categories = ["tv", "movie", "variety", "anime"]
+
+    let completed = await BrowsePrefetchScheduler.run(
+      categories,
+      maxConcurrent: 2
+    ) { category in
+      await probe.begin()
+      try? await Task.sleep(for: .milliseconds(40))
+      await probe.end()
+      return category
+    }
+
+    #expect(Set(completed) == Set(categories))
+    #expect(await probe.maximumActive == 2)
   }
 }
