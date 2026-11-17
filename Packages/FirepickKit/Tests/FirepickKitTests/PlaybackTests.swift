@@ -6,6 +6,38 @@ import Testing
 
 struct PlaybackTests {
   @Test
+  func recognisesLeftEdgeBackSwipeOnly() {
+    #expect(
+      PlayerBackGesturePolicy.shouldNavigateBack(
+        startLocation: CGPoint(x: 18, y: 120),
+        translation: CGSize(width: 86, height: 8),
+        stageWidth: 390
+      )
+    )
+    #expect(
+      !PlayerBackGesturePolicy.shouldNavigateBack(
+        startLocation: CGPoint(x: 160, y: 120),
+        translation: CGSize(width: 86, height: 8),
+        stageWidth: 390
+      )
+    )
+    #expect(
+      !PlayerBackGesturePolicy.shouldNavigateBack(
+        startLocation: CGPoint(x: 18, y: 120),
+        translation: CGSize(width: 86, height: 70),
+        stageWidth: 390
+      )
+    )
+    #expect(
+      !PlayerBackGesturePolicy.shouldNavigateBack(
+        startLocation: CGPoint(x: 18, y: 120),
+        translation: CGSize(width: -86, height: 8),
+        stageWidth: 390
+      )
+    )
+  }
+
+  @Test
   func selectsAVPlayerForNativeFiles() throws {
     let selector = PlayerSelector()
     let selection = try selector.select(

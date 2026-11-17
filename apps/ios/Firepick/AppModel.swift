@@ -381,7 +381,7 @@ final class AppModel {
   var probingConnectionURLs: Set<String> = []
   var videoOutputPreference: VideoOutputPreference = .automatic
   var decodePreference: DecodePreference = .automatic
-  var adSkipPreference: AdSkipPreference = .off
+  var adSkipPreference: AdSkipPreference = .marked
   var backgroundPlaybackEnabled = false
   var incognitoModeEnabled = false
   var aiEnhancementEnabled = false
@@ -1456,6 +1456,9 @@ final class AppModel {
     if let outroStart { mark.outroStart = outroStart }
     skipMarks[key] = mark
     persistence?.saveSkipMarks(skipMarks)
+    if adSkipPreference == .off {
+      setAdSkipPreference(.marked)
+    }
   }
 
   func clearSkipMark(sourceKey: String?, vodId: String, flag: String?) {
@@ -3316,8 +3319,11 @@ final class AppModel {
   }
 
   private func storeCategoryCache(_ result: MediaResult, cacheKey: String, page: Int) {
-    categoryCache[cacheKey] = BrowseCatalogPolicy.bound(result)
-    categoryPageByKey[cacheKey] = 1
+    categoryCache[cacheKey] = BrowseCatalogPolicy.bound(
+      result,
+      preservesPagination: result.pagecount ?? 1 > 1
+    )
+    categoryPageByKey[cacheKey] = max(1, page)
   }
 
   private func applyCachedCategory(
@@ -3325,13 +3331,13 @@ final class AppModel {
     typeId: String,
     cacheKey: String
   ) {
-    var shown = BrowseCatalogPolicy.bound(cached)
+    var shown = BrowseCatalogPolicy.bound(cached, preservesPagination: true)
     shown.classes = homeResult?.classes ?? cached.classes
     shown.filters = homeResult?.filters ?? cached.filters
     homeResult = shown
     browseListBelongsToTypeId = typeId
     browseDisplayedCacheKey = cacheKey
-    currentPage = 1
+    currentPage = categoryPageByKey[cacheKey] ?? 1
     errorMessage = nil
     isLoadingHome = false
     PosterPrefetch.warm(items: shown.list, limit: 12)
@@ -3354,8 +3360,10 @@ final class AppModel {
       disk.siteKey == site.key,
       !disk.results.isEmpty
     else { return }
-    categoryCache = disk.results.mapValues(BrowseCatalogPolicy.bound)
-    categoryPageByKey = disk.pages.mapValues { _ in 1 }
+    categoryCache = disk.results.mapValues {
+      BrowseCatalogPolicy.bound($0, preservesPagination: true)
+    }
+    categoryPageByKey = disk.pages.mapValues { max(1, $0) }
     // Hidden tabs load their posters on first selection. Prewarming every
     // cached category caused up to 40 redundant image requests on launch.
   }
@@ -3373,9 +3381,11 @@ final class AppModel {
     let typeId = "bucket|recommend"
     let cacheKey = categoryCacheKey(site: site, typeId: typeId)
     guard let rawCached = disk.results[cacheKey] else { return }
-    let cached = BrowseCatalogPolicy.bound(rawCached)
-    categoryCache = disk.results.mapValues(BrowseCatalogPolicy.bound)
-    categoryPageByKey = disk.pages.mapValues { _ in 1 }
+    let cached = BrowseCatalogPolicy.bound(rawCached, preservesPagination: true)
+    categoryCache = disk.results.mapValues {
+      BrowseCatalogPolicy.bound($0, preservesPagination: true)
+    }
+    categoryPageByKey = disk.pages.mapValues { max(1, $0) }
     let category =
       cached.classes.first(where: { $0.typeId == typeId })
       ?? cached.classes.first
@@ -3383,7 +3393,7 @@ final class AppModel {
     homeResult = cached
     browseListBelongsToTypeId = category?.typeId
     browseDisplayedCacheKey = cacheKey
-    currentPage = 1
+    currentPage = categoryPageByKey[cacheKey] ?? 1
     errorMessage = nil
     PosterPrefetch.warm(items: cached.list, limit: 6)
   }
@@ -3508,7 +3518,10 @@ final class AppModel {
         result.filters = homeResult?.filters
       }
       attachSourceKey(site.key, to: &result)
-      result = BrowseCatalogPolicy.bound(result)
+      result = BrowseCatalogPolicy.bound(
+        result,
+        preservesPagination: hasActiveCategoryFilters
+      )
       storeCategoryCache(result, cacheKey: cacheKey, page: 1)
       homeResult = result
       browseListBelongsToTypeId = category.typeId
@@ -3596,7 +3609,10 @@ final class AppModel {
         result.filters = previous?.filters
       }
       attachSourceKey(site.key, to: &result)
-      result = BrowseCatalogPolicy.bound(result)
+      result = BrowseCatalogPolicy.bound(
+        result,
+        preservesPagination: hasActiveCategoryFilters
+      )
       storeCategoryCache(result, cacheKey: cacheKey, page: 1)
       homeResult = result
       browseListBelongsToTypeId = typeId
@@ -3676,6 +3692,7 @@ final class AppModel {
   func loadMore() async {
     guard !isLoadingMore,
       !isLoadingHome,
+      hasActiveCategoryFilters,
       let site = selectedSite,
       let category = selectedCategory,
       let pagecount = homeResult?.pagecount,
@@ -3708,6 +3725,7 @@ final class AppModel {
         result.filters = homeResult?.filters
       }
       attachSourceKey(site.key, to: &result)
+      result = BrowseCatalogPolicy.bound(result, preservesPagination: true)
       let existing = Set(homeResult?.list.map(\.id) ?? [])
       result.list =
         (homeResult?.list ?? [])

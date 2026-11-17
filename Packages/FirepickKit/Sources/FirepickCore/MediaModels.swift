@@ -301,12 +301,18 @@ public struct MediaResult: Codable, Equatable, Sendable {
 public enum BrowseCatalogPolicy {
   public static let itemsPerMenu = 18
 
-  /// Browse menus are intentionally cache-first snapshots. A bounded first page
-  /// avoids unbounded pagination and repeated poster requests on old devices.
-  public static func bound(_ result: MediaResult) -> MediaResult {
+  /// Browse menus stay cache-first. Unfiltered menus are one 18-item snapshot;
+  /// explicit filters may retain provider page counts for infinite scrolling.
+  public static func bound(
+    _ result: MediaResult,
+    preservesPagination: Bool = false
+  ) -> MediaResult {
     var bounded = result
     bounded.list = Array(bounded.list.prefix(itemsPerMenu))
-    bounded.pagecount = 1
+    bounded.pagecount =
+      preservesPagination
+      ? max(1, bounded.pagecount ?? 1)
+      : 1
     return bounded
   }
 }

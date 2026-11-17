@@ -397,6 +397,7 @@ struct OnDeviceJavaScriptHostTests {
       ]
     )
     #expect(selfieColumn.list.map(\.name).sorted() == ["自拍测试"])
+    #expect(selfieColumn.pagecount ?? 1 >= 2)
     await adultHost.destroy()
   }
 

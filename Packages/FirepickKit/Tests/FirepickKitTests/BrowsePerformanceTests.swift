@@ -45,6 +45,23 @@ struct BrowsePerformanceTests {
   }
 
   @Test
+  func filteredBrowseMenusPreservePagination() {
+    let items = (0..<25).map {
+      MediaItem(vodId: "filtered-\($0)", name: "筛选节目 \($0)")
+    }
+    var result = MediaResult(list: items)
+    result.pagecount = 7
+
+    let bounded = BrowseCatalogPolicy.bound(
+      result,
+      preservesPagination: true
+    )
+
+    #expect(bounded.list.count == 18)
+    #expect(bounded.pagecount == 7)
+  }
+
+  @Test
   func backgroundPlaybackSurvivesViewDisappearanceOnlyWhenEnabled() {
     #expect(
       PlaybackLifecyclePolicy.keepsAudioWhenViewDisappears(

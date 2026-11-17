@@ -95,6 +95,7 @@ struct PlayerView: View {
   @State private var brightnessBar: Double?
   @State private var volumeBar: Float?
   @State private var scrubPreview: Double?
+  @State private var scrubStartTime: Double = 0
   @State private var isScrubbing = false
   @State private var selectedSubtitleIndex: Int?
   @State private var overlayCues: [SubtitleCue] = []
@@ -705,6 +706,7 @@ struct PlayerView: View {
         } else if state == .paused {
           isPlaybackBuffering = false
         }
+        updateNowPlaying()
       }
       .onChange(of: avEngine.isReadyForDisplay) { _, ready in
         if ready {
@@ -728,6 +730,7 @@ struct PlayerView: View {
         } else if state == .paused {
           isPlaybackBuffering = false
         }
+        updateNowPlaying()
       }
   }
 
@@ -866,6 +869,10 @@ struct PlayerView: View {
         if usesExpandedPlayerChrome {
           playerSideDrawer
         }
+        if let scrubPreview, showControls {
+          seekPreviewHUD(target: scrubPreview)
+            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+        }
         if let gestureHint {
           Text(gestureHint)
             .font(.title3.weight(.semibold))
@@ -983,25 +990,28 @@ struct PlayerView: View {
     }
   }
 
-  /// Left-edge zone that owns swipe-back (must not compete with seek).
-  private var edgeBackWidth: CGFloat { 48 }
-
   /// Left-edge swipe right → exit fullscreen or leave the player / detail page.
   /// Tuned for real devices: wider edge + lower distance than simulator-only defaults.
   private func edgeSwipeBackGesture(in size: CGSize) -> some Gesture {
-    DragGesture(minimumDistance: 20)
+    DragGesture(minimumDistance: 18)
       .onEnded { value in
-        let fromLeftEdge = value.startLocation.x < edgeBackWidth
-        let mostlyHorizontal = abs(value.translation.width) > abs(value.translation.height) * 1.05
-        let swipedRight = value.translation.width > 56
-        guard fromLeftEdge, mostlyHorizontal, swipedRight else { return }
-        if let onCollapse, usesExpandedPlayerChrome {
-          onCollapse()
-        } else {
-          playbackEngine.stop()
-          dismiss()
-        }
+        guard PlayerBackGesturePolicy.shouldNavigateBack(
+          startLocation: value.startLocation,
+          translation: value.translation,
+          stageWidth: size.width
+        ) else { return }
+        performPlayerBack()
       }
+  }
+
+  /// Single navigation path shared by the back buttons and left-edge back swipe.
+  private func performPlayerBack() {
+    if let onCollapse, usesExpandedPlayerChrome {
+      onCollapse()
+    } else {
+      playbackEngine.stop()
+      dismiss()
+    }
   }
 
   private var linePickerSheet: some View {
@@ -1296,7 +1306,9 @@ struct PlayerView: View {
 
   @ViewBuilder
   private var centerPlayButton: some View {
-    if displayFailure != nil {
+    if scrubPreview != nil || isScrubbing {
+      Color.clear.frame(width: 1, height: 1)
+    } else if displayFailure != nil {
       Color.clear.frame(width: 1, height: 1)
     } else if isCenterLoading && !showControls {
       ProgressView()
@@ -1351,6 +1363,38 @@ struct PlayerView: View {
     }
   }
 
+  private func seekPreviewHUD(target: Double) -> some View {
+    let delta = target - scrubStartTime
+    let forward = delta >= 0
+    return HStack(spacing: 10) {
+      Image(systemName: forward ? "goforward" : "gobackward")
+        .font(.title3.weight(.semibold))
+        .foregroundStyle(.orange)
+
+      VStack(alignment: .leading, spacing: 2) {
+        Text(format(target))
+          .font(.title3.monospacedDigit().weight(.semibold))
+          .foregroundStyle(.white)
+        Text(
+          forward
+            ? "快进 \(max(0, Int(delta.rounded()))) 秒"
+            : "快退 \(max(0, Int((-delta).rounded()))) 秒"
+        )
+        .font(.caption2.monospacedDigit().weight(.medium))
+        .foregroundStyle(.white.opacity(0.62))
+      }
+    }
+    .padding(.horizontal, 15)
+    .padding(.vertical, 9)
+    .background(.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 14))
+    .overlay {
+      RoundedRectangle(cornerRadius: 14)
+        .strokeBorder(.white.opacity(0.12), lineWidth: 0.6)
+    }
+    .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+    .allowsHitTesting(false)
+  }
+
   private var inlineTitle: String {
     if isAwaitingPlayback { return headlineTitle }
     if let failure, !failure.isEmpty { return failure }
@@ -1395,8 +1439,7 @@ struct PlayerView: View {
           )
           HStack(spacing: 0) {
             Button {
-              playbackEngine.stop()
-              dismiss()
+              performPlayerBack()
             } label: {
               Image(systemName: "chevron.left")
                 .font(.body.weight(.semibold))
@@ -1423,12 +1466,7 @@ struct PlayerView: View {
         // Tencent-style immersive bar: plain back chevron, title, trailing menu.
         HStack(spacing: 6) {
           Button {
-            if let onCollapse {
-              onCollapse()
-            } else {
-              playbackEngine.stop()
-              dismiss()
-            }
+            performPlayerBack()
           } label: {
             Image(systemName: "chevron.left")
               .font(.system(size: 22, weight: .semibold))
@@ -1566,6 +1604,7 @@ struct PlayerView: View {
         Button {
           playbackRate = rate
           playbackEngine.setPlaybackRate(rate)
+          updateNowPlaying()
           showingInlineRatePicker = false
         } label: {
           HStack {
@@ -1638,6 +1677,7 @@ struct PlayerView: View {
         Button {
           playbackRate = rate
           playbackEngine.setPlaybackRate(rate)
+          updateNowPlaying()
           closePlayerDrawers()
         } label: {
           HStack {
@@ -2073,8 +2113,24 @@ struct PlayerView: View {
         Label("画面模式", systemImage: "aspectratio")
       }
 
+      if usesExpandedPlayerChrome, let sourceKey {
+        let favorite = model.isFavorite(sourceKey: sourceKey, item: item)
+        Button {
+          Task {
+            await model.toggleFavorite(sourceKey: sourceKey, item: item)
+            showToast(favorite ? "已取消收藏" : "已加入收藏")
+          }
+        } label: {
+          Label(
+            favorite ? "取消收藏" : "加入收藏",
+            systemImage: favorite ? "heart.slash" : "heart"
+          )
+        }
+      }
+
       Button {
         let time = playbackEngine.currentTime
+        let autoSkipWasOff = model.adSkipPreference == .off
         model.setSkipMark(
           sourceKey: sourceKey,
           vodId: item.vodId,
@@ -2082,7 +2138,11 @@ struct PlayerView: View {
           introEnd: time
         )
         didAutoSkipIntro = false
-        showToast("已设片头 \(format(time))，下次从此后起播")
+        showToast(
+          autoSkipWasOff
+            ? "已设片头 \(format(time))，自动跳过已开启"
+            : "已设片头 \(format(time))"
+        )
       } label: {
         if let intro = skipMark?.introEnd {
           Label("片头 \(format(intro))", systemImage: "forward.end")
@@ -2093,13 +2153,18 @@ struct PlayerView: View {
 
       Button {
         let time = playbackEngine.currentTime
+        let autoSkipWasOff = model.adSkipPreference == .off
         model.setSkipMark(
           sourceKey: sourceKey,
           vodId: item.vodId,
           flag: activeFlag ?? flag,
           outroStart: time
         )
-        showToast("已设片尾 \(format(time))，到达后自动下一集")
+        showToast(
+          autoSkipWasOff
+            ? "已设片尾 \(format(time))，自动跳过已开启"
+            : "已设片尾 \(format(time))，到达后自动下一集"
+        )
       } label: {
         if let outro = skipMark?.outroStart {
           Label("片尾 \(format(outro))", systemImage: "backward.end")
@@ -2280,6 +2345,7 @@ struct PlayerView: View {
     isScrubbing = editing
     if editing {
       seekHandoff = true
+      scrubStartTime = playbackEngine.currentTime
       // Manual scrub cancels「已看完 / 自动下一集」so mid-roll drag never looks finished.
       clearFinishedEpisodeChrome()
       cancelNextEpisodeCountdown()
@@ -2303,6 +2369,7 @@ struct PlayerView: View {
         freezeFrame = nil
         // Re-pin after seek settles (clock may have glitched to 0 mid-buffer).
         pinLiveStartPosition(max(target, stickyTime, lastReportedTime))
+        updateNowPlaying()
       }
     } else if !editing {
       seekHandoff = false
@@ -2572,7 +2639,10 @@ struct PlayerView: View {
       .onChanged { value in
         guard holdSpeedSide == nil else { return }
         // Leave left-edge horizontal drags to swipe-back (real-device Nav/pop).
-        if value.startLocation.x < edgeBackWidth,
+        if PlayerBackGesturePolicy.isLeftEdgeStart(
+          value.startLocation.x,
+          stageWidth: size.width
+        ),
           abs(value.translation.width) >= abs(value.translation.height)
         {
           return
@@ -2581,6 +2651,7 @@ struct PlayerView: View {
           if abs(value.translation.width) > abs(value.translation.height) {
             dragAxis = .horizontal
             dragStartTime = playbackEngine.currentTime
+            scrubStartTime = dragStartTime
           } else {
             dragAxis = .vertical
             dragStartBrightness = UIScreen.main.brightness
@@ -2594,7 +2665,6 @@ struct PlayerView: View {
           let delta = Double(value.translation.width / size.width) * min(120, duration * 0.25)
           let target = min(duration, max(0, dragStartTime + delta))
           scrubPreview = target
-          gestureHint = "\(delta >= 0 ? "+" : "")\(Int(delta))s → \(format(target))"
           brightnessBar = nil
           volumeBar = nil
         case .vertical:
@@ -2632,6 +2702,7 @@ struct PlayerView: View {
             mediaTransitionInFlight = false
             silentHandoff = false
             freezeFrame = nil
+            updateNowPlaying()
           }
         }
         dragAxis = nil
@@ -3133,6 +3204,7 @@ struct PlayerView: View {
       mediaTransitionInFlight = false
       silentHandoff = false
       freezeFrame = nil
+      updateNowPlaying()
     }
     scheduleHideControls()
   }
@@ -3231,12 +3303,10 @@ struct PlayerView: View {
     guard active else { return }
     // 切集过渡中：忽略旧 item 残留的 51:xx 时钟，避免写回 sticky。
     if mediaTransitionInFlight || silentHandoff {
-      updateNowPlaying()
       return
     }
     handleAutoSkip(at: time)
     handleMidrollAdSkip(at: time)
-    updateNowPlaying()
     // Layout remount / replaceCurrentItem can briefly report ~0 — don't erase the clock.
     let looksLikeGlitch = stickyTime > 2 && time < 1 && time + 1.5 < stickyTime
     // Black canvas with a moving AV clock: freeze sticky/history until first frame.
@@ -3551,11 +3621,13 @@ struct PlayerView: View {
     if !didAutoSkipIntro,
       let intro = skipMark?.introEnd,
       intro > 0,
-      time + 0.3 < intro,
-      time < 1.5
+      time + 0.3 < intro
     {
       didAutoSkipIntro = true
-      Task { await playbackEngine.seek(to: intro) }
+      Task {
+        await playbackEngine.seek(to: intro)
+        updateNowPlaying()
+      }
       showToast("已跳过片头")
     }
     if let outro = skipMark?.outroStart,

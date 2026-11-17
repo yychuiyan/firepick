@@ -1990,7 +1990,7 @@ export default class extends Spider {
     // Do not diversify after explicit sort — it scrambled 上映时间 / 豆瓣热门 / 最新更新.
     return {
       page: requestedPage,
-      pagecount: 1,
+      pagecount: filtered ? Math.max(reportedPages, 2) : 1,
       limit: deduped.length,
       total: deduped.length,
       list: deduped.slice(0, FIRST_SCREEN),

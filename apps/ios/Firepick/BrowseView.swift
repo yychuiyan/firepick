@@ -105,6 +105,25 @@ struct BrowseView: View {
                 ForEach(latestItems, id: \.id) { item in
                   posterButton(item)
                     .id(item.id)
+                    .onAppear {
+                      guard item.id == latestItems.last?.id,
+                        model.hasActiveCategoryFilters
+                      else { return }
+                      Task { await model.loadMore() }
+                    }
+                }
+                if model.hasActiveCategoryFilters, model.isLoadingMore {
+                  ProgressView("加载更多")
+                    .font(.caption)
+                    .tint(.orange)
+                    .padding(.vertical, 12)
+                } else if model.hasActiveCategoryFilters, model.loadMoreFailed {
+                  Button("加载更多失败，点击重试") {
+                    Task { await model.loadMore() }
+                  }
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .padding(.vertical, 12)
                 }
               }
               .padding(.horizontal)
