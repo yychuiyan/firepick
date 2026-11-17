@@ -135,7 +135,9 @@ struct PlayerView: View {
   @State private var remoteCommandTargets: [(command: MPRemoteCommand, target: Any)] = []
   @State private var showingRatePicker = false
   @State private var showingResolutionPicker = false
+  @State private var showingPictureModePicker = false
   @State private var showingInlineRatePicker = false
+  @State private var showingInlinePictureModePicker = false
   @State private var showingDanmakuDrawer = false
   @State private var streamResolution: StreamResolution = .automatic
   @AppStorage("playerVideoScaleMode")
@@ -188,6 +190,7 @@ struct PlayerView: View {
   }
 
   private static let rateOptions: [Float] = [0.75, 1, 1.25, 1.5, 2]
+  private static let inlineSettingsSheetHeight: CGFloat = 420
 
   private enum StreamResolution: String, CaseIterable, Identifiable {
     case automatic
@@ -445,6 +448,7 @@ struct PlayerView: View {
       .overlay {
         Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
       }
+      .fixedSize(horizontal: true, vertical: false)
   }
 
   private func formattedMediaBitrate(_ bitrate: Int) -> String {
@@ -546,12 +550,12 @@ struct PlayerView: View {
   private var playerWithSheets: some View {
     playerSurface
       .background {
-        if chrome == .immersive {
+        if usesExpandedPlayerChrome {
           Color.black.ignoresSafeArea()
         }
       }
-      .statusBarHidden(chrome != .inline)
-      .persistentSystemOverlays(chrome == .inline ? .automatic : .hidden)
+      .statusBarHidden(usesExpandedPlayerChrome)
+      .persistentSystemOverlays(usesExpandedPlayerChrome ? .hidden : .automatic)
       .sheet(isPresented: $showingLines) {
         linePickerSheet
           .presentationDetents([.medium])
@@ -568,9 +572,14 @@ struct PlayerView: View {
             }
           }
         }
+        .presentationDetents([.height(Self.inlineSettingsSheetHeight)])
+        .presentationDragIndicator(.visible)
       }
       .sheet(isPresented: $showingInlineRatePicker) {
         inlineRatePickerSheet
+      }
+      .sheet(isPresented: $showingInlinePictureModePicker) {
+        inlinePictureModePickerSheet
       }
   }
 
@@ -814,7 +823,7 @@ struct PlayerView: View {
     playerStage
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .background(Color.black)
-      .ignoresSafeArea(.container, edges: chrome == .inline ? [] : .all)
+      .ignoresSafeArea(.container, edges: usesExpandedPlayerChrome ? .all : [])
   }
 
   private var playerStage: some View {
@@ -842,7 +851,7 @@ struct PlayerView: View {
             fontSize: subtitleFontSize,
             color: subtitleColor,
             outlined: model.subtitleOutlineEnabled,
-            bottomPadding: showControls ? (chrome == .inline ? 70 : 82) : 44
+            bottomPadding: showControls ? (usesExpandedPlayerChrome ? 82 : 70) : 44
           )
           .allowsHitTesting(false)
         }
@@ -854,7 +863,7 @@ struct PlayerView: View {
           centerPlayButton
             .allowsHitTesting(false)
         }
-        if chrome != .inline {
+        if usesExpandedPlayerChrome {
           playerSideDrawer
         }
         if let gestureHint {
@@ -875,14 +884,7 @@ struct PlayerView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.trailing, 28)
         }
-        if showControls, chrome == .immersive, let mediaBitrateKBps {
-          mediaSpeedBadge(mediaBitrateKBps)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            .padding(.top, 58)
-            .padding(.trailing, 18)
-            .allowsHitTesting(false)
-        }
-        if chrome == .immersive, let bestSourceCheckStatus {
+        if usesExpandedPlayerChrome, let bestSourceCheckStatus {
           HStack(spacing: 7) {
             if isCheckingBestSource {
               ProgressView()
@@ -907,7 +909,7 @@ struct PlayerView: View {
           .padding(.top, 60)
           .allowsHitTesting(false)
         }
-        if chrome == .immersive,
+        if usesExpandedPlayerChrome,
           let pendingBestSourceName,
           let onConfirmBestSourceSwitch,
           let onCancelBestSourceSwitch
@@ -932,7 +934,7 @@ struct PlayerView: View {
             .background(Color.black.opacity(0.42), in: Capsule())
             .overlay(Capsule().strokeBorder(.white.opacity(0.1), lineWidth: 0.5))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(.top, chrome == .inline ? 48 : 64)
+            .padding(.top, usesExpandedPlayerChrome ? 64 : 48)
             .allowsHitTesting(false)
         }
         if let displayFailure {
@@ -993,7 +995,7 @@ struct PlayerView: View {
         let mostlyHorizontal = abs(value.translation.width) > abs(value.translation.height) * 1.05
         let swipedRight = value.translation.width > 56
         guard fromLeftEdge, mostlyHorizontal, swipedRight else { return }
-        if let onCollapse, chrome != .inline {
+        if let onCollapse, usesExpandedPlayerChrome {
           onCollapse()
         } else {
           playbackEngine.stop()
@@ -1049,7 +1051,7 @@ struct PlayerView: View {
     .overlay(Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
     .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    .padding(.top, chrome == .inline ? 44 : 68)
+    .padding(.top, usesExpandedPlayerChrome ? 68 : 44)
     .allowsHitTesting(false)
   }
 
@@ -1190,7 +1192,7 @@ struct PlayerView: View {
       videoAspectRatio: videoAspectRatio,
       scaleMode: videoScaleMode,
       contentInset: controlContentInset,
-      alignsToPicture: chrome != .inline
+      alignsToPicture: usesExpandedPlayerChrome
     )
     let horizontalInset = max(controlContentInset, picture.minX + controlContentInset)
 
@@ -1198,18 +1200,18 @@ struct PlayerView: View {
       VStack(spacing: 0) {
         topControls
         Spacer()
-        if chrome != .inline {
+        if usesExpandedPlayerChrome {
           skipButtons
             .padding(.bottom, 8)
         }
         progressBar
-          .padding(.bottom, chrome == .inline ? 0 : 4)
+          .padding(.bottom, usesExpandedPlayerChrome ? 4 : 0)
       }
       .padding(.horizontal, horizontalInset)
       .padding(.top, vertical.top)
       .padding(.bottom, vertical.bottom)
       .background {
-        if chrome != .inline {
+        if usesExpandedPlayerChrome {
           VStack(spacing: 0) {
             LinearGradient(
               colors: [.black.opacity(0.38), .clear],
@@ -1235,7 +1237,12 @@ struct PlayerView: View {
   }
 
   private var isPlayerDrawerOpen: Bool {
-    showingRatePicker || showingResolutionPicker || showingEpisodes || showingDanmakuDrawer
+    showingRatePicker || showingResolutionPicker || showingPictureModePicker
+      || showingEpisodes || showingDanmakuDrawer
+  }
+
+  private var usesExpandedPlayerChrome: Bool {
+    chrome == .immersive
   }
 
   /// True when we still have a visible picture (freeze or live frame) to cover handoff.
@@ -1298,13 +1305,13 @@ struct PlayerView: View {
         .frame(width: 44, height: 44)
         .accessibilityLabel("加载中")
     } else {
-      HStack(spacing: chrome == .inline ? 36 : 54) {
+      HStack(spacing: usesExpandedPlayerChrome ? 54 : 36) {
         Button {
           seek(by: -10)
         } label: {
           Image(systemName: "gobackward.10")
-            .font(.system(size: chrome == .inline ? 22 : 28, weight: .medium))
-            .frame(width: chrome == .inline ? 44 : 50, height: chrome == .inline ? 44 : 50)
+            .font(.system(size: usesExpandedPlayerChrome ? 28 : 22, weight: .medium))
+            .frame(width: usesExpandedPlayerChrome ? 50 : 44, height: usesExpandedPlayerChrome ? 50 : 44)
         }
         .accessibilityLabel("快退")
 
@@ -1321,11 +1328,11 @@ struct PlayerView: View {
             Image(systemName: isPlaying ? "pause.fill" : "play.fill")
               .font(
                 .system(
-                  size: chrome == .inline ? 34 : 42,
-                  weight: chrome == .inline ? .regular : .semibold
+                  size: usesExpandedPlayerChrome ? 42 : 34,
+                  weight: usesExpandedPlayerChrome ? .semibold : .regular
                 )
               )
-              .frame(width: chrome == .inline ? 44 : 54, height: chrome == .inline ? 44 : 54)
+              .frame(width: usesExpandedPlayerChrome ? 54 : 44, height: usesExpandedPlayerChrome ? 54 : 44)
           }
           .accessibilityLabel(isPlaying ? "暂停" : "播放")
         }
@@ -1334,8 +1341,8 @@ struct PlayerView: View {
           seek(by: 10)
         } label: {
           Image(systemName: "goforward.10")
-            .font(.system(size: chrome == .inline ? 22 : 28, weight: .medium))
-            .frame(width: chrome == .inline ? 44 : 50, height: chrome == .inline ? 44 : 50)
+            .font(.system(size: usesExpandedPlayerChrome ? 28 : 22, weight: .medium))
+            .frame(width: usesExpandedPlayerChrome ? 50 : 44, height: usesExpandedPlayerChrome ? 50 : 44)
         }
         .accessibilityLabel("快进")
       }
@@ -1379,7 +1386,7 @@ struct PlayerView: View {
 
   private var topControls: some View {
     Group {
-      if chrome == .inline {
+      if !usesExpandedPlayerChrome {
         ZStack {
           PlayerTitleLabel(
             text: inlineTitle,
@@ -1438,6 +1445,10 @@ struct PlayerView: View {
             contentAlignment: .leading
           )
           Spacer(minLength: 0)
+          if let mediaBitrateKBps {
+            mediaSpeedBadge(mediaBitrateKBps)
+              .allowsHitTesting(false)
+          }
           menuButton
         }
       }
@@ -1462,6 +1473,8 @@ struct PlayerView: View {
             rateDrawerPanel
           } else if showingResolutionPicker {
             resolutionDrawerPanel
+          } else if showingPictureModePicker {
+            pictureModeDrawerPanel
           } else if showingEpisodes {
             episodeDrawerPanel
           } else if showingDanmakuDrawer {
@@ -1471,6 +1484,7 @@ struct PlayerView: View {
         .frame(width: drawerPanelWidth)
         .frame(maxHeight: .infinity)
         .background(.black.opacity(0.82))
+        .environment(\.colorScheme, .dark)
         .transition(.asymmetric(
           insertion: .move(edge: .trailing).combined(with: .opacity),
           removal: .move(edge: .trailing).combined(with: .opacity)
@@ -1480,17 +1494,19 @@ struct PlayerView: View {
     .animation(.easeInOut(duration: 0.28), value: open)
     .animation(.easeInOut(duration: 0.28), value: showingRatePicker)
     .animation(.easeInOut(duration: 0.28), value: showingResolutionPicker)
+    .animation(.easeInOut(duration: 0.28), value: showingPictureModePicker)
     .animation(.easeInOut(duration: 0.28), value: showingEpisodes)
     .animation(.easeInOut(duration: 0.28), value: showingDanmakuDrawer)
   }
 
   private var drawerPanelWidth: CGFloat {
-    min(220, UIScreen.main.bounds.width * 0.30)
+    min(300, max(260, UIScreen.main.bounds.width * 0.36))
   }
 
   private enum PlayerDrawer {
     case rate
     case resolution
+    case pictureMode
     case episodes
     case danmaku
   }
@@ -1504,6 +1520,7 @@ struct PlayerView: View {
     withAnimation(.easeInOut(duration: 0.28)) {
       showingRatePicker = drawer == .rate
       showingResolutionPicker = drawer == .resolution
+      showingPictureModePicker = drawer == .pictureMode
       showingEpisodes = drawer == .episodes
       showingDanmakuDrawer = drawer == .danmaku
       showingLines = false
@@ -1515,8 +1532,15 @@ struct PlayerView: View {
   private func openPlayerDrawerAfterMenuDismissal(_ drawer: PlayerDrawer) {
     Task { @MainActor in
       try? await Task.sleep(for: .milliseconds(280))
-      if chrome == .inline, drawer == .rate {
-        showingInlineRatePicker = true
+      if !usesExpandedPlayerChrome {
+        switch drawer {
+        case .rate:
+          showingInlineRatePicker = true
+        case .pictureMode:
+          showingInlinePictureModePicker = true
+        default:
+          openPlayerDrawer(drawer)
+        }
       } else {
         openPlayerDrawer(drawer)
       }
@@ -1527,6 +1551,7 @@ struct PlayerView: View {
     withAnimation(.easeInOut(duration: 0.24)) {
       showingRatePicker = false
       showingResolutionPicker = false
+      showingPictureModePicker = false
       showingEpisodes = false
       showingDanmakuDrawer = false
       showingLines = false
@@ -1565,7 +1590,40 @@ struct PlayerView: View {
         }
       }
     }
-    .presentationDetents([.height(360)])
+    .presentationDetents([.height(Self.inlineSettingsSheetHeight)])
+    .presentationDragIndicator(.visible)
+  }
+
+  private var inlinePictureModePickerSheet: some View {
+    NavigationStack {
+      List {
+        Section {
+          ForEach(PlaybackVideoScaleMode.allCases) { mode in
+            PictureModeOptionButton(
+              mode: mode,
+              selected: videoScaleMode == mode
+            ) {
+              videoScaleModeRaw = mode.rawValue
+              showToast("画面模式：\(mode.title)")
+              showingInlinePictureModePicker = false
+            }
+          }
+        } footer: {
+          Text("选择画面如何适配屏幕")
+            .font(.caption)
+        }
+      }
+      .scrollContentBackground(.hidden)
+      .background(Color(.systemGroupedBackground))
+      .navigationTitle("画面模式")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("完成") { showingInlinePictureModePicker = false }
+        }
+      }
+    }
+    .presentationDetents([.height(Self.inlineSettingsSheetHeight)])
     .presentationDragIndicator(.visible)
   }
 
@@ -1647,6 +1705,37 @@ struct PlayerView: View {
       Spacer(minLength: 0)
     }
     .padding(.horizontal, 14)
+  }
+
+  private var pictureModeDrawerPanel: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 14) {
+        HStack(spacing: 7) {
+          Image(systemName: "aspectratio")
+            .foregroundStyle(.orange)
+          Text("画面模式")
+            .font(.headline)
+            .foregroundStyle(.white)
+        }
+        .padding(.top, 20)
+
+        VStack(spacing: 8) {
+          ForEach(PlaybackVideoScaleMode.allCases) { mode in
+            PictureModeOptionButton(
+              mode: mode,
+              selected: videoScaleMode == mode
+            ) {
+              videoScaleModeRaw = mode.rawValue
+              showToast("画面模式：\(mode.title)")
+              closePlayerDrawers()
+            }
+          }
+        }
+      }
+      .padding(.horizontal, 14)
+      .padding(.bottom, 22)
+    }
+    .scrollIndicators(.hidden)
   }
 
   /// 4K/2K only when the stream/URL actually offers them; lower rungs stay selectable as caps.
@@ -1938,22 +2027,8 @@ struct PlayerView: View {
 
   private var menuButton: some View {
     Menu {
-      if let onCheckBestSource {
-        Button {
-          onCheckBestSource()
-        } label: {
-          Label(
-            isCheckingBestSource
-              ? "正在检测最佳线路"
-              : (hasPendingBestSource ? "发现更佳线路，等待确认" : "检测最佳线路"),
-            systemImage: "scope"
-          )
-        }
-        .disabled(isCheckingBestSource || hasPendingBestSource)
-      }
-
       Button {
-        if chrome == .immersive {
+        if usesExpandedPlayerChrome {
           openPlayerDrawerAfterMenuDismissal(.danmaku)
         } else {
           showingDanmakuSettings = true
@@ -1992,21 +2067,10 @@ struct PlayerView: View {
         Label("倍速 \(playbackRate.formatted())×", systemImage: "gauge")
       }
 
-      Menu {
-        ForEach(PlaybackVideoScaleMode.allCases) { mode in
-          Button {
-            videoScaleModeRaw = mode.rawValue
-            showToast("画面模式：\(mode.title)")
-          } label: {
-            if videoScaleMode == mode {
-              Label(mode.title, systemImage: "checkmark")
-            } else {
-              Text(mode.title)
-            }
-          }
-        }
+      Button {
+        openPlayerDrawerAfterMenuDismissal(.pictureMode)
       } label: {
-        Label("画面模式 · \(videoScaleMode.title)", systemImage: "aspectratio")
+        Label("画面模式", systemImage: "aspectratio")
       }
 
       Button {
@@ -2068,11 +2132,11 @@ struct PlayerView: View {
         }
       }
     } label: {
-      Image(systemName: chrome == .inline ? "gearshape" : "ellipsis")
+      Image(systemName: usesExpandedPlayerChrome ? "ellipsis" : "gearshape")
         .font(
-          chrome == .inline
-            ? .body.weight(.semibold)
-            : .system(size: 22, weight: .semibold)
+          usesExpandedPlayerChrome
+            ? .system(size: 22, weight: .semibold)
+            : .body.weight(.semibold)
         )
         .frame(width: 40, height: 40)
         .contentShape(Rectangle())
@@ -2132,7 +2196,7 @@ struct PlayerView: View {
 
   @ViewBuilder
   private var progressBar: some View {
-    if chrome == .inline {
+    if !usesExpandedPlayerChrome {
       HStack(alignment: .center, spacing: 8) {
         // 半屏不显示下一集 — 全屏才有。
         Text(format(currentTime))
@@ -3892,6 +3956,72 @@ struct PlayerView: View {
       return String(format: "%d:%02d:%02d", h, m, s)
     }
     return String(format: "%02d:%02d", m, s)
+  }
+}
+
+private struct PictureModeOptionButton: View {
+  let mode: PlaybackVideoScaleMode
+  let selected: Bool
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 11) {
+        PictureModeGlyph(mode: mode)
+          .frame(width: 36, height: 28)
+          .padding(6)
+          .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+
+        Text(mode.title)
+          .font(.subheadline.weight(selected ? .semibold : .regular))
+          .foregroundStyle(selected ? Color.orange : Color.primary)
+
+        Spacer(minLength: 4)
+
+        if selected {
+          Image(systemName: "checkmark.circle.fill")
+            .font(.body.weight(.semibold))
+            .foregroundStyle(.orange)
+        }
+      }
+      .padding(.vertical, 7)
+      .padding(.horizontal, 8)
+      .contentShape(Rectangle())
+      .background(
+        selected ? Color.orange.opacity(0.10) : Color.clear,
+        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+      )
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(mode.title)
+    .accessibilityValue(selected ? "已选择" : "")
+  }
+}
+
+private struct PictureModeGlyph: View {
+  let mode: PlaybackVideoScaleMode
+
+  var body: some View {
+    ZStack {
+      RoundedRectangle(cornerRadius: 3, style: .continuous)
+        .strokeBorder(.secondary.opacity(0.42), lineWidth: 1)
+
+      switch mode {
+      case .fit:
+        RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+          .fill(.orange)
+          .frame(width: 20, height: 11)
+      case .fill:
+        RoundedRectangle(cornerRadius: 2, style: .continuous)
+          .fill(.orange)
+          .padding(3)
+      case .stretch:
+        RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+          .fill(.orange)
+          .frame(width: 27, height: 14)
+      }
+    }
+    .accessibilityHidden(true)
   }
 }
 
