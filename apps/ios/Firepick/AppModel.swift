@@ -273,8 +273,9 @@ final class AppModel {
   var liveShowsTabBarInFullscreen = false
   var configuration: VodConfiguration = .empty
   var selectedSite: SiteConfiguration?
-  static let officialSourceVersion = "21"
-  static let officialSourceURL = "https://dl.yychuiyan.com/firepick/ios-sources.json?v=22"
+  static let officialSourceVersion = "23"
+  static let officialSourceURL =
+    "https://dl.yychuiyan.com/firepick/ios-sources.json?v=\(officialSourceVersion)"
   var selectedCategory: FirepickCore.Category?
   /// Which category `homeResult.list` currently belongs to (avoids chip/list mismatch).
   var browseListBelongsToTypeId: String?
@@ -3043,6 +3044,7 @@ final class AppModel {
       }
       guard generation == homeLoadGeneration else { return }
       attachSourceKey(site.key, to: &result)
+      result = BrowseCatalogPolicy.bound(result)
       if result.list.isEmpty, let previousHome, !previousHome.list.isEmpty {
         // Pull-to-refresh failure must not replace readable posters with an error page.
         homeResult = previousHome
@@ -3252,6 +3254,7 @@ final class AppModel {
           )
           if Task.isCancelled || generation != homeLoadGeneration { return }
           attachSourceKey(site.key, to: &result)
+          result = BrowseCatalogPolicy.bound(result)
           storeCategoryCache(result, cacheKey: cacheKey, page: 1)
           PosterPrefetch.warm(items: result.list, limit: 4)
           if selectedCategory?.typeId == typeId,
@@ -3272,8 +3275,8 @@ final class AppModel {
   }
 
   private func storeCategoryCache(_ result: MediaResult, cacheKey: String, page: Int) {
-    categoryCache[cacheKey] = result
-    categoryPageByKey[cacheKey] = page
+    categoryCache[cacheKey] = BrowseCatalogPolicy.bound(result)
+    categoryPageByKey[cacheKey] = 1
   }
 
   private func applyCachedCategory(
@@ -3281,13 +3284,13 @@ final class AppModel {
     typeId: String,
     cacheKey: String
   ) {
-    var shown = cached
+    var shown = BrowseCatalogPolicy.bound(cached)
     shown.classes = homeResult?.classes ?? cached.classes
     shown.filters = homeResult?.filters ?? cached.filters
     homeResult = shown
     browseListBelongsToTypeId = typeId
     browseDisplayedCacheKey = cacheKey
-    currentPage = categoryPageByKey[cacheKey] ?? 1
+    currentPage = 1
     errorMessage = nil
     isLoadingHome = false
     PosterPrefetch.warm(items: shown.list, limit: 12)
@@ -3310,8 +3313,8 @@ final class AppModel {
       disk.siteKey == site.key,
       !disk.results.isEmpty
     else { return }
-    categoryCache = disk.results
-    categoryPageByKey = disk.pages
+    categoryCache = disk.results.mapValues(BrowseCatalogPolicy.bound)
+    categoryPageByKey = disk.pages.mapValues { _ in 1 }
     // Hidden tabs load their posters on first selection. Prewarming every
     // cached category caused up to 40 redundant image requests on launch.
   }
@@ -3328,9 +3331,10 @@ final class AppModel {
 
     let typeId = "bucket|recommend"
     let cacheKey = categoryCacheKey(site: site, typeId: typeId)
-    guard let cached = disk.results[cacheKey] else { return }
-    categoryCache = disk.results
-    categoryPageByKey = disk.pages
+    guard let rawCached = disk.results[cacheKey] else { return }
+    let cached = BrowseCatalogPolicy.bound(rawCached)
+    categoryCache = disk.results.mapValues(BrowseCatalogPolicy.bound)
+    categoryPageByKey = disk.pages.mapValues { _ in 1 }
     let category =
       cached.classes.first(where: { $0.typeId == typeId })
       ?? cached.classes.first
@@ -3338,7 +3342,7 @@ final class AppModel {
     homeResult = cached
     browseListBelongsToTypeId = category?.typeId
     browseDisplayedCacheKey = cacheKey
-    currentPage = disk.pages[cacheKey] ?? 1
+    currentPage = 1
     errorMessage = nil
     PosterPrefetch.warm(items: cached.list, limit: 6)
   }
@@ -3463,6 +3467,7 @@ final class AppModel {
         result.filters = homeResult?.filters
       }
       attachSourceKey(site.key, to: &result)
+      result = BrowseCatalogPolicy.bound(result)
       storeCategoryCache(result, cacheKey: cacheKey, page: 1)
       homeResult = result
       browseListBelongsToTypeId = category.typeId
@@ -3550,6 +3555,7 @@ final class AppModel {
         result.filters = previous?.filters
       }
       attachSourceKey(site.key, to: &result)
+      result = BrowseCatalogPolicy.bound(result)
       storeCategoryCache(result, cacheKey: cacheKey, page: 1)
       homeResult = result
       browseListBelongsToTypeId = typeId

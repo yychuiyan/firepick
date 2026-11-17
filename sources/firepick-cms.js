@@ -24,6 +24,13 @@ function providersForMode(providers, adultMode) {
   });
 }
 
+function rotatedProviders(providers, offset) {
+  const source = (providers || []).slice();
+  if (source.length < 2) return source;
+  const shift = Math.abs(Number(offset) || 0) % source.length;
+  return source.slice(shift).concat(source.slice(0, shift));
+}
+
 const ADULT_TYPE_PATTERN =
   /成人|里番|伦理|福利|色情|三级|自拍|偷拍|主播|无码|乱伦|群交|性爱|美乳|强奸|探花|换脸|重口|丝袜|人妻|熟女|激情/;
 
@@ -843,9 +850,8 @@ const BATCH_SIZE = 8;
 const REQUEST_TIMEOUT_MS = 12000;
 // First-paint list fetch — don't let one slow host hold the grid for 12s.
 const FIRST_PAINT_TIMEOUT_MS = 3500;
-// Smaller first screen → stop waiting on slow CMS hosts sooner.
-// First paint: 12 cards (~4 rows × 3). Smaller grids load covers faster.
-const FIRST_SCREEN = 12;
+// Cache-first browsing: six rows × three cards per menu, no automatic pages.
+const FIRST_SCREEN = 18;
 const ADULT_PATTERN = /伦理|福利|里番|无码|有码|SWAG|色情|成人|黄游|性爱|口交|三级片/i;
 
 function encode(value) {
@@ -1504,6 +1510,7 @@ export default class extends Spider {
     this.typeNameByProviderType = {};
     this.parentTypeIds = {};
     this.catalogReady = false;
+    this.providerRotation = Math.floor(Math.random() * 997);
     if (!ext) return;
     try {
       const config =
@@ -1604,8 +1611,11 @@ export default class extends Spider {
 
   async homeContent(filter) {
     const configuredProviders = this.providers || DEFAULT_PROVIDERS;
-    const providers = providersForMode(configuredProviders, this.adultMode).filter(
-      function (provider) { return provider.adult !== true; }
+    const providers = rotatedProviders(
+      providersForMode(configuredProviders, this.adultMode).filter(
+        function (provider) { return provider.adult !== true; }
+      ),
+      this.providerRotation
     );
     const self = this;
     function acceptHome(provider, row) {
@@ -1724,12 +1734,28 @@ export default class extends Spider {
 
   async bucketContent(bucket, pg, extend) {
     const configuredProviders = this.providers || DEFAULT_PROVIDERS;
-    const providers = providersForMode(configuredProviders, this.adultMode).filter(
-      function (provider) { return bucket === 'adult' || provider.adult !== true; }
+    const providers = rotatedProviders(
+      providersForMode(configuredProviders, this.adultMode).filter(
+        function (provider) { return bucket === 'adult' || provider.adult !== true; }
+      ),
+      this.providerRotation
     );
+    // Adult pages must test dedicated sources first. General CMS hosts rarely
+    // publish an 成人 class and previously burned the whole first-paint budget.
+    if (bucket === 'adult') {
+      providers.sort(function (a, b) {
+        return Number(b.adult === true) - Number(a.adult === true);
+      });
+    }
     const providerKeys = new Set(providers.map(function (provider) {
       return provider.key;
     }));
+    const adultFirstProviders = bucket === 'adult'
+      ? providers.filter(function (provider) { return provider.adult === true; })
+      : [];
+    const firstPaintProviders = adultFirstProviders.length
+      ? adultFirstProviders
+      : providers;
     const requestedPage = Math.max(1, Number(pg) || 1);
     const self = this;
     const classKey = String((extend && extend.class) || '');
@@ -1835,10 +1861,9 @@ export default class extends Spider {
           }
         }
         ordered = applyCachedDoubanScores(preferHealthyPics(healPicsByTitle(ordered)));
-        // Keep pagecount open so loadMore can pull CMS pages 2+.
         return {
           page: 1,
-          pagecount: 99,
+          pagecount: 1,
           limit: ordered.length,
           total: ordered.length,
           list: ordered.slice(0, FIRST_SCREEN),
@@ -1852,7 +1877,7 @@ export default class extends Spider {
     if (requestedPage === 1 && !filtered) {
       const want = FIRST_SCREEN;
       list = await collectProviderLists(
-        providers,
+        firstPaintProviders,
         1,
         want * 2,
         extra,
@@ -1963,15 +1988,12 @@ export default class extends Spider {
       deduped = diversifyBySeriesFamily(diversifyByProvider(deduped, 3), 1);
     }
     // Do not diversify after explicit sort — it scrambled 上映时间 / 豆瓣热门 / 最新更新.
-    const hasMore = reportedPages > requestedPage || deduped.length >= FIRST_SCREEN;
     return {
       page: requestedPage,
-      pagecount: hasMore ? requestedPage + 1 : requestedPage,
+      pagecount: 1,
       limit: deduped.length,
       total: deduped.length,
-      list: requestedPage === 1 && !filtered
-        ? deduped.slice(0, FIRST_SCREEN)
-        : deduped,
+      list: deduped.slice(0, FIRST_SCREEN),
     };
   }
 
@@ -2011,9 +2033,12 @@ export default class extends Spider {
   }
 
   async searchContent(key, quick, pg) {
-    const configured = providersForMode(
-      this.providers || DEFAULT_PROVIDERS,
-      this.adultMode
+    const configured = rotatedProviders(
+      providersForMode(
+        this.providers || DEFAULT_PROVIDERS,
+        this.adultMode
+      ),
+      this.providerRotation
     );
     // Wave 1: only the first few (already ordered for healthy/fast hosts).
     const wave1 = configured.slice(0, Math.min(4, configured.length));

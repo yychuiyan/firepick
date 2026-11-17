@@ -74,7 +74,7 @@ https://raw.githubusercontent.com/gaotianliuyun/gao/master/js.json
 拾萤自建的聚合配置地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/ios-sources.json?v=22
+https://dl.yychuiyan.com/firepick/ios-sources.json?v=23
 ```
 
 只包含 iOS 本机可运行源的兼容线路：

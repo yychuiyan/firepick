@@ -314,7 +314,7 @@ struct OnDeviceJavaScriptHostTests {
       routes: ["/normal": normalPayload, "/adult": adultPayload]
     )
     let host = OnDeviceJavaScriptHost(session: session)
-    let api = "https://dl.yychuiyan.com/firepick/firepick-cms.js?v=21"
+    let api = "https://dl.yychuiyan.com/firepick/firepick-cms.js?v=22"
 
     func ext(adultMode: Bool) -> JSONValue {
       .object([
@@ -345,6 +345,7 @@ struct OnDeviceJavaScriptHostTests {
     #expect(!JSFixtureURLProtocol.requestedPaths.contains("/adult"))
     #expect(standard.list.contains { $0.name == "普通电影" })
     #expect(!standard.list.contains { $0.name == "成人测试" })
+    #expect(standard.list.count <= BrowseCatalogPolicy.itemsPerMenu)
     #expect(!standard.classes.contains { $0.typeId == "bucket|adult" })
     #expect(standard.filters?["bucket|adult"] == nil)
     await host.destroy()
@@ -382,6 +383,8 @@ struct OnDeviceJavaScriptHostTests {
     #expect(JSFixtureURLProtocol.requestedPaths.contains("/adult"))
     #expect(adultColumn.list.contains { $0.name == "成人测试" })
     #expect(adultColumn.list.contains { $0.name == "自拍测试" })
+    #expect(adultColumn.list.count <= BrowseCatalogPolicy.itemsPerMenu)
+    #expect(adultColumn.pagecount == 1)
     let selfieColumn = try await adultHost.invoke(
       api: api,
       ext: ext(adultMode: true),

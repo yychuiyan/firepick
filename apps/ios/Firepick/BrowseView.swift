@@ -102,21 +102,9 @@ struct BrowseView: View {
           } else if !latestItems.isEmpty {
             ScrollView {
               LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(Array(latestItems.enumerated()), id: \.element.id) { index, item in
+                ForEach(latestItems, id: \.id) { item in
                   posterButton(item)
                     .id(item.id)
-                    .onAppear {
-                      // First screen stays at ~12. More pages only when the user
-                      // scrolls to the last row — never prefetch mid-grid.
-                      guard latestItems.count >= 12 else { return }
-                      guard !model.isLoadingMore, !model.isLoadingHome else { return }
-                      guard model.currentPage < (model.homeResult?.pagecount ?? 0) else {
-                        return
-                      }
-                      if index >= latestItems.count - 2 {
-                        Task { await model.loadMore() }
-                      }
-                    }
                 }
               }
               .padding(.horizontal)
@@ -124,18 +112,6 @@ struct BrowseView: View {
               .padding(.bottom, 72)
               .scrollTargetLayout()
 
-              if model.isLoadingMore {
-                ProgressView()
-                  .frame(maxWidth: .infinity)
-                  .padding(.vertical, 8)
-              } else if model.loadMoreFailed {
-                Button("加载失败 · 重试") {
-                  Task { await model.loadMore() }
-                }
-                .buttonStyle(.bordered)
-                .frame(maxWidth: .infinity)
-                .padding(.bottom, 72)
-              }
             }
             .id(browseScrollKey)
             .scrollPosition(id: browseScrollPosition, anchor: .top)

@@ -725,9 +725,15 @@ struct PlayerView: View {
   private func attachPlaybackSystemObservers<V: View>(to content: V) -> some View {
     content
       .onChange(of: scenePhase) { _, phase in
-        if phase == .background, !model.backgroundPlaybackEnabled {
-          playbackEngine.pause()
+        if phase == .background {
+          if model.backgroundPlaybackEnabled {
+            configureAudioSession()
+            if wantsPlaying { playbackEngine.play() }
+          } else {
+            playbackEngine.pause()
+          }
         } else if phase == .active, wantsPlaying, model.backgroundPlaybackEnabled {
+          configureAudioSession()
           playbackEngine.play()
         }
       }
@@ -735,7 +741,12 @@ struct PlayerView: View {
         incognitoThisSession = enabled
       }
       .onChange(of: model.backgroundPlaybackEnabled) { _, enabled in
-        if enabled { configureAudioSession() }
+        if enabled {
+          configureAudioSession()
+          if scenePhase == .background, wantsPlaying {
+            playbackEngine.play()
+          }
+        }
       }
       .onChange(of: model.isNetworkConstrained) { _, constrained in
         if !constrained {
@@ -750,6 +761,14 @@ struct PlayerView: View {
         handleInterruption(note)
       }
       .onDisappear {
+        if PlaybackLifecyclePolicy.keepsAudioWhenViewDisappears(
+          backgroundPlaybackEnabled: model.backgroundPlaybackEnabled,
+          isBackground: scenePhase != .active
+        ) {
+          hideTask?.cancel()
+          persistWatchProgress(force: true)
+          return
+        }
         isPlayerMounted = false
         hideTask?.cancel()
         nextEpisodeCountdownTask?.cancel()

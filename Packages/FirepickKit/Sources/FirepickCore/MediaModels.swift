@@ -298,6 +298,19 @@ public struct MediaResult: Codable, Equatable, Sendable {
     }
 }
 
+public enum BrowseCatalogPolicy {
+  public static let itemsPerMenu = 18
+
+  /// Browse menus are intentionally cache-first snapshots. A bounded first page
+  /// avoids unbounded pagination and repeated poster requests on old devices.
+  public static func bound(_ result: MediaResult) -> MediaResult {
+    var bounded = result
+    bounded.list = Array(bounded.list.prefix(itemsPerMenu))
+    bounded.pagecount = 1
+    return bounded
+  }
+}
+
 public struct SourceFilter: Codable, Equatable, Sendable {
     public var key: String
     public var name: String

@@ -19,9 +19,9 @@
 当前公开发布版本：
 
 ```text
-Version: 0.1.43
-Build:   45
-SHA-256: c28201b48b5ba0f5ceb1b114d7f174adfe35bc88ccc74b908ddc1faf86e5e920
+Version: 0.1.44
+Build:   46
+SHA-256: a7cbddf1ced247b68ee0d8ffcfcea219b070f4d6d65078ab11cc3b90fe101186
 ```
 
 SideStore 更新源：
@@ -33,7 +33,7 @@ https://firepick-1302621537.cos.ap-shanghai.myqcloud.com/firepick/firepick.json
 当前 IPA 下载地址：
 
 ```text
-https://dl.yychuiyan.com/firepick/Firepick-0.1.43.ipa
+https://dl.yychuiyan.com/firepick/Firepick-0.1.44.ipa
 ```
 
 ## 功能概览
@@ -86,7 +86,7 @@ SideStore Source 是应用更新清单；Firepick 点播源是 CatVod/TVBox 配�
 拾萤自建聚合配置可直接在 `设置 → 当前线路` 中添加：
 
 ```text
-https://dl.yychuiyan.com/firepick/ios-sources.json?v=22
+https://dl.yychuiyan.com/firepick/ios-sources.json?v=23
 ```
 
 它当前是单站「拾萤精选」聚合活跃 AppleCMS 采集接口，外加七组电视源，

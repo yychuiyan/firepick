@@ -106,6 +106,15 @@ public enum PlaybackDecode: String, CaseIterable, Sendable {
   case software
 }
 
+public enum PlaybackLifecyclePolicy {
+  public static func keepsAudioWhenViewDisappears(
+    backgroundPlaybackEnabled: Bool,
+    isBackground: Bool
+  ) -> Bool {
+    backgroundPlaybackEnabled && isBackground
+  }
+}
+
 public struct PlaybackEngineOptions: Equatable, Sendable {
   public var videoOutput: PlaybackVideoOutput
   public var decode: PlaybackDecode
@@ -190,6 +199,7 @@ public final class AVPlayerEngine: PlaybackEngine {
   private var lastVideoFrameCapture = Date.distantPast
 
   public init() {
+    player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
     timeObserver = player.addPeriodicTimeObserver(
       forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
       queue: .main
