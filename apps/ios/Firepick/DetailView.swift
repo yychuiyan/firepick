@@ -181,6 +181,12 @@ struct DetailView: View {
           FirepickBackdrop()
         }
       }
+      .simultaneousGesture(
+        compactPlayerBackGesture(
+          in: geo.size,
+          windowPortrait: windowPortrait
+        )
+      )
     }
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.hidden, for: .navigationBar)
@@ -323,6 +329,27 @@ struct DetailView: View {
         OrientationBridge.enterPortraitThenUnlock()
       }
     }
+  }
+
+  private func compactPlayerBackGesture(
+    in size: CGSize,
+    windowPortrait: Bool
+  ) -> some Gesture {
+    DragGesture(minimumDistance: 18)
+      .onEnded { value in
+        guard playback != nil,
+          !isPlayerExpanded,
+          windowPortrait,
+          PlayerBackGesturePolicy.shouldNavigateBack(
+            startLocation: value.startLocation,
+            translation: value.translation,
+            stageWidth: size.width,
+            allowsRightHalfStart: true
+          )
+        else { return }
+        playback = nil
+        dismiss()
+      }
   }
 
   @ViewBuilder
