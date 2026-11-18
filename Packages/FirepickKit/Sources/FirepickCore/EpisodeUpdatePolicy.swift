@@ -53,6 +53,16 @@ public enum EpisodeUpdatePolicy {
     return nil
   }
 
+  public static func displayProgress(from remarks: String?) -> String? {
+    let text = remarks?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !text.isEmpty else { return nil }
+    guard let count = progressEpisodeCount(from: text) else { return text }
+    if text.contains("全"), !text.contains("更新") {
+      return "全\(count)集"
+    }
+    return "已更新至\(count)集"
+  }
+
   public static func isCheckDue(
     lastCheckedAt: Date?,
     now: Date,

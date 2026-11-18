@@ -35,6 +35,21 @@ struct PlaybackTests {
         stageWidth: 390
       )
     )
+    #expect(
+      PlayerBackGesturePolicy.shouldNavigateBack(
+        startLocation: CGPoint(x: 300, y: 120),
+        translation: CGSize(width: 70, height: 8),
+        stageWidth: 390,
+        allowsRightHalfStart: true
+      )
+    )
+    #expect(
+      !PlayerBackGesturePolicy.shouldNavigateBack(
+        startLocation: CGPoint(x: 300, y: 120),
+        translation: CGSize(width: 70, height: 8),
+        stageWidth: 390
+      )
+    )
   }
 
   @Test

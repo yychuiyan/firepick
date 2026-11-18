@@ -95,6 +95,22 @@ struct EpisodeUpdatePolicyTests {
     )
   }
 
+  @Test
+  func formatsFavoriteUpdateStatus() {
+    #expect(
+      EpisodeUpdatePolicy.displayProgress(from: "更新至109集")
+        == "已更新至109集"
+    )
+    #expect(
+      EpisodeUpdatePolicy.displayProgress(from: "全40集")
+        == "全40集"
+    )
+    #expect(
+      EpisodeUpdatePolicy.displayProgress(from: "高清")
+        == "高清"
+    )
+  }
+
   private func episodesURL(count: Int) -> String {
     (1...count)
       .map { "第\($0)集$https://media.example.com/\($0).m3u8" }

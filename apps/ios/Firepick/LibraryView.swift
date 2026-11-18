@@ -104,8 +104,29 @@ struct LibraryView: View {
 
   private var posterGrid: some View {
     ScrollView {
-      LazyVGrid(columns: columns, spacing: 12) {
-        if mode == .history {
+      if mode == .favorites {
+        LazyVStack(spacing: 9) {
+          ForEach(model.libraryFavoritePrograms) { entry in
+            let display = model.libraryDisplayItem(from: entry.item)
+            let history = model.libraryHistoryEntry(for: entry)
+            Button {
+              model.detailResult = nil
+              openDetail(entry.item)
+            } label: {
+              favoriteProgramRow(display: display, history: history)
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+              Button("取消收藏", role: .destructive) {
+                Task { await model.removeFavorite(entry) }
+              }
+            }
+          }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+      } else {
+        LazyVGrid(columns: columns, spacing: 12) {
           // One card per programme — not per 线路 / 每一集.
           ForEach(model.libraryHistoryPrograms) { entry in
             let display = model.libraryDisplayItem(from: entry.item)
@@ -133,26 +154,105 @@ struct LibraryView: View {
               }
             }
           }
-        } else {
-          ForEach(model.libraryFavoritePrograms) { entry in
-            let display = model.libraryDisplayItem(from: entry.item)
-            Button {
-              model.detailResult = nil
-              openDetail(entry.item)
-            } label: {
-              MediaCardView(item: display)
-            }
-            .buttonStyle(.plain)
-            .contextMenu {
-              Button("取消收藏", role: .destructive) {
-                Task { await model.removeFavorite(entry) }
-              }
-            }
+        }
+        .padding()
+      }
+    }
+  }
+
+  private func favoriteProgramRow(
+    display: MediaItem,
+    history: HistoryEntry?
+  ) -> some View {
+    HStack(alignment: .top, spacing: 10) {
+      favoritePoster(display)
+
+      VStack(alignment: .leading, spacing: 5) {
+        HStack(alignment: .top, spacing: 8) {
+          Text(display.name)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .multilineTextAlignment(.leading)
+          Spacer(minLength: 4)
+          Image(systemName: "chevron.right")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.tertiary)
+            .padding(.top, 2)
+        }
+
+        Text(favoriteWatchText(history))
+          .font(.subheadline.weight(.semibold))
+          .foregroundStyle(history == nil ? Color.secondary : Color.orange)
+          .lineLimit(1)
+
+        Text(
+          EpisodeUpdatePolicy.displayProgress(from: display.remarks)
+            ?? "暂无更新信息"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+
+        if let history {
+          HStack(spacing: 7) {
+            ProgressView(
+              value: history.duration > 0
+                ? min(1, max(0, history.position / history.duration))
+                : 0
+            )
+            .tint(.orange)
+            Text("上次看到 \(format(history.position))")
+              .font(.caption2.monospacedDigit())
+              .foregroundStyle(.tertiary)
+              .fixedSize()
           }
         }
       }
-      .padding()
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
+    .padding(8)
+    .background(
+      Color(.secondarySystemGroupedBackground),
+      in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: 14, style: .continuous)
+        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.7)
+    }
+    .contentShape(Rectangle())
+  }
+
+  private func favoriteWatchText(_ history: HistoryEntry?) -> String {
+    guard let history else { return "尚未观看" }
+    let episode = history.episodeName.trimmingCharacters(in: .whitespacesAndNewlines)
+    return episode.isEmpty ? "已开始观看" : "当前观看到 \(episode)"
+  }
+
+  private func favoritePoster(_ item: MediaItem) -> some View {
+    CachedRemoteImage(
+      url: RemoteImageCache.normalizedURL(from: item.pic),
+      alternativeURLs: {
+        await model.alternativePosterURLs(for: item)
+      },
+      aiAlternativeURLs: {
+        await model.aiAlternativePosterURLs(for: item)
+      },
+      onAlternativeResolved: { url in
+        model.rememberRecoveredPosterURL(url, for: item)
+      },
+      onFinalFailure: {
+        model.forgetRecoveredPosterURL(for: item)
+      },
+      failureArtwork: AnyView(DefaultPosterArtwork())
+    ) {
+      Color.black.opacity(0.12)
+        .shimmering()
+    }
+    .scaledToFill()
+    .frame(width: 70, height: 94)
+    .clipped()
+    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
   }
 
   private var canClear: Bool {

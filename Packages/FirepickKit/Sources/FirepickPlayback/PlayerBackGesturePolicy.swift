@@ -9,13 +9,31 @@ public enum PlayerBackGesturePolicy {
     return startX >= 0 && startX <= edgeWidth
   }
 
+  public static func isBackGestureStart(
+    _ startX: CGFloat,
+    stageWidth: CGFloat,
+    allowsRightHalfStart: Bool = false
+  ) -> Bool {
+    if isLeftEdgeStart(startX, stageWidth: stageWidth) {
+      return true
+    }
+    return allowsRightHalfStart
+      && startX >= stageWidth * 0.5
+      && startX <= stageWidth
+  }
+
   public static func shouldNavigateBack(
     startLocation: CGPoint,
     translation: CGSize,
-    stageWidth: CGFloat
+    stageWidth: CGFloat,
+    allowsRightHalfStart: Bool = false
   ) -> Bool {
     let minimumDistance = min(56, max(44, stageWidth * 0.12))
-    guard isLeftEdgeStart(startLocation.x, stageWidth: stageWidth) else { return false }
+    guard isBackGestureStart(
+      startLocation.x,
+      stageWidth: stageWidth,
+      allowsRightHalfStart: allowsRightHalfStart
+    ) else { return false }
     guard translation.width >= minimumDistance else { return false }
     return abs(translation.width) > abs(translation.height) * 1.35
   }

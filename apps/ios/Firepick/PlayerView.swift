@@ -998,7 +998,8 @@ struct PlayerView: View {
         guard PlayerBackGesturePolicy.shouldNavigateBack(
           startLocation: value.startLocation,
           translation: value.translation,
-          stageWidth: size.width
+          stageWidth: size.width,
+          allowsRightHalfStart: !usesExpandedPlayerChrome
         ) else { return }
         performPlayerBack()
       }
@@ -2639,9 +2640,10 @@ struct PlayerView: View {
       .onChanged { value in
         guard holdSpeedSide == nil else { return }
         // Leave left-edge horizontal drags to swipe-back (real-device Nav/pop).
-        if PlayerBackGesturePolicy.isLeftEdgeStart(
+        if PlayerBackGesturePolicy.isBackGestureStart(
           value.startLocation.x,
-          stageWidth: size.width
+          stageWidth: size.width,
+          allowsRightHalfStart: !usesExpandedPlayerChrome
         ),
           abs(value.translation.width) >= abs(value.translation.height)
         {

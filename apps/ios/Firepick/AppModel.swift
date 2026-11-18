@@ -1508,6 +1508,15 @@ final class AppModel {
     Self.dedupeByProgramTitle(history) { Self.normalizedTitle($0.item.name) }
   }
 
+  /// Latest watch state for a favourite, matching by programme title so a
+  /// provider/VOD-id change does not hide the user's current episode.
+  func libraryHistoryEntry(for favorite: FavoriteEntry) -> HistoryEntry? {
+    let target = Self.normalizedTitle(favorite.item.name)
+    return history
+      .filter { Self.normalizedTitle($0.item.name) == target }
+      .max { $0.updatedAt < $1.updatedAt }
+  }
+
   /// Library cards may still store dead CDN covers — borrow a healthier pic from home/history/search.
   func libraryDisplayItem(from item: MediaItem) -> MediaItem {
     guard let healed = healthierPoster(for: item), healed != item.pic else { return item }
