@@ -73,6 +73,11 @@ const FILTER_CLASS = [
   { n: '家庭', v: '家庭' },
 ];
 
+// 漫威是本地合成筛选，不会是 CMS 的真实 type/class。
+const FILTER_CLASS_MOVIE = FILTER_CLASS.concat([
+  { n: '漫威', v: '漫威' },
+]);
+
 const FILTER_AREA = [
   { n: '全部', v: '' },
   { n: '大陆', v: '大陆' },
@@ -107,10 +112,9 @@ const FILTER_SORT = [
   { n: '豆瓣评分', v: 'douban' },
 ];
 
-// 电影：与剧/综/漫一致，默认热门（豆瓣榜 / 大站热播优先）；上映时间改为可选。
+// 电影：默认按最新上映时间排序，其他排序仍可手动选择。
 const FILTER_SORT_MOVIE = [
-  { n: '热门', v: '' },
-  { n: '上映时间', v: 'release' },
+  { n: '最新时间', v: '' },
   { n: '最新更新', v: 'time' },
   { n: '最热', v: 'hits' },
   { n: '豆瓣评分', v: 'douban' },
@@ -173,7 +177,9 @@ function bucketFilters(bucket) {
     key: 'class',
     name: '类型',
     init: '',
-    value: anime ? ANIME_CLASS : FILTER_CLASS,
+    value: anime
+      ? ANIME_CLASS
+      : (bucket === 'movie' ? FILTER_CLASS_MOVIE : FILTER_CLASS),
   });
   if (!anime) {
     filters.push({ key: 'area', name: '地区', init: '', value: FILTER_AREA });
@@ -228,6 +234,20 @@ function matchesAnimeClass(item, classKey) {
   }
   const blob = [item && item.type_name, item && item.vod_class, item && item.vod_tag, item && item.vod_name].join(' ');
   return blob.indexOf(classKey) >= 0;
+}
+
+const MARVEL_PATTERN =
+  /漫威|marvel|复仇者|蜘蛛侠|钢铁侠|美国队长|雷神|绿巨人|黑寡妇|鹰眼|奇异博士|银河护卫队|蚁人|黑豹|死侍|金刚狼|x战警|洛基|尚气|永恒族|雷霆特攻队|神奇四侠|夜魔侠|惩罚者/i;
+
+function matchesMarvel(item) {
+  const blob = [
+    item && item.vod_name,
+    item && item.type_name,
+    item && item.vod_class,
+    item && item.vod_tag,
+    item && item.vod_actor,
+  ].join(' ');
+  return MARVEL_PATTERN.test(blob);
 }
 
 const ADULT_CLASS_RULES = [
@@ -342,14 +362,14 @@ function hotRecentScore(item, current) {
   return score;
 }
 
-/// 上映时间：年份优先（避免高分老片靠平台分压过新片），再轻量平台分，再入库时间。
+/// 上映时间：年份优先，同年再按片源时间。平台权重不能压过真实时间。
 function releaseTime(item) {
   const year = Number(String((item && item.vod_year) || '').slice(0, 4));
   const yearScore = Number.isFinite(year) && year > 1900 ? year : 0;
   const raw = String((item && (item.vod_time || item.vod_time_add)) || '').trim();
   const time = Date.parse(raw.replace(' ', 'T'));
   const timeScore = Number.isFinite(time) ? time : 0;
-  return yearScore * 1e13 + majorPlatformRank(item) * 1e10 + timeScore;
+  return yearScore * 1e13 + timeScore;
 }
 
 function sortByReleaseTime(list) {
@@ -403,9 +423,9 @@ function applyExtend(list, extend, bucket) {
   let out = list.slice();
   if (classKey) {
     out = out.filter(function (item) {
-      return bucket === 'adult'
-        ? matchesAdultClass(item, classKey)
-        : matchesAnimeClass(item, classKey);
+      if (bucket === 'adult') return matchesAdultClass(item, classKey);
+      if (bucket === 'movie' && classKey === '漫威') return matchesMarvel(item);
+      return matchesAnimeClass(item, classKey);
     });
   }
   if (areaKey) {
@@ -426,24 +446,24 @@ function applyExtend(list, extend, bucket) {
   }
   if (sortKey === 'hits') {
     out.sort(function (a, b) {
+      const hits = parseScore(b.vod_hits) - parseScore(a.vod_hits);
+      if (hits) return hits;
       const platform = majorPlatformRank(b) - majorPlatformRank(a);
-      if (platform) return platform;
-      return parseScore(b.vod_hits) - parseScore(a.vod_hits);
+      return platform || recency(b) - recency(a);
     });
   } else if (sortKey === 'douban') {
     out.sort(function (a, b) {
-      const platform = majorPlatformRank(b) - majorPlatformRank(a);
-      if (platform) return platform;
       const left = parseScore(a.vod_douban_score) || parseScore(a.vod_score);
       const right = parseScore(b.vod_douban_score) || parseScore(b.vod_score);
       if (right !== left) return right - left;
-      return recency(b) - recency(a);
+      const platform = majorPlatformRank(b) - majorPlatformRank(a);
+      return platform || recency(b) - recency(a);
     });
   } else if (sortKey === 'time') {
     out.sort(function (a, b) {
-      const platform = majorPlatformRank(b) - majorPlatformRank(a);
-      if (platform) return platform;
-      return recency(b) - recency(a);
+      const time = recency(b) - recency(a);
+      if (time) return time;
+      return majorPlatformRank(b) - majorPlatformRank(a);
     });
   } else if (sortKey === 'hot') {
     out = sortByHotRecent(out);
@@ -453,9 +473,8 @@ function applyExtend(list, extend, bucket) {
     // 显式「上映时间」
     out = sortByReleaseTime(out);
   } else if (!sortKey) {
-    // Default (含电影)：Douban chart order when resolved upstream;
-    // fallback CMS path still uses hot-recent + major-platform rank.
-    out = sortByHotRecent(out);
+    // 电影列表默认按最新时间；剧/综/漫仍使用热门最近排序。
+    out = bucket === 'movie' ? sortByReleaseTime(out) : sortByHotRecent(out);
   } else {
     out = sortByHotRecent(out);
   }
@@ -850,12 +869,24 @@ const BATCH_SIZE = 8;
 const REQUEST_TIMEOUT_MS = 12000;
 // First-paint list fetch — don't let one slow host hold the grid for 12s.
 const FIRST_PAINT_TIMEOUT_MS = 3500;
+// Catalog discovery only builds local filter indexes; a short budget is enough
+// for healthy mirrors while dead hosts must not delay every first filter tap.
+const CATALOG_TIMEOUT_MS = 2600;
+// One filtered screen returns partial results instead of waiting for every host.
+const FILTER_TYPED_DEADLINE_MS = 3000;
 // Cache-first browsing: six rows × three cards per menu, no automatic pages.
 const FIRST_SCREEN = 18;
 const ADULT_PATTERN = /伦理|福利|里番|无码|有码|SWAG|色情|成人|黄游|性爱|口交|三级片/i;
 
 function encode(value) {
   return encodeURIComponent(String(value == null ? '' : value));
+}
+
+function cmsYearParam(year) {
+  const value = String(year || '');
+  // 2010/2000 are local range filters, not exact CMS years.
+  if (value === '2010' || value === '2000') return '';
+  return /^\d{4}$/.test(value) ? value : '';
 }
 
 function catalogParams(typeId, page, extend) {
@@ -868,7 +899,8 @@ function catalogParams(typeId, page, extend) {
   const yearParam = String(ext.year || '');
   const areaParam = String(ext.area || '');
   const classParam = String(ext.class || '');
-  if (/^\d{4}$/.test(yearParam)) params.year = yearParam;
+  const safeYear = cmsYearParam(yearParam);
+  if (safeYear) params.year = safeYear;
   if (areaParam && areaParam !== '其他') params.area = areaParam;
   if (classParam) params.class = classParam;
   return params;
@@ -953,15 +985,22 @@ async function collectTypedLists(targets, page, limit, extra, accept) {
   let cursor = 0;
   let pagecount = Number(page) || 1;
   const concurrency = Math.min(4, targets.length);
+  const deadline = Date.now() + FILTER_TYPED_DEADLINE_MS;
   async function worker() {
-    while (cursor < targets.length && list.length < limit) {
+    while (cursor < targets.length && list.length < limit && Date.now() < deadline) {
       const target = targets[cursor];
       cursor += 1;
       const params = { ac: 'videolist', t: String(target.typeId), pg: String(page) };
       if (extra && extra.year) params.year = extra.year;
       if (extra && extra.area) params.area = extra.area;
       if (extra && extra.class) params.class = extra.class;
-      const data = await requestJSON(target.provider.api, params);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      const data = await requestJSON(
+        target.provider.api,
+        params,
+        Math.min(FIRST_PAINT_TIMEOUT_MS, remaining)
+      );
       const reported = Number(data && data.pagecount);
       if (Number.isFinite(reported) && reported > pagecount) pagecount = reported;
       const items = data && Array.isArray(data.list) ? data.list : [];
@@ -1029,6 +1068,17 @@ function matchesArea(item, areaKey) {
   if (areaKey === '日本' && /日剧|日本/.test(typeBlob)) return true;
   if ((areaKey === '香港' || areaKey === '台湾') && typeBlob.indexOf(areaKey) >= 0) return true;
   return false;
+}
+
+function countryTvLeafPattern(areaKey) {
+  if (areaKey === '大陆') return /国产|大陆|内地/;
+  if (areaKey === '香港') return /香港|港剧|港台剧/;
+  if (areaKey === '台湾') return /台湾|台剧|港台剧/;
+  if (areaKey === '美国') return /美国|美剧|欧美剧/;
+  if (areaKey === '韩国') return /韩国|韩剧|日韩剧/;
+  if (areaKey === '日本') return /日本|日剧|日韩剧/;
+  if (areaKey === '英国') return /英国|英剧|欧美剧/;
+  return null;
 }
 
 function looksAdult(item) {
@@ -1681,15 +1731,29 @@ export default class extends Spider {
 
   async ensureCatalogs() {
     if (this.catalogReady) return;
+    if (this.catalogTask) return this.catalogTask;
     const providers = providersForMode(
       this.providers || DEFAULT_PROVIDERS,
       this.adultMode
     );
-    await Promise.all(providers.map(async (provider) => {
-      const catalog = await requestJSON(provider.api, { ac: 'list' });
-      this.rememberCatalog(provider, catalog);
-    }));
-    this.catalogReady = true;
+    const self = this;
+    this.catalogTask = (async function () {
+      await Promise.all(providers.map(async function (provider) {
+        // One dead host must not hold every filtered page for 12 seconds.
+        const catalog = await requestJSON(
+          provider.api,
+          { ac: 'list' },
+          CATALOG_TIMEOUT_MS
+        );
+        if (catalog) self.rememberCatalog(provider, catalog);
+      }));
+      if (!self.typeIdsByBucket || !Object.keys(self.typeIdsByBucket).length) {
+        self.typeIdsByBucket = emptyBucketMap();
+      }
+      self.catalogReady = true;
+      self.catalogTask = null;
+    })();
+    return this.catalogTask;
   }
 
   leafTargets(bucket) {
@@ -1763,11 +1827,17 @@ export default class extends Spider {
     const yearKey = String((extend && extend.year) || '');
     const sortKey = String((extend && extend.by) || '');
     const extra = {};
-    if (extend && /^\d{4}$/.test(String(extend.year || ''))) {
-      extra.year = String(extend.year);
-    }
+    const safeYear = cmsYearParam(extend && extend.year);
+    if (safeYear) extra.year = safeYear;
     if (areaKey && areaKey !== '其他') extra.area = areaKey;
-    if (classKey && bucket !== 'anime' && bucket !== 'adult') extra.class = classKey;
+    if (
+      classKey
+      && bucket !== 'anime'
+      && bucket !== 'adult'
+      && !(bucket === 'movie' && classKey === '漫威')
+    ) {
+      extra.class = classKey;
+    }
     let list = [];
     let reportedPages = requestedPage;
 
@@ -1817,6 +1887,7 @@ export default class extends Spider {
         let ordered = packed.fromDouban
           ? packed.list
           : diversifyByProvider(sortByHotRecent(packed.list), 4);
+        if (bucket === 'movie') ordered = sortByReleaseTime(ordered);
         ordered = applyCachedDoubanScores(preferHealthyPics(healPicsByTitle(ordered)));
         function padOrdered(fromList) {
           const used = {};
@@ -1927,11 +1998,16 @@ export default class extends Spider {
           return matchesAdultClass({ type_name: target.typeName }, classKey);
         });
       }
-      if (filtered && areaKey === '大陆' && bucket === 'tv') {
-        const mainland = targets.filter(function (target) {
-          return /国产|大陆|内地/.test(target.typeName || '');
-        });
-        if (mainland.length) targets = mainland;
+      if (filtered && bucket === 'tv') {
+        const countryPattern = countryTvLeafPattern(areaKey);
+        if (countryPattern) {
+          const countryTargets = targets.filter(function (target) {
+            return countryPattern.test(target.typeName || '');
+          });
+          // Many CMS hosts ignore area= and return their default leaf. Query the
+          // country-specific leaf instead so Korea/Japan/US filters stay complete.
+          if (countryTargets.length) targets = countryTargets;
+        }
       }
       targets = this.preferredLeafTargets(bucket, targets);
       if (targets.length) {
@@ -1943,6 +2019,9 @@ export default class extends Spider {
             return null;
           }
           if (bucket === 'anime' && classKey && !matchesAnimeClass(row, classKey)) {
+            return null;
+          }
+          if (bucket === 'movie' && classKey === '漫威' && !matchesMarvel(row)) {
             return null;
           }
           const enriched = Object.assign({}, row);

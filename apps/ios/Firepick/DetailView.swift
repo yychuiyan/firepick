@@ -171,6 +171,12 @@ struct DetailView: View {
         )
         if showDetail {
           detailScroll
+            .simultaneousGesture(
+              compactPlayerBackGesture(
+                in: geo.size,
+                windowPortrait: windowPortrait
+              )
+            )
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -181,12 +187,6 @@ struct DetailView: View {
           FirepickBackdrop()
         }
       }
-      .simultaneousGesture(
-        compactPlayerBackGesture(
-          in: geo.size,
-          windowPortrait: windowPortrait
-        )
-      )
     }
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.hidden, for: .navigationBar)

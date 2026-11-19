@@ -101,36 +101,44 @@ struct BrowseView: View {
             }
           } else if !latestItems.isEmpty {
             ScrollView {
-              LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(latestItems, id: \.id) { item in
-                  posterButton(item)
-                    .id(item.id)
-                    .onAppear {
-                      guard item.id == latestItems.last?.id,
-                        model.hasActiveCategoryFilters
-                      else { return }
+              VStack(spacing: 0) {
+                LazyVGrid(columns: columns, spacing: 12) {
+                  ForEach(latestItems, id: \.id) { item in
+                    posterButton(item)
+                      .id(item.id)
+                      .onAppear {
+                        guard item.id == latestItems.last?.id,
+                          model.hasActiveCategoryFilters
+                        else { return }
+                        Task { await model.loadMore() }
+                      }
+                  }
+                }
+                .padding(.horizontal)
+                .padding(.top)
+                .scrollTargetLayout()
+
+                if model.hasActiveCategoryFilters, model.isLoadingMore {
+                  HStack {
+                    ProgressView("加载更多")
+                      .font(.caption)
+                      .tint(.orange)
+                  }
+                  .frame(maxWidth: .infinity)
+                  .padding(.vertical, 12)
+                } else if model.hasActiveCategoryFilters, model.loadMoreFailed {
+                  HStack {
+                    Button("加载更多失败，点击重试") {
                       Task { await model.loadMore() }
                     }
-                }
-                if model.hasActiveCategoryFilters, model.isLoadingMore {
-                  ProgressView("加载更多")
                     .font(.caption)
-                    .tint(.orange)
-                    .padding(.vertical, 12)
-                } else if model.hasActiveCategoryFilters, model.loadMoreFailed {
-                  Button("加载更多失败，点击重试") {
-                    Task { await model.loadMore() }
+                    .foregroundStyle(.secondary)
                   }
-                  .font(.caption)
-                  .foregroundStyle(.secondary)
+                  .frame(maxWidth: .infinity)
                   .padding(.vertical, 12)
                 }
               }
-              .padding(.horizontal)
-              .padding(.top)
               .padding(.bottom, 72)
-              .scrollTargetLayout()
-
             }
             .id(browseScrollKey)
             .scrollPosition(id: browseScrollPosition, anchor: .top)

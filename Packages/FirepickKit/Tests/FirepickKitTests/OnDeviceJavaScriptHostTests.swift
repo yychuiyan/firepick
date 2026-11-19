@@ -401,20 +401,693 @@ struct OnDeviceJavaScriptHostTests {
     await adultHost.destroy()
   }
 
+  @Test
+  func movieFiltersExposeMarvelWithoutTreatingItAsCmsClass() async throws {
+    let payload = #"""
+      {
+        "class": [
+          {"type_id": "1", "type_name": "电影"}
+        ],
+        "pagecount": 2,
+        "list": [
+          {
+            "vod_id": "1",
+            "vod_name": "复仇者联盟4：终局之战",
+            "type_id": "1",
+            "type_name": "电影",
+            "vod_pic": "https://img.jisuimage.com/cover/avengers.jpg"
+          },
+          {
+            "vod_id": "2",
+            "vod_name": "流浪地球",
+            "type_id": "1",
+            "type_name": "电影",
+            "vod_pic": "https://img.jisuimage.com/cover/wandering-earth.jpg"
+          },
+          {
+            "vod_id": "3",
+            "vod_name": "蜘蛛侠：英雄无归",
+            "type_id": "1",
+            "type_name": "电影",
+            "vod_pic": "https://img.jisuimage.com/cover/spider-man.jpg"
+          }
+        ]
+      }
+      """#
+    let session = try Self.makeSession(routes: ["/fast": payload])
+    let host = OnDeviceJavaScriptHost(session: session)
+    let api = "https://dl.yychuiyan.com/firepick/firepick-cms.js?v=22"
+    let ext = Self.providerExtension([
+      ("fast", "https://fixture.local/fast")
+    ])
+
+    let home = try await host.invoke(
+      api: api,
+      ext: ext,
+      method: .homeContent,
+      arguments: [.bool(false)]
+    )
+    let movieClasses = try #require(
+      home.filters?["bucket|movie"]?.first { $0.key == "class" }
+    )
+    let tvClasses = try #require(
+      home.filters?["bucket|tv"]?.first { $0.key == "class" }
+    )
+    #expect(movieClasses.value.contains { $0.name == "漫威" && $0.value == "漫威" })
+    #expect(!tvClasses.value.contains { $0.name == "漫威" })
+
+    JSFixtureURLProtocol.requestedURLs = []
+    let marvel = try await host.invoke(
+      api: api,
+      ext: ext,
+      method: .categoryContent,
+      arguments: [
+        .string("bucket|movie"),
+        .string("1"),
+        .bool(true),
+        .object(["class": .string("漫威")]),
+      ]
+    )
+    #expect(
+      marvel.list.map(\.name)
+        == ["复仇者联盟4：终局之战", "蜘蛛侠：英雄无归"]
+    )
+    #expect(
+      !JSFixtureURLProtocol.requestedURLs.contains { url in
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?
+          .queryItems?
+          .contains { $0.name == "class" && $0.value == "漫威" } == true
+      }
+    )
+    #expect(marvel.pagecount ?? 1 >= 2)
+    await host.destroy()
+  }
+
+  @Test
+  func filteredMovieLoadDoesNotWaitForDeadCatalogHost() async throws {
+    let payload = #"""
+      {
+        "class": [
+          {"type_id": "1", "type_name": "电影"}
+        ],
+        "pagecount": 2,
+        "list": [
+          {
+            "vod_id": "1",
+            "vod_name": "美国队长4",
+            "type_id": "1",
+            "type_name": "电影",
+            "vod_pic": "https://img.jisuimage.com/cover/captain-america.jpg"
+          }
+        ]
+      }
+      """#
+    let session = try Self.makeSession(
+      routes: [
+        "/fast": payload,
+        "/slow": payload,
+      ],
+      delays: ["/slow": 20]
+    )
+    let host = OnDeviceJavaScriptHost(session: session)
+    let api = "https://dl.yychuiyan.com/firepick/firepick-cms.js?v=22"
+    let ext = Self.providerExtension([
+      ("fast", "https://fixture.local/fast"),
+      ("slow", "https://fixture.local/slow"),
+    ])
+    let startedAt = Date()
+
+    let result = try await host.invoke(
+      api: api,
+      ext: ext,
+      method: .categoryContent,
+      arguments: [
+        .string("bucket|movie"),
+        .string("1"),
+        .bool(true),
+        .object(["class": .string("漫威")]),
+      ]
+    )
+
+    #expect(result.list.contains { $0.name == "美国队长4" })
+    #expect(Date().timeIntervalSince(startedAt) < 7)
+    await host.destroy()
+  }
+
+  @Test
+  func marvelMoviesSortByNewestReleaseInsteadOfPlatformWeight() async throws {
+    let payload = #"""
+      {
+        "class": [
+          {"type_id": "1", "type_name": "电影"}
+        ],
+        "pagecount": 2,
+        "list": [
+          {
+            "vod_id": "1",
+            "vod_name": "旧蜘蛛侠",
+            "type_id": "1",
+            "type_name": "电影",
+            "vod_year": "2026",
+            "vod_time": "2026-01-02 08:00:00",
+            "vod_actor": "腾讯视频独播",
+            "vod_pic": "https://img.jisuimage.com/cover/old.jpg"
+          },
+          {
+            "vod_id": "2",
+            "vod_name": "新蜘蛛侠",
+            "type_id": "1",
+            "type_name": "电影",
+            "vod_year": "2026",
+            "vod_time": "2026-11-18 20:00:00",
+            "vod_pic": "https://img.jisuimage.com/cover/new.jpg"
+          }
+        ]
+      }
+      """#
+    let session = try Self.makeSession(routes: ["/fast": payload])
+    let host = OnDeviceJavaScriptHost(session: session)
+    let api = "https://dl.yychuiyan.com/firepick/firepick-cms.js?v=22"
+    let ext = Self.providerExtension([
+      ("fast", "https://fixture.local/fast")
+    ])
+
+    let result = try await host.invoke(
+      api: api,
+      ext: ext,
+      method: .categoryContent,
+      arguments: [
+        .string("bucket|movie"),
+        .string("1"),
+        .bool(true),
+        .object(["class": .string("漫威")]),
+      ]
+    )
+
+    #expect(result.list.map(\.name) == ["新蜘蛛侠", "旧蜘蛛侠"])
+    await host.destroy()
+  }
+
+  @Test
+  func defaultMovieListSortsByNewestRelease() async throws {
+    let payload = #"""
+      {
+        "class": [
+          {"type_id": "1", "type_name": "电影"}
+        ],
+        "pagecount": 2,
+        "list": [
+          {
+            "vod_id": "1",
+            "vod_name": "去年电影",
+            "type_id": "1",
+            "type_name": "电影",
+            "vod_year": "2025",
+            "vod_time": "2026-01-02 08:00:00",
+            "vod_actor": "腾讯视频独播",
+            "vod_pic": "https://img.jisuimage.com/cover/last-year.jpg"
+          },
+          {
+            "vod_id": "2",
+            "vod_name": "今年电影",
+            "type_id": "1",
+            "type_name": "电影",
+            "vod_year": "2026",
+            "vod_time": "2026-03-18 20:00:00",
+            "vod_pic": "https://img.jisuimage.com/cover/this-year.jpg"
+          }
+        ]
+      }
+      """#
+    let session = try Self.makeSession(routes: ["/fast": payload])
+    let host = OnDeviceJavaScriptHost(session: session)
+    let api = "https://dl.yychuiyan.com/firepick/firepick-cms.js?v=22"
+    let ext = Self.providerExtension([
+      ("fast", "https://fixture.local/fast")
+    ])
+
+    let result = try await host.invoke(
+      api: api,
+      ext: ext,
+      method: .categoryContent,
+      arguments: [
+        .string("bucket|movie"),
+        .string("1"),
+        .bool(true),
+        .object([:]),
+      ]
+    )
+
+    #expect(result.list.map(\.name) == ["今年电影", "去年电影"])
+    await host.destroy()
+  }
+
+  @Test
+  func koreanTvFilterRequestsCountrySpecificLeaf() async throws {
+    let catalog = #"""
+      {
+        "class": [
+          {"type_id": "3", "type_name": "欧美剧"},
+          {"type_id": "1", "type_name": "电视剧"},
+          {"type_id": "5", "type_name": "韩剧"}
+        ]
+      }
+      """#
+    let western = #"""
+      {
+        "pagecount": 2,
+        "list": [
+          {
+            "vod_id": "western-1",
+            "vod_name": "美国电视剧",
+            "type_id": "3",
+            "type_name": "欧美剧",
+            "vod_area": "美国"
+          }
+        ]
+      }
+      """#
+    let korean = #"""
+      {
+        "pagecount": 2,
+        "list": [
+          {
+            "vod_id": "korean-1",
+            "vod_name": "韩国电视剧一",
+            "type_id": "5",
+            "type_name": "韩剧",
+            "vod_area": "韩国",
+            "vod_remarks": "更新至8集"
+          },
+          {
+            "vod_id": "korean-2",
+            "vod_name": "韩国电视剧二",
+            "type_id": "5",
+            "type_name": "韩剧",
+            "vod_area": "韩国",
+            "vod_remarks": "更新至6集"
+          },
+          {
+            "vod_id": "korean-3",
+            "vod_name": "韩国电视剧三",
+            "type_id": "5",
+            "type_name": "韩剧",
+            "vod_area": "韩国",
+            "vod_remarks": "已完结"
+          }
+        ]
+      }
+      """#
+    let session = try Self.makeSession(
+      responders: [
+        "/fast": { request in
+          let query = URLComponents(
+            url: request.url ?? URL(string: "https://fixture.local/fast")!,
+            resolvingAgainstBaseURL: false
+          )?.queryItems ?? []
+          let values = Dictionary(uniqueKeysWithValues: query.map { ($0.name, $0.value ?? "") })
+          if values["ac"] == "list" {
+            return Data(catalog.utf8)
+          }
+          if values["t"] == "5" {
+            return Data(korean.utf8)
+          }
+          return Data(western.utf8)
+        }
+      ]
+    )
+    let host = OnDeviceJavaScriptHost(session: session)
+    let api = "https://dl.yychuiyan.com/firepick/firepick-cms.js?v=22"
+    let ext = Self.providerExtension([
+      ("fast", "https://fixture.local/fast")
+    ])
+
+    let result = try await host.invoke(
+      api: api,
+      ext: ext,
+      method: .categoryContent,
+      arguments: [
+        .string("bucket|tv"),
+        .string("1"),
+        .bool(true),
+        .object(["area": .string("韩国")]),
+      ]
+    )
+
+    #expect(
+      Set(result.list.map(\.name))
+        == ["韩国电视剧一", "韩国电视剧二", "韩国电视剧三"]
+    )
+    #expect(
+      JSFixtureURLProtocol.requestedURLs.contains { url in
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?
+          .queryItems?
+          .contains { $0.name == "t" && $0.value == "5" } == true
+      }
+    )
+    await host.destroy()
+  }
+
+  @Test
+  func movieFacetsApplyClassAreaYearAndCombinedFiltersLocally() async throws {
+    let session = try Self.makeSession(routes: ["/fast": Self.facetPayload])
+    let host = OnDeviceJavaScriptHost(session: session)
+    let api = "https://dl.yychuiyan.com/firepick/firepick-cms.js?v=22"
+    let ext = Self.providerExtension([
+      ("fast", "https://fixture.local/fast")
+    ])
+    func query(_ extend: [String: JSONValue]) async throws -> MediaResult {
+      try await host.invoke(
+        api: api,
+        ext: ext,
+        method: .categoryContent,
+        arguments: [
+          .string("bucket|movie"),
+          .string("1"),
+          .bool(true),
+          .object(extend),
+        ]
+      )
+    }
+
+    let action = try await query(["class": .string("动作")])
+    #expect(
+      Set(action.list.map(\.name))
+        == ["动作美国2026", "动作韩国2026", "动作香港2018", "动作英国2009", "动作泰国2024"]
+    )
+    let korea = try await query(["area": .string("韩国")])
+    #expect(Set(korea.list.map(\.name)) == ["动作韩国2026", "爱情韩国2025"])
+    let year2026 = try await query(["year": .string("2026")])
+    #expect(Set(year2026.list.map(\.name)) == ["动作美国2026", "动作韩国2026"])
+    let otherArea = try await query(["area": .string("其他")])
+    #expect(otherArea.list.map(\.name) == ["动作泰国2024"])
+    let combined = try await query([
+      "class": .string("动作"),
+      "area": .string("韩国"),
+      "year": .string("2026"),
+    ])
+    #expect(combined.list.map(\.name) == ["动作韩国2026"])
+    await host.destroy()
+  }
+
+  @Test
+  func explicitSortsUseTheirMetricWithoutPlatformBias() async throws {
+    let session = try Self.makeSession(routes: ["/fast": Self.facetPayload])
+    let host = OnDeviceJavaScriptHost(session: session)
+    let api = "https://dl.yychuiyan.com/firepick/firepick-cms.js?v=22"
+    let ext = Self.providerExtension([
+      ("fast", "https://fixture.local/fast")
+    ])
+    func query(_ sort: String) async throws -> MediaResult {
+      try await host.invoke(
+        api: api,
+        ext: ext,
+        method: .categoryContent,
+        arguments: [
+          .string("bucket|movie"),
+          .string("1"),
+          .bool(true),
+          .object(["by": .string(sort)]),
+        ]
+      )
+    }
+
+    let hits = try await query("hits")
+    #expect(hits.list.first?.name == "动作泰国2024")
+    let douban = try await query("douban")
+    #expect(douban.list.first?.name == "动作韩国2026")
+    let latest = try await query("time")
+    #expect(latest.list.first?.name == "动作美国2026")
+    await host.destroy()
+  }
+
+  @Test
+  func decadeAndOlderYearFiltersStayLocal() async throws {
+    let session = try Self.makeSession(routes: ["/fast": Self.facetPayload])
+    let host = OnDeviceJavaScriptHost(session: session)
+    let api = "https://dl.yychuiyan.com/firepick/firepick-cms.js?v=22"
+    let ext = Self.providerExtension([
+      ("fast", "https://fixture.local/fast")
+    ])
+    func query(_ year: String) async throws -> MediaResult {
+      JSFixtureURLProtocol.requestedURLs = []
+      return try await host.invoke(
+        api: api,
+        ext: ext,
+        method: .categoryContent,
+        arguments: [
+          .string("bucket|movie"),
+          .string("1"),
+          .bool(true),
+          .object(["year": .string(year)]),
+        ]
+      )
+    }
+
+    let decade = try await query("2010")
+    #expect(decade.list.map(\.name) == ["动作香港2018"])
+    #expect(
+      !JSFixtureURLProtocol.requestedURLs.contains { url in
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?
+          .queryItems?
+          .contains { $0.name == "year" && $0.value == "2010" } == true
+      }
+    )
+    let older = try await query("2000")
+    #expect(older.list.map(\.name) == ["动作英国2009"])
+    #expect(
+      !JSFixtureURLProtocol.requestedURLs.contains { url in
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?
+          .queryItems?
+          .contains { $0.name == "year" && $0.value == "2000" } == true
+      }
+    )
+    await host.destroy()
+  }
+
+  @Test
+  func filteredCombinationReturnsBeforeManyHostsTimeOut() async throws {
+    let payload = #"""
+      {
+        "class": [
+          {"type_id": "1", "type_name": "电影"}
+        ],
+        "pagecount": 2,
+        "list": [
+          {
+            "vod_id": "fast-1",
+            "vod_name": "动作韩国2026",
+            "type_id": "1",
+            "type_name": "电影",
+            "vod_class": "动作",
+            "vod_area": "韩国",
+            "vod_year": "2026",
+            "vod_time": "2026-11-01 20:00:00",
+            "vod_pic": "https://img.jisuimage.com/cover/fast.jpg"
+          }
+        ]
+      }
+      """#
+    let slowPaths = (1...9).map { "/slow-\($0)" }
+    let routes = Dictionary(
+      uniqueKeysWithValues: [(key: "/fast", value: payload)]
+        + slowPaths.map { (key: $0, value: payload) }
+    )
+    let session = try Self.makeSession(
+      routes: routes,
+      delays: [:]
+    )
+    JSFixtureURLProtocol.responseDelay = { request in
+      let query = URLComponents(
+        url: request.url ?? URL(string: "https://fixture.local/fast")!,
+        resolvingAgainstBaseURL: false
+      )?.queryItems ?? []
+      let isFast = request.url?.path == "/fast"
+      return !isFast && query.contains { $0.name == "ac" && $0.value == "videolist" } ? 10 : 0
+    }
+    let host = OnDeviceJavaScriptHost(session: session)
+    let api = "https://dl.yychuiyan.com/firepick/firepick-cms.js?v=22"
+    let ext = Self.providerExtension(
+      [("fast", "https://fixture.local/fast")]
+        + slowPaths.enumerated().map { index, path in
+          ("slow\(index)", "https://fixture.local\(path)")
+        }
+    )
+    let startedAt = Date()
+
+    let result = try await host.invoke(
+      api: api,
+      ext: ext,
+      method: .categoryContent,
+      arguments: [
+        .string("bucket|movie"),
+        .string("1"),
+        .bool(true),
+        .object([
+          "class": .string("动作"),
+          "area": .string("韩国"),
+          "year": .string("2026"),
+        ]),
+      ]
+    )
+
+    #expect(result.list.map(\.name) == ["动作韩国2026"])
+    #expect(Date().timeIntervalSince(startedAt) < 15)
+    await host.destroy()
+  }
+
+  private static let facetPayload = #"""
+    {
+      "class": [
+        {"type_id": "1", "type_name": "电影"}
+      ],
+      "pagecount": 2,
+      "list": [
+        {
+          "vod_id": "us-2026",
+          "vod_name": "动作美国2026",
+          "type_id": "1",
+          "type_name": "电影",
+          "vod_class": "动作",
+          "vod_area": "美国",
+          "vod_year": "2026",
+          "vod_time": "2026-11-01 20:00:00",
+          "vod_hits": "100",
+          "vod_score": "6",
+          "vod_pic": "https://img.jisuimage.com/cover/us.jpg"
+        },
+        {
+          "vod_id": "kr-2026",
+          "vod_name": "动作韩国2026",
+          "type_id": "1",
+          "type_name": "电影",
+          "vod_class": "动作",
+          "vod_area": "韩国",
+          "vod_year": "2026",
+          "vod_time": "2026-06-01 20:00:00",
+          "vod_hits": "300",
+          "vod_score": "9.5",
+          "vod_pic": "https://img.jisuimage.com/cover/kr.jpg"
+        },
+        {
+          "vod_id": "kr-2025",
+          "vod_name": "爱情韩国2025",
+          "type_id": "1",
+          "type_name": "电影",
+          "vod_class": "爱情",
+          "vod_area": "韩国",
+          "vod_year": "2025",
+          "vod_time": "2026-01-01 20:00:00",
+          "vod_hits": "5",
+          "vod_score": "8.5",
+          "vod_publisher": "腾讯视频独播",
+          "vod_pic": "https://img.jisuimage.com/cover/romance.jpg"
+        },
+        {
+          "vod_id": "hk-2018",
+          "vod_name": "动作香港2018",
+          "type_id": "1",
+          "type_name": "电影",
+          "vod_class": "动作",
+          "vod_area": "香港",
+          "vod_year": "2018",
+          "vod_time": "2018-02-01 20:00:00",
+          "vod_hits": "20",
+          "vod_score": "7",
+          "vod_pic": "https://img.jisuimage.com/cover/hk.jpg"
+        },
+        {
+          "vod_id": "uk-2009",
+          "vod_name": "动作英国2009",
+          "type_id": "1",
+          "type_name": "电影",
+          "vod_class": "动作",
+          "vod_area": "英国",
+          "vod_year": "2009",
+          "vod_time": "2009-03-01 20:00:00",
+          "vod_hits": "10",
+          "vod_score": "5",
+          "vod_pic": "https://img.jisuimage.com/cover/uk.jpg"
+        },
+        {
+          "vod_id": "th-2024",
+          "vod_name": "动作泰国2024",
+          "type_id": "1",
+          "type_name": "电影",
+          "vod_class": "动作",
+          "vod_area": "泰国",
+          "vod_year": "2024",
+          "vod_time": "2024-02-01 20:00:00",
+          "vod_hits": "400",
+          "vod_score": "4",
+          "vod_pic": "https://img.jisuimage.com/cover/th.jpg"
+        }
+      ]
+    }
+    """#
+
   private static func makeSession(routes: [String: String]) throws -> URLSession {
+    try makeSession(routes: routes, delays: [:])
+  }
+
+  private static func makeSession(
+    routes: [String: String],
+    delays: [String: TimeInterval]
+  ) throws -> URLSession {
     JSFixtureURLProtocol.statusCodes = [:]
     JSFixtureURLProtocol.routes = routes.mapValues { Data($0.utf8) }
+    JSFixtureURLProtocol.delays = delays
+    JSFixtureURLProtocol.responders = [:]
+    JSFixtureURLProtocol.responseDelay = nil
     JSFixtureURLProtocol.requestedPaths = []
+    JSFixtureURLProtocol.requestedURLs = []
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [JSFixtureURLProtocol.self]
     return URLSession(configuration: configuration)
+  }
+
+  private static func makeSession(
+    responders: [String: (URLRequest) -> Data]
+  ) throws -> URLSession {
+    JSFixtureURLProtocol.statusCodes = [:]
+    JSFixtureURLProtocol.routes = [:]
+    JSFixtureURLProtocol.delays = [:]
+    JSFixtureURLProtocol.responders = responders
+    JSFixtureURLProtocol.responseDelay = nil
+    JSFixtureURLProtocol.requestedPaths = []
+    JSFixtureURLProtocol.requestedURLs = []
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [JSFixtureURLProtocol.self]
+    return URLSession(configuration: configuration)
+  }
+
+  private static func providerExtension(
+    _ providers: [(key: String, api: String)]
+  ) -> JSONValue {
+    .object([
+      "adultMode": .bool(false),
+      "providers": .array(
+        providers.map { provider in
+          .object([
+            "key": .string(provider.key),
+            "name": .string(provider.key),
+            "api": .string(provider.api),
+            "adult": .bool(false),
+          ])
+        }
+      ),
+    ])
   }
 }
 
 private final class JSFixtureURLProtocol: URLProtocol, @unchecked Sendable {
   nonisolated(unsafe) static var routes: [String: Data] = [:]
   nonisolated(unsafe) static var statusCodes: [String: Int] = [:]
+  nonisolated(unsafe) static var delays: [String: TimeInterval] = [:]
+  nonisolated(unsafe) static var responders: [String: (URLRequest) -> Data] = [:]
+  nonisolated(unsafe) static var responseDelay: ((URLRequest) -> TimeInterval)?
   nonisolated(unsafe) static var requestedPaths: [String] = []
+  nonisolated(unsafe) static var requestedURLs: [URL] = []
 
   override class func canInit(with request: URLRequest) -> Bool { true }
 
@@ -423,9 +1096,27 @@ private final class JSFixtureURLProtocol: URLProtocol, @unchecked Sendable {
   override func startLoading() {
     let path = request.url?.path ?? "/"
     Self.requestedPaths.append(path)
-    let body = Self.routes[path] ?? Data("not found".utf8)
+    if let url = request.url {
+      Self.requestedURLs.append(url)
+    }
+    let delay = Self.responseDelay?(request) ?? Self.delays[path] ?? 0
+    if delay > 0 {
+      DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
+        self?.finish()
+      }
+      return
+    }
+    finish()
+  }
+
+  private func finish() {
+    let path = request.url?.path ?? "/"
+    let responder = Self.responders[path]
+    let body = responder?(request) ?? Self.routes[path] ?? Data("not found".utf8)
     let status =
-      Self.statusCodes[path]
+      responder != nil
+      ? 200
+      : Self.statusCodes[path]
       ?? (Self.routes[path] == nil ? 404 : 200)
     let response = HTTPURLResponse(
       url: request.url ?? URL(string: "https://fixture.local/")!,
